@@ -1,0 +1,277 @@
+{
+  "date": "2026-10-12",
+  "platform": "macOS 26.6.2 arm64",
+  "target": {
+    "bundleId": "dev.opencu.fixture",
+    "pid": 63770,
+    "windowId": 116439,
+    "axLogicalBounds": {
+      "x": 160,
+      "y": 255,
+      "width": 700,
+      "height": 782
+    },
+    "scThumbnailSize": {
+      "width": 71,
+      "height": 125
+    },
+    "backingScale": 2
+  },
+  "scope": {
+    "fixtureOnly": true,
+    "inputSent": false,
+    "appActivated": false,
+    "globalSettingsChanged": false,
+    "permissionBypassed": false,
+    "productionCodeChangedInThisInvestigation": false
+  },
+  "result": "No tested read-only capture path produced a full untransformed window surface while the target was in the Stage Manager strip. Larger output dimensions alone did not establish correct screenshot geometry.",
+  "probes": [
+    {
+      "method": "sck",
+      "imageSize": [
+        1400,
+        1564
+      ],
+      "nontransparentBoundingBox": [
+        2,
+        4,
+        142,
+        248
+      ],
+      "coverageRatio": 0.014082,
+      "sha256": "23ba06a762a09dcd0187666fba50083360bd9cd0f5561ea77dcd797dc083b3d3",
+      "pixelInterpretation": "Stage Manager perspective thumbnail, visually inspected; no full untransformed window image",
+      "activeAfter": false,
+      "activeBefore": false,
+      "evidencePng": ".cache/opencu-independent/background-sck-native-best.png",
+      "probeRecord": ".cache/opencu-independent/background-sck-probe.json",
+      "blueProbeBoundingBox": [
+        6,
+        4,
+        138,
+        248
+      ],
+      "coverageMeaning": "Nontransparent pixel coverage only; the SCStream conversion uses an opaque black background, so alpha coverage is not full-window content proof."
+    },
+    {
+      "method": "hardware",
+      "imageSize": [
+        142,
+        250
+      ],
+      "nontransparentBoundingBox": [
+        2,
+        3,
+        142,
+        249
+      ],
+      "coverageRatio": 0.868507,
+      "sha256": "6b518c8ab63e38ce523f5e74bd270dd6bd46d93a25c75f0bf047fcb0873acdba",
+      "pixelInterpretation": "Stage Manager perspective thumbnail, visually inspected; no full untransformed window image",
+      "activeAfter": false,
+      "activeBefore": null,
+      "evidencePng": ".cache/opencu-independent/background-hwcapture.png",
+      "probeRecord": ".cache/opencu-independent/background-hwcapture-probe.json",
+      "blueProbeBoundingBox": [
+        6,
+        3,
+        138,
+        249
+      ],
+      "coverageMeaning": "Nontransparent pixel coverage only; the SCStream conversion uses an opaque black background, so alpha coverage is not full-window content proof."
+    },
+    {
+      "method": "hardware-in-rect",
+      "imageSize": [
+        1400,
+        1564
+      ],
+      "nontransparentBoundingBox": null,
+      "coverageRatio": 0.0,
+      "sha256": "dfc4c1dc2e22193c9bfdec095285f4f87e8bd051259d3d648180c725ef248406",
+      "pixelInterpretation": "transparent only",
+      "activeAfter": false,
+      "activeBefore": null,
+      "evidencePng": ".cache/opencu-independent/background-hwcapture-inrect.png",
+      "probeRecord": ".cache/opencu-independent/background-hwcapture-inrect-probe.json",
+      "blueProbeBoundingBox": null,
+      "coverageMeaning": "Nontransparent pixel coverage only; the SCStream conversion uses an opaque black background, so alpha coverage is not full-window content proof."
+    },
+    {
+      "method": "cg-window-image",
+      "imageSize": [
+        142,
+        252
+      ],
+      "nontransparentBoundingBox": [
+        2,
+        4,
+        142,
+        250
+      ],
+      "coverageRatio": 0.861949,
+      "sha256": "2e4ab29d5650a4af6889e01874b450be6feec930a019225d24b3659e9c339a31",
+      "pixelInterpretation": "Stage Manager perspective thumbnail, visually inspected; no full untransformed window image",
+      "activeAfter": false,
+      "activeBefore": null,
+      "evidencePng": ".cache/opencu-independent/background-cgwindow-image.png",
+      "probeRecord": ".cache/opencu-independent/background-cgwindow-probe.json",
+      "blueProbeBoundingBox": [
+        6,
+        105,
+        142,
+        240
+      ],
+      "coverageMeaning": "Nontransparent pixel coverage only; the SCStream conversion uses an opaque black background, so alpha coverage is not full-window content proof."
+    },
+    {
+      "method": "hardware-full-size",
+      "imageSize": [
+        1400,
+        1564
+      ],
+      "nontransparentBoundingBox": [
+        32,
+        414,
+        172,
+        662
+      ],
+      "coverageRatio": 0.014083,
+      "sha256": "ada307d113df0a1e35550e7ddca7948180d90c79952574482c666deec8cd8cb9",
+      "pixelInterpretation": "Stage Manager perspective thumbnail, visually inspected; no full untransformed window image",
+      "activeAfter": false,
+      "activeBefore": false,
+      "evidencePng": ".cache/opencu-independent/background-hwcapture-fullsize.png",
+      "probeRecord": ".cache/opencu-independent/background-hwcapture-fullsize-probe.json",
+      "blueProbeBoundingBox": [
+        36,
+        414,
+        168,
+        662
+      ],
+      "coverageMeaning": "Nontransparent pixel coverage only; the SCStream conversion uses an opaque black background, so alpha coverage is not full-window content proof."
+    },
+    {
+      "method": "capture-contents",
+      "imageSize": [
+        154,
+        274
+      ],
+      "nontransparentBoundingBox": [
+        1,
+        7,
+        153,
+        268
+      ],
+      "coverageRatio": 0.834653,
+      "sha256": "2bb8b803ec3a2624ff521c645a47ee9193c5f7a1afdd5f3bcdf57c73857b92c2",
+      "pixelInterpretation": "Stage Manager perspective thumbnail, visually inspected; no full untransformed window image",
+      "activeAfter": false,
+      "activeBefore": null,
+      "evidencePng": ".cache/opencu-independent/background-capturecontents.png",
+      "probeRecord": ".cache/opencu-independent/background-capturecontents-probe.json",
+      "blueProbeBoundingBox": [
+        12,
+        114,
+        144,
+        194
+      ],
+      "coverageMeaning": "Nontransparent pixel coverage only; the SCStream conversion uses an opaque black background, so alpha coverage is not full-window content proof."
+    },
+    {
+      "method": "screenshot-untransform",
+      "imageSize": [
+        1400,
+        1564
+      ],
+      "nontransparentBoundingBox": [
+        2,
+        2,
+        142,
+        248
+      ],
+      "coverageRatio": 0.014085,
+      "sha256": "9e9069bcc3eda17574edc9b9b4713fd6e8751954249dbb325b2321cda0bb226e",
+      "pixelInterpretation": "Stage Manager perspective thumbnail, visually inspected; no full untransformed window image",
+      "activeAfter": false,
+      "activeBefore": false,
+      "evidencePng": ".cache/opencu-independent/background-sck-untransformed.png",
+      "probeRecord": ".cache/opencu-independent/background-sck-untransform-probe.json",
+      "blueProbeBoundingBox": [
+        6,
+        3,
+        138,
+        248
+      ],
+      "coverageMeaning": "Nontransparent pixel coverage only; the SCStream conversion uses an opaque black background, so alpha coverage is not full-window content proof."
+    },
+    {
+      "method": "stream-untransform",
+      "imageSize": [
+        1400,
+        1564
+      ],
+      "nontransparentBoundingBox": [
+        0,
+        0,
+        1400,
+        1564
+      ],
+      "coverageRatio": 1.0,
+      "sha256": "7b6ec223c90f22fbbe8b6406b32f66452720a4f8c0101a51c61b32e5dc30a162",
+      "pixelInterpretation": "Stage Manager perspective thumbnail, visually inspected; no full untransformed window image",
+      "activeAfter": false,
+      "activeBefore": false,
+      "evidencePng": ".cache/opencu-independent/background-scstream-untransformed.png",
+      "probeRecord": ".cache/opencu-independent/background-scstream-untransform-probe.json",
+      "blueProbeBoundingBox": [
+        36,
+        548,
+        168,
+        628
+      ],
+      "coverageMeaning": "Nontransparent pixel coverage only; the SCStream conversion uses an opaque black background, so alpha coverage is not full-window content proof."
+    }
+  ],
+  "nativeStaticEvidence": [
+    {
+      "evidenceId": "ev_249d6aff2410b4e8aacadbdb029663f6824a12b0a79281b3c007b6a415b6b793",
+      "function": "0x100ef9ef0",
+      "observation": "The non-onscreen SCWindow branch uses the selected window ID and SCWindow.frame before calling captureScreenshotWithSkyLight."
+    },
+    {
+      "evidenceId": "ev_d49be448af67f5d23280fcf4d15398759f49b99b49e25fb0125c1a12b651db4a",
+      "function": "0x100ef3cb8",
+      "observation": "The accelerated screenshot helper passes ignoreGlobalClipShape into WindowServerSPI.captureWindowImagesInRect and returns its first image."
+    },
+    {
+      "evidenceId": "ev_01312ec1b1081bb2a2d8f5432d1e61bd5b9d6aae7824a7f5cae284b131b6f09e",
+      "function": "0x10026ae94",
+      "observation": "The WindowServer wrapper calls an indirectly resolved OS entrypoint with a window-ID array, options, rect and connection. The hashed SoftLink lookup does not yield a plain-text symbol name in these dossiers."
+    }
+  ],
+  "nativeTargetSha256": "89ec452b535a74fd5d27390f7c1b9cce25dc61c069d370f9bea1377d97c3d14b",
+  "sources": [
+    {
+      "url": "https://raw.githubusercontent.com/WebKit/WebKit/main/Source/WebCore/PAL/pal/spi/cg/CoreGraphicsSPI.h",
+      "use": "Primary declaration of CGSHWCaptureWindowList and nominal/global-clip option values."
+    },
+    {
+      "url": "https://raw.githubusercontent.com/lwouis/alt-tab-macos/master/src/macos/api-wrappers/SkyLight.framework.swift",
+      "use": "Primary consumer declaration of bestResolution bit8 and fullSize bit19. This host still returned transformed pixels with those flags."
+    },
+    {
+      "url": "https://developer.apple.com/documentation/appkit/nswindow/collectionbehavior-swift.struct/canjoinallapplications",
+      "use": "Official own-window collection behavior which does not participate in Stage Manager layout."
+    }
+  ],
+  "nextAcceptance": "Use a separate fixture window with .canJoinAllApplications to test ordinary background capture, preserving this transformed Stage Manager limitation. Do not modify third-party window behavior or global Stage Manager settings.",
+  "limits": [
+    "These independent OS API probes do not establish how a complete official application behaves under the same scenario. Static native evidence is not execution evidence.",
+    "Only the authorized fixture was captured. Before/after NSRunningApplication.isActive is not continuous frontmost monitoring; the parent harness owns that verification.",
+    "Before fields hardcoded by early hardware probes are omitted rather than counted as observations.",
+    "Pixel dimensions and PNG success are insufficient: every result was visually checked and measured for content coverage.",
+    "The one-frame SCStream was stopped after its frame; no persistent capture stream remains."
+  ]
+}

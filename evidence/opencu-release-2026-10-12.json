@@ -1,0 +1,67 @@
+{
+  "test": "independent-release-isolated-read-only",
+  "timestamp": "2026-10-12T08:26:55.572038+00:00",
+  "host_macos_version": "26.6.2",
+  "arch": "arm64",
+  "archive": "opencu-macos-arm64.tar.gz",
+  "archive_bytes": 43252155,
+  "archive_sha256": "4738dd9c3ae6a64810ab5ea43ad20ad7a70b87a3244073dec0b3300443bcfb76",
+  "receipt_binding": "Exact archive_sha256 and included runtime/dependency hashes; deliver alongside the archive",
+  "verifier_sha256": "603a9f5189202edbc90862c5c591cda77702338cd96112233c79ea1cb4efb0b3",
+  "gui_calls": 0,
+  "input_calls": 0,
+  "permission_requests": 0,
+  "inventory_recorded": false,
+  "archive_entries": 4263,
+  "allowed_fixtures": [
+    "tests/fixtures/OpenCUFixture.swift",
+    "tests/fixtures/preview-window-response.json"
+  ],
+  "native_sources_included": true,
+  "runtime_component_sha256": {
+    ".build/OpenCU.app/Contents/Info.plist": "a4030d607009b4d0739e84fff4eb947a198916f514777e7ec2a3216512998436",
+    ".build/OpenCU.app/Contents/MacOS/opencu-engine": "5c0b94c650fe9a67dd2de945ab1850146b582bdbb042f45c9376bce744130178",
+    ".build/OpenCU.app/Contents/_CodeSignature/CodeResources": "6686de10a28a2fe11b36cbb86dcbacc827cfc4ea116b4dabf1845e5aee629e9b",
+    ".dependencies/node/bin/node": "e4b5a3af0e05c75de2eae013904145f40fe7fc2a6e6f17510128bf45cca4e79b",
+    "bin/opencu": "996beb9c381de605c55db37c677132d22bc70d40befb29c810252622d388d759",
+    "package-lock.json": "9732aa6317fdb899b407fcf9b783e9ff1d445af5b19194ec44fa47015d8dac8a",
+    "package.json": "88ad5eb334da7bac90e02ab056e4cdfe8e641e1acc8862be098bffddc528b130",
+    "src/coordinate-state.mjs": "ccb42e664485e2382988f99cd269da46c96f17ecc1d3c0b535c97ee7df817dfe",
+    "src/opencu-runtime.mjs": "691f638cb8ad4327968ad7f055902eee1d4a401c06c81a654c86d7b151f455a7",
+    "src/server.mjs": "0e91e5f8e56276b02d48f7b0e17626e9fb1c396cdc84bdd0e23c74c311a5eb14"
+  },
+  "node_modules_integrity": {
+    "files": 3643,
+    "tree_sha256": "0b9e720b781f93a90f481c1ba0762be6bb19db88198fcbf8282133f96adad13a",
+    "format": "SHA-256 of compact sorted-key UTF-8 JSON; sorted file paths, SHA-256, size and mode"
+  },
+  "embedded_runtime_receipt_status": "pending",
+  "engine_sha256": "5c0b94c650fe9a67dd2de945ab1850146b582bdbb042f45c9376bce744130178",
+  "node_binary_sha256": "e4b5a3af0e05c75de2eae013904145f40fe7fc2a6e6f17510128bf45cca4e79b",
+  "extracted_binary_hashes_match_manifest": true,
+  "extracted_signatures_verified": true,
+  "home_started_empty": true,
+  "source_repository_reads_denied": true,
+  "network_connections_denied": true,
+  "additional_read_denials": [
+    "real ~/.codex",
+    "real ~/.agents",
+    "ChatGPT.app",
+    "Codex.app",
+    "controller source directory including old .runtime"
+  ],
+  "engine_version": "opencu-engine 0.2.0",
+  "native_doctor": {
+    "engine": "opencu",
+    "version": "0.2.0",
+    "transport": "stdio",
+    "requiresAccount": false,
+    "requiresOfficialRuntime": false
+  },
+  "permission_status_not_used_as_standalone_authorization_evidence": true,
+  "mcp_initialized": true,
+  "tool_count": 13,
+  "list_apps_called": true,
+  "app_count": 378,
+  "ok": true
+}

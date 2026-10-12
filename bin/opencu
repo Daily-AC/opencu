@@ -1,0 +1,57 @@
+#!/bin/sh
+set -eu
+
+entry=$0
+while [ -L "$entry" ]; do
+    parent=$(CDPATH= cd -P -- "$(dirname -- "$entry")" && pwd)
+    entry=$(readlink "$entry")
+    case "$entry" in /*) ;; *) entry="$parent/$entry" ;; esac
+done
+root=$(CDPATH= cd -P -- "$(dirname -- "$entry")/.." && pwd)
+app="$root/.build/OpenCU.app"
+engine="$app/Contents/MacOS/opencu-engine"
+
+case "${1:-mcp}" in
+    -h|--help|help)
+        printf '%s\n' 'Usage: opencu [mcp|doctor|setup]' \
+            '  mcp     Run the MCP server on stdin/stdout (default).' \
+            '  doctor  Report engine and macOS permission status.' \
+            '  setup   Open the standard macOS permission setup flow.'
+        exit 0
+        ;;
+esac
+
+if [ ! -x "$engine" ]; then
+    printf '%s\n' "OpenCU engine is missing. Build this checkout with: python3 \"$root/scripts/build-engine.py\"" >&2
+    printf '%s\n' 'Release archives include the compiled engine and do not require a compiler.' >&2
+    exit 1
+fi
+
+case "${1:-mcp}" in
+    doctor)
+        shift
+        exec "$engine" --doctor "$@"
+        ;;
+    setup)
+        shift
+        exec /usr/bin/open -n "$app" --args --setup "$@"
+        ;;
+    mcp)
+        if [ "$#" -gt 0 ]; then shift; fi
+        ;;
+    *)
+        printf '%s\n' "Unknown OpenCU command: $1. Use opencu --help." >&2
+        exit 2
+        ;;
+esac
+
+if [ -x "$root/.dependencies/node/bin/node" ]; then
+    node_executable="$root/.dependencies/node/bin/node"
+elif command -v node >/dev/null 2>&1; then
+    node_executable=$(command -v node)
+else
+    printf '%s\n' 'Node.js 22 or later is required. Use a complete release archive or install a standard Node.js runtime.' >&2
+    exit 1
+fi
+
+exec "$node_executable" "$root/src/server.mjs" "$@"

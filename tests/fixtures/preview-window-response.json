@@ -1,0 +1,47 @@
+{
+  "source": "OpenCU get_app_state responses for a Preview document window and its Inspector panel. Only each PNG header is kept; titles and sizes are illustrative.",
+  "result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "App: \"Preview\" (com.apple.Preview, pid 4242, background)\nWindow: \"preview-coordinate-grid.png\"\nWindow bounds: x=120.0, y=80.0, width=354.0, height=527.0 points.\n[1] Window title=\"preview-coordinate-grid.png\" Secondary Actions: AXRaise\n  [2] Split Group\n    [3] Image\n  [4] Toolbar\n    [5] Menu Button description=\"View\" Secondary Actions: AXPress, AXShowMenu\n    [6] Button description=\"Inspector\" Secondary Actions: AXPress\nFocused element: unavailable.\nScreenshot: 708 x 1054 pixels. Coordinates start at the top-left of this window image; window shadows are excluded."
+      },
+      {
+        "type": "image",
+        "data": "iVBORw0KGgoAAAANSUhEUgAAAsQAAAQe",
+        "mimeType": "image/png"
+      }
+    ],
+    "_meta": {
+      "opencu/app": {
+        "id": "com.apple.Preview",
+        "displayName": "Preview",
+        "pid": 4242,
+        "isActive": false
+      },
+      "opencu/engine": "independent"
+    }
+  },
+  "inspector_result": {
+    "content": [
+      {
+        "type": "text",
+        "text": "App: \"Preview\" (com.apple.Preview, pid 4242, background)\nWindow: \"General Info\"\nWindow bounds: x=500.0, y=120.0, width=260.0, height=380.0 points.\n[1] Window title=\"General Info\" Secondary Actions: AXRaise\n  [2] Radio Button description=\"document\" value=1 Secondary Actions: AXPress\n  [3] Radio Button description=\"info\" value=0 Secondary Actions: AXPress\n  [6] Button description=\"close button\" Secondary Actions: AXPress\nFocused element: unavailable.\nScreenshot: 520 x 760 pixels. Coordinates start at the top-left of this window image; window shadows are excluded."
+      },
+      {
+        "type": "image",
+        "data": "iVBORw0KGgoAAAANSUhEUgAAAggAAAL4",
+        "mimeType": "image/png"
+      }
+    ],
+    "_meta": {
+      "opencu/app": {
+        "id": "com.apple.Preview",
+        "displayName": "Preview",
+        "pid": 4242,
+        "isActive": false
+      },
+      "opencu/engine": "independent"
+    }
+  }
+}
