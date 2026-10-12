@@ -18,8 +18,22 @@ or a hosted service. Windows support comes later.
 - Builds are signed with the per-machine identity created by
   `scripts/build-engine.py`. Keep the designated requirement pinned to a
   certificate; an identifier-only requirement lets any bundle claim the grants.
-- Run GUI acceptance against a disposable fixture or an explicitly scoped app.
-  Do not operate the same app concurrently. Do not replay input automatically.
+- GUI acceptance usually runs on a Mac someone is using. Never take their
+  foreground or touch their data: use the disposable fixtures, temporary files,
+  and apps with temporary profiles, such as Chrome for Testing in
+  `.cache/browsers` with `--user-data-dir`, `--use-mock-keychain` (otherwise a
+  keychain prompt appears) and `--mute-audio`. `open -g` does not stop Electron
+  apps from activating themselves; watch `lsappinfo front`. Ask before a step that
+  needs the screen. Quit every temporary instance afterwards.
+- Do not operate the same app concurrently. Do not replay input automatically.
+- A probe started from an agent shell has the host's permissions, not OpenCU's.
+  Drive the engine through `bin/opencu`. If a probe needs OpenCU's grants, sign it
+  as a bundle with the local identity, start it with responsibility disclaimed and
+  delete it afterwards: it holds those grants.
+- With Stage Manager on, off-stage windows give no screenshot, cannot become key
+  and stop Chromium rendering. To test background web content anyway, start
+  Chrome for Testing with `--disable-backgrounding-occluded-windows
+  --disable-renderer-backgrounding`, and say so in the evidence.
 - Build with `npm run build`; test with `npm test` and
   `python3 scripts/test-native.py`; run `node scripts/verify-gui.mjs` for input
   or observation changes. A release must be verified after extraction with
@@ -27,3 +41,8 @@ or a hosted service. Windows support comes later.
 - Standard public Node and npm libraries may be bundled with their licenses.
 - Keep app inventories, screenshots and local connection data in ignored
   `.cache/` directories. Published evidence should contain fixture data only.
+
+Map: `native/Sources/OpenCU` is the engine (`MacObserver` reads, `InputController`
+acts, `BackgroundFocus` holds background focus and the focus guard); `src/` is the
+MCP server; `docs/independent-engine-contract.md` is the internal contract;
+`docs/opencu-independent-2026-10-12.md` records measured behavior and limits.
