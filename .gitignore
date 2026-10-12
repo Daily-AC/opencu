@@ -1,0 +1,9 @@
+node_modules/
+.build/
+native/.build/
+.dependencies/
+.cache/
+dist/
+__pycache__/
+*.pyc
+evidence/*-private.*

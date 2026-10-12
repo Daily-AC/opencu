@@ -1,0 +1,96 @@
+{
+  "test": "independent-engine-implementation",
+  "date": "2026-10-12",
+  "status": "functional acceptance incomplete",
+  "engine": {
+    "version": "0.2.0",
+    "current_sha256": "a3b4030eb527546ee8e25a22cfe29453e1676aa261afd61c5fbfa93a731acade",
+    "current_bytes": 488000,
+    "source": "Original Swift implementation using public macOS frameworks",
+    "official_runtime_required": false,
+    "account_required": false,
+    "caller_brand_allowlist": false
+  },
+  "unit_checks": {
+    "node": {
+      "passed": 17,
+      "failed": 0
+    },
+    "native_logic": {
+      "passed": 34,
+      "failed": 0
+    }
+  },
+  "initial_gui_context": {
+    "launch": "MCP client in an already OS-authorized development host",
+    "standalone_first_run_authorization_proven": false,
+    "model_invoked": false
+  },
+  "initial_gui_observations": {
+    "window_screenshot_pixels": [
+      1400,
+      1564
+    ],
+    "ax_window_points": [
+      700,
+      782
+    ],
+    "visual_check": true,
+    "ax_button_clicks": 1,
+    "unicode_typed": "独立输入 😀",
+    "unicode_type_seen_in_call": 4,
+    "text_setter": true,
+    "notes": "你好 😀 世界\nSecond line",
+    "notes_selection_utf16": {
+      "length": 2,
+      "location": 6
+    },
+    "numeric_slider": 37.5,
+    "checkbox_action": true
+  },
+  "confirmed_initial_failure": {
+    "input": "physical indexed click",
+    "observed": "No mouse events reached the fixture and focus remained in its text field; subsequent paste went to the old focus",
+    "fixture_mouse_event_count": 0,
+    "returned_action_success_was_not_treated_as_effect_success": true
+  },
+  "fix_pending_gui_retest": {
+    "method": "Public NSEvent factory preserves target window number and window-base position; public CGEvent fields route to the selected window, still using postToPid",
+    "global_event_posting": false,
+    "private_window_api": false,
+    "automatic_activation": false
+  },
+  "standalone_launchservices_permission_probe": {
+    "accessibility": false,
+    "engine": "opencu",
+    "platform": "macos",
+    "requiresAccount": false,
+    "requiresOfficialRuntime": false,
+    "screenRecording": false,
+    "transport": "stdio",
+    "version": "0.2.0"
+  },
+  "blocked_by": {
+    "screen_locked": true,
+    "locked_call_code": "SCREEN_LOCKED",
+    "unlock_requested": true,
+    "own_app_permissions_requested": true
+  },
+  "remaining_gui_checks": [
+    "Verify corrected mouse targeting and focus",
+    "Verify mouse/key holds and release timing",
+    "Verify drag displacement and real scrolling",
+    "Verify paste reaches chosen field and clipboard restoration",
+    "Verify OpenCU using its own OS grants after LaunchServices startup"
+  ],
+  "proprietary_lock_screen_unlock_implemented": false,
+  "raw_fixture_evidence": ".cache/opencu-independent/gui-initial",
+  "subsequent_locked_attempts": ".cache/opencu-independent/gui",
+  "current_release_isolation": {
+    "ok": true,
+    "receipt": "evidence/opencu-release-2026-10-12.json",
+    "engine_sha256": "a3b4030eb527546ee8e25a22cfe29453e1676aa261afd61c5fbfa93a731acade",
+    "gui_calls": 0,
+    "input_calls": 0
+  }
+}
