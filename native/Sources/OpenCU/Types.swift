@@ -15,7 +15,10 @@ struct TargetApp {
     var pid: pid_t { application.processIdentifier }
     var id: String { application.bundleIdentifier ?? application.bundleURL?.path ?? String(pid) }
     var name: String { application.localizedName ?? id }
-    var json: [String: Any] { ["id": id, "displayName": name, "pid": Int(pid), "isActive": application.isActive] }
+    /// AppKit's isActive also turns true under OpenCU's synthetic application-local
+    /// activation; only the system's frontmost application is in the foreground.
+    var isFrontmost: Bool { NSWorkspace.shared.frontmostApplication?.processIdentifier == pid }
+    var json: [String: Any] { ["id": id, "displayName": name, "pid": Int(pid), "isActive": isFrontmost] }
 }
 
 struct WindowSnapshot {

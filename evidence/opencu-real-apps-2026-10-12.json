@@ -1,0 +1,76 @@
+{
+  "test": "real-application-background-use",
+  "date": "2026-10-12",
+  "platform": "macOS 26.6.2 arm64, Stage Manager enabled",
+  "engine_sha256": "021647c815627ec21e1d6ea1c02dca1332782693272d8273193d0d6ce56ddeef",
+  "privacy": "Disposable apps and profiles only: Chrome for Testing with a temporary profile, a temporary TextEdit document, VS Code with temporary user data. No user documents, browsing data or messages were read.",
+  "menus_without_display": {
+    "closed_menu_validation": "A validated item read disabled while its condition was off and enabled after it turned on, without opening the menu",
+    "delegate_menu": "menuNeedsUpdate ran on each Accessibility read of the closed menu (titles Dynamic item 2, then 3)",
+    "disabled_item_press": "AXPress on a closed, disabled item was refused by AppKit validation",
+    "menus_displayed": 0
+  },
+  "web_content": {
+    "before": "Chrome's web area sat below the 18-level depth limit; no page content was listed",
+    "traversal": "Unlabelled containers, duplicate link text, icon-font glyphs and passive actions omitted; one batched attribute read per element",
+    "mgtv_home_read_ms": [
+      188,
+      209
+    ],
+    "mgtv_home_chars": {
+      "before": 44357,
+      "after": 20149
+    },
+    "chrome_enablement": {
+      "AXManualAccessibility": "unsupported (-25205)",
+      "AXEnhancedUserInterface": "enabled native and web modes in chrome://accessibility; restored to 0 when the client disconnected"
+    },
+    "electron_enablement": "VS Code accepted AXManualAccessibility; AXEnhancedUserInterface stayed 0; editor text was readable",
+    "hidden_chromium_window": "document.visibilityState hidden; no web content tree even with accessibility enabled; OpenCU reports it"
+  },
+  "mango_tv_scenario": {
+    "steps": [
+      "read mgtv.com",
+      "click search field",
+      "type 喜羊羊与灰太狼 + Return",
+      "wait for results",
+      "click 立即播放"
+    ],
+    "result": "Tencent Video episode 1 page opened (the listed play source); <video> paused=false, currentTime 4.6 s -> 7.7 s over 3 s, 864 x 486",
+    "target_stayed_background": true,
+    "condition": "Chrome launched with --disable-backgrounding-occluded-windows to emulate a visible window under Stage Manager",
+    "elapsed_seconds": 10
+  },
+  "focus_steal_guard": {
+    "before": "Chrome for Testing activated itself when a page opened a new tab, 3 times; the previous app was frontmost again only after 2.4-3.3 s",
+    "after": "Activation at 17:55:04.698 was returned to the user's app at 17:55:04.709 (11 ms)"
+  },
+  "stage_manager": {
+    "thumbnail_screenshot": "Calculator 55 x 96 point thumbnail of a 230 x 408 window: text state returned with SCREENSHOT_THUMBNAIL note instead of an error",
+    "key_window": "A stage-managed fixture became application-active but had no key or main window; setting AXMain/AXFocused did not change it",
+    "textedit": "Background typing reached the document; Save and Close were disabled because the window could not become key",
+    "offscreen_electron": "Keyboard input to a fully hidden VS Code window did not arrive",
+    "detection": "WindowServer composited size differing from Accessibility size (thumbnail) or kCGWindowIsOnscreen false (hidden); no capture permission needed"
+  },
+  "list_apps_running_entries": {
+    "before": 141,
+    "after": 48
+  },
+  "regression": {
+    "verify_gui": {
+      "runs": 3,
+      "checks": 12,
+      "mouse_hold_ms_requested_350": [
+        373.5,
+        373.3,
+        372.2
+      ]
+    },
+    "node_tests": 17,
+    "native_logic_checks": 34
+  },
+  "incidents_during_testing": [
+    "Chrome for Testing without --use-mock-keychain triggered one keychain prompt (SecurityAgent, 6 s)",
+    "Before the guard existed, test runs moved the foreground to Chrome for Testing and VS Code"
+  ]
+}

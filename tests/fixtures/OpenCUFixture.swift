@@ -114,7 +114,7 @@ final class InputProbe: NSView {
     override func scrollWheel(with event: NSEvent) { record("scrollWheel", event, scroll: true) }
 }
 
-final class FixtureDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate {
+final class FixtureDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegate, NSMenuDelegate, NSMenuItemValidation {
     private let output: URL
     private var window: NSWindow!
     private var clicks = 0
@@ -138,6 +138,9 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegat
     private var menuActions: [String] = []
     private var menuTrackingObservers: [NSObjectProtocol] = []
     private var menuTracking: [[String: Any]] = []
+    private var menuUpdates = 0
+    private var validations = 0
+    private var gatedActions = 0
 
     init(output: URL) { self.output = output }
 
@@ -307,10 +310,35 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegat
         fixtureActions.submenu = NSMenu(title: "Fixture Actions")
         fixtureActions.submenu?.addItem(counterAction)
         editMenu.addItem(fixtureActions)
+        let gated = NSMenuItem(title: "Requires checkbox", action: #selector(gatedAction), keyEquivalent: "")
+        gated.target = self
+        editMenu.addItem(gated)
         editItem.submenu = editMenu
         menu.addItem(editItem)
+        // Populated only when AppKit asks the delegate, like recent-items menus.
+        let dynamicItem = NSMenuItem()
+        let dynamicMenu = NSMenu(title: "Dynamic")
+        dynamicMenu.delegate = self
+        dynamicItem.submenu = dynamicMenu
+        menu.addItem(dynamicItem)
         NSApp.mainMenu = menu
     }
+
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        menuUpdates += 1
+        menu.removeAllItems()
+        let item = NSMenuItem(title: "Dynamic item \(menuUpdates)", action: #selector(incrementCounter), keyEquivalent: "")
+        item.target = self
+        menu.addItem(item)
+    }
+
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        guard item.action == #selector(gatedAction) else { return true }
+        validations += 1
+        return checkbox.state == .on
+    }
+
+    @objc private func gatedAction() { gatedActions += 1; writeState() }
 
     @objc private func incrementCounter() { clicks += 1; counterValue.stringValue = "Clicks: \(clicks)"; writeState() }
 
@@ -326,6 +354,7 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegat
                                    "appKeyWindow": NSApp.keyWindow?.windowNumber ?? 0,
                                    "appMainWindow": NSApp.mainWindow?.windowNumber ?? 0,
                                    "menuActions": menuActions, "menuTracking": menuTracking,
+                                   "menuUpdates": menuUpdates, "validations": validations, "gatedActions": gatedActions,
                                    "frontmostPID": NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0,
                                    "activations": activations,
                                    "windowNumber": window.windowNumber, "windowEvents": windowEvents,

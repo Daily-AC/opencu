@@ -33,7 +33,7 @@ const definitions = {
     schema: { app, ...stateOptions }, readOnly: true,
   },
   click: {
-    description: 'Click an observed control, including buttons and checkboxes, or a fresh screenshot coordinate. Returns updated state: indexed clicks return text; coordinate clicks also return a new screenshot for the next action. Clicking a menu bar item or submenu lists its items without leaving a menu open; clicking a listed menu item runs its command.',
+    description: 'Click an observed control, including buttons and checkboxes, or a fresh screenshot coordinate. Returns updated state: indexed clicks return text; coordinate clicks also return a new screenshot for the next action. Clicking a menu bar item or submenu lists its items without displaying a menu; clicking a listed menu item runs its command.',
     schema: { app, ...point, mouse_button: z.enum(['left', 'right', 'middle', 'l', 'r', 'm']).optional(), click_count: z.number().int().min(1).max(3).optional(), key: z.string().trim().min(1).optional().describe('Modifier chord held during the click, such as Shift or super.'), duration },
   },
   drag: {
@@ -65,7 +65,7 @@ const definitions = {
     schema: { app, element_index, text: z.string(), prefix: z.string().optional(), suffix: z.string().optional(), selection_type: z.enum(['text', 'cursor_before', 'cursor_after']).optional() },
   },
   perform_secondary_action: {
-    description: 'Perform an accessibility action explicitly exposed by the latest app state. Do not invent action names.',
+    description: 'Perform an accessibility action exposed by the latest app state. Do not invent action names. AXShowMenu and AXScrollToVisible are omitted from listings because nearly every element supports them.',
     schema: { app, element_index, action: z.string().min(1) },
   },
 };

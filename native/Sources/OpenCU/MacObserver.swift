@@ -8,8 +8,57 @@ import ScreenCaptureKit
 final class MacObserver {
     private let workspace = NSWorkspace.shared
     private let maximumElements = 800
-    private let maximumDepth = 18
+    private let maximumInspected = 8_000
+    private let maximumNesting = 120
     private let maximumTextCharacters = 180_000
+    /// Capture failures that a retry cannot fix; the text state is returned instead.
+    private static let lastingCaptureFailures: Set<String> = ["SCREEN_RECORDING_PERMISSION_REQUIRED", "WINDOW_ID_UNAVAILABLE",
+                                                              "SCREENSHOT_WINDOW_UNAVAILABLE", "SCREENSHOT_THUMBNAIL", "SCREENSHOT_TOO_LARGE"]
+    private var webAccessibilityRequested: Set<pid_t> = []
+    private var enhancedInterface: [pid_t: NSRunningApplication] = [:]
+    private var chromiumBundles: [URL: Bool] = [:]
+
+    /// Chromium and Electron expose web content only to assistive clients.
+    /// Electron accepts AXManualAccessibility, which has no side effects.
+    /// Chromium browsers need AXEnhancedUserInterface, which also slows window
+    /// moves made by window managers, so OpenCU restores it when it disconnects.
+    private func requestWebAccessibility(_ application: AXUIElement, _ app: TargetApp) async throws {
+        guard let url = app.application.bundleURL, isChromium(url) else { return }
+        var building = webAccessibilityRequested.insert(app.pid).inserted
+        if AXUIElementSetAttributeValue(application, "AXManualAccessibility" as CFString, kCFBooleanTrue) != .success {
+            var current: CFTypeRef?
+            if AXUIElementCopyAttributeValue(application, "AXEnhancedUserInterface" as CFString, &current) != .success
+                || current as? Bool != true {
+                // Chromium enables its tree but reports this setter as not implemented.
+                _ = AXUIElementSetAttributeValue(application, "AXEnhancedUserInterface" as CFString, kCFBooleanTrue)
+                enhancedInterface[app.pid] = app.application
+                building = true
+            }
+        }
+        if building { try await Task.sleep(nanoseconds: 700_000_000) } // The tree is built asynchronously.
+    }
+
+    func restoreAccessibilityModes() {
+        for (pid, application) in enhancedInterface where !application.isTerminated {
+            _ = AXUIElementSetAttributeValue(AXUIElementCreateApplication(pid), "AXEnhancedUserInterface" as CFString, kCFBooleanFalse)
+        }
+        enhancedInterface = [:]
+    }
+
+    /// Chromium browsers and Electron apps ship a renderer helper app.
+    private func isChromium(_ url: URL) -> Bool {
+        if let known = chromiumBundles[url] { return known }
+        let files = FileManager.default
+        let frameworks = url.appendingPathComponent("Contents/Frameworks")
+        let names = (try? files.contentsOfDirectory(atPath: frameworks.path)) ?? []
+        let renderer = { (name: String) in name.hasSuffix(" Helper (Renderer).app") }
+        let found = names.contains(where: renderer) || names.filter { $0.hasSuffix(".framework") }.contains { framework in
+            let helpers = frameworks.appendingPathComponent(framework).appendingPathComponent("Versions/Current/Helpers")
+            return ((try? files.contentsOfDirectory(atPath: helpers.path)) ?? []).contains(where: renderer)
+        }
+        chromiumBundles[url] = found
+        return found
+    }
 
     func listApps() -> [[String: Any]] {
         let running = workspace.runningApplications.filter { !$0.isTerminated }
@@ -22,6 +71,9 @@ final class MacObserver {
         for application in running {
             let target = TargetApp(application: application)
             let key = application.bundleURL.map(canonicalURL)?.path ?? "pid:\(target.pid)"
+            // Background agents and web content helpers are not apps to operate;
+            // installed menu bar apps are kept.
+            guard application.activationPolicy == .regular || records[key] != nil else { continue }
             var record = records[key] ?? ["id": target.id, "displayName": target.name]
             if let url = application.bundleURL { record["path"] = canonicalURL(url).path }
             record["isRunning"] = true
@@ -98,30 +150,47 @@ final class MacObserver {
         guard !app.application.isTerminated else { throw OpenCUError("APP_NOT_RUNNING", "\(app.name) is no longer running. Resolve the application again.") }
         let application = AXUIElementCreateApplication(app.pid)
         AXUIElementSetMessagingTimeout(application, 1)
+        try await requestWebAccessibility(application, app)
         let window = try await observedWindow(application)
         guard let bounds = axRect(window), usableBounds(bounds) else {
             throw OpenCUError("WINDOW_BOUNDS_UNAVAILABLE", "The selected window does not expose usable Accessibility bounds. Select a visible window and try again.")
         }
         let windowTitle = axString(window, kAXTitleAttribute) ?? ""
         let focused = elementAttribute(application, kAXFocusedUIElementAttribute)
-        let tree = accessibilityTree(window: window, application: application, focused: focused,
+        let tree = accessibilityTree(window: window, bounds: bounds, application: application, focused: focused,
                                      expanded: expandedMenusPID == app.pid ? expandedMenus : [])
-        var lines = ["App: \(quoted(app.name)) (\(app.id), pid \(app.pid), \(app.application.isActive ? "foreground" : "background"))",
+        var lines = ["App: \(quoted(app.name)) (\(app.id), pid \(app.pid), \(app.isFrontmost ? "foreground" : "background"))",
                      "Window: \(quoted(windowTitle))",
                      "Window bounds: x=\(bounds.minX), y=\(bounds.minY), width=\(bounds.width), height=\(bounds.height) points."]
         lines.append(contentsOf: tree.lines)
+        var windowID = inputWindowID(app: app, window: window)
+        let presentation = windowID.flatMap(windowPresentation)
+        // Measured on macOS 26: such a window cannot become key, so window
+        // commands are disabled; Chromium stops rendering it; captures fail.
+        let limits = "In the background, its screenshot, web pages in Chromium-based apps, and window commands such as Save or Close are unavailable"
+        if let presentation, !presentation.onscreen {
+            lines.append("This window is not on screen (hidden by Stage Manager or the app, or on another Space). \(limits), and keyboard input may not arrive; reading and indexed actions still work. Use activate_app for steps that need more.")
+        } else if let presentation, abs(presentation.size.width - bounds.width) > 1 || abs(presentation.size.height - bounds.height) > 1 {
+            lines.append("Stage Manager shows this window only as a \(presentation.size.width) x \(presentation.size.height) point thumbnail. \(limits); reading, indexed actions and typing still work. Use activate_app for steps that need more.")
+        } else if !tree.webContent, let url = app.application.bundleURL, isChromium(url) {
+            lines.append("Web content unavailable: Chromium does not render pages in a fully covered window, so only browser controls are exposed. Use activate_app or keep the window visible, then read the state again.")
+        }
 
         var screenshot: [String: Any]?
-        var windowID = inputWindowID(app: app, window: window)
         var width: Int?
         var height: Int?
         if includeScreenshot {
-            let captured = try await capture(app: app, window: window, windowID: windowID, bounds: bounds)
-            screenshot = captured.image
-            windowID = captured.windowID
-            width = captured.width
-            height = captured.height
-            lines.append("Screenshot: \(captured.width) x \(captured.height) pixels. Coordinates start at the top-left of this window image; window shadows are excluded.")
+            do {
+                let captured = try await capture(app: app, window: window, windowID: windowID, bounds: bounds)
+                screenshot = captured.image
+                windowID = captured.windowID
+                width = captured.width
+                height = captured.height
+                lines.append("Screenshot: \(captured.width) x \(captured.height) pixels. Coordinates start at the top-left of this window image; window shadows are excluded.")
+            } catch let error as OpenCUError where Self.lastingCaptureFailures.contains(error.code) {
+                // The text state remains valid; coordinate input stays unavailable without an image.
+                lines.append("Screenshot unavailable (\(error.code)): \(error.message) Indexed elements above can still be used.")
+            }
         }
         guard let currentWindow = selectedWindow(application), CFEqual(currentWindow, window),
               let currentBounds = axRect(window), sameBounds(currentBounds, bounds),
@@ -217,96 +286,183 @@ final class MacObserver {
         return (value as! AXUIElement)
     }
 
-    private func accessibilityTree(window: AXUIElement, application: AXUIElement, focused: AXUIElement?,
-                                   expanded: Set<AXIdentity>) -> (lines: [String], elements: [Int: AXUIElement]) {
+    private struct AXNode {
+        static let attributes = [kAXRoleAttribute, kAXTitleAttribute, kAXDescriptionAttribute, kAXValueAttribute,
+                                 kAXIdentifierAttribute, "AXPlaceholderValue", kAXEnabledAttribute, kAXSelectedAttribute,
+                                 kAXExpandedAttribute, kAXPositionAttribute, kAXSizeAttribute,
+                                 kAXRoleDescriptionAttribute] as CFArray
+        static let containers: Set<String> = [kAXGroupRole, kAXUnknownRole, kAXSplitGroupRole, "AXLayoutArea", "AXLayoutItem"]
+        static let passiveActions: Set<String> = ["AXShowMenu", "AXScrollToVisible"]
+        static let editable: Set<String> = [kAXTextFieldRole, kAXTextAreaRole, kAXComboBoxRole]
+
+        let role: String
+        let title, description, identifier, placeholder: String?
+        /// A container's localized kind, such as a web landmark, video or dialog.
+        let kind: String?
+        let value: CFTypeRef?
+        let enabled, selected, expanded: Bool?
+        let frame: CGRect?
+        let actions: [String]
+
+        /// One IPC round trip for the attributes, one for the actions.
+        init(_ element: AXUIElement) {
+            var raw: CFArray?
+            var values = [AnyObject?](repeating: nil, count: CFArrayGetCount(Self.attributes))
+            if AXUIElementCopyMultipleAttributeValues(element, Self.attributes, AXCopyMultipleAttributeOptions(rawValue: 0), &raw) == .success,
+               let array = raw as? [AnyObject], array.count == values.count {
+                values = array.map { value in
+                    CFGetTypeID(value) == AXValueGetTypeID() && AXValueGetType(value as! AXValue) == .axError ? nil : value
+                }
+            }
+            let text = { (index: Int) in (values[index] as? String).flatMap { $0.isEmpty ? nil : $0 } }
+            role = values[0] as? String ?? "AXUnknown"
+            title = text(1); description = text(2); identifier = text(4); placeholder = text(5)
+            value = values[3]
+            enabled = values[6] as? Bool; selected = values[7] as? Bool; expanded = values[8] as? Bool
+            var point = CGPoint.zero, size = CGSize.zero
+            if let position = values[9], let extent = values[10], CFGetTypeID(position) == AXValueGetTypeID(),
+               CFGetTypeID(extent) == AXValueGetTypeID(), AXValueGetValue(position as! AXValue, .cgPoint, &point),
+               AXValueGetValue(extent as! AXValue, .cgSize, &size) {
+                frame = CGRect(origin: point, size: size)
+            } else { frame = nil }
+            // Web pages mark nearly every container; only a kind other than the
+            // role's ordinary description, such as a form or dialog, is useful.
+            // Info.plist lets AppKit describe roles in the user's language.
+            let ordinary = NSAccessibility.Role(rawValue: role).description(with: nil)
+            kind = Self.containers.contains(role) ? text(11).flatMap { $0 == ordinary ? nil : $0 } : nil
+            var names: CFArray?
+            actions = AXUIElementCopyActionNames(element, &names) == .success ? names as? [String] ?? [] : []
+        }
+
+        /// Text made only of private-use characters is an icon font glyph, not readable text.
+        var valueText: String? {
+            if let text = value as? String {
+                let icon = text.unicodeScalars.allSatisfy { (0xE000...0xF8FF).contains($0.value) || $0.value >= 0xF0000 }
+                return text.isEmpty || icon ? nil : text
+            }
+            return (value as? NSNumber).map { "\($0)" }
+        }
+
+        /// Unlabelled layout containers and text without readable text are omitted;
+        /// their children take their place.
+        var informative: Bool {
+            guard Self.containers.contains(role) || role == kAXStaticTextRole else { return true }
+            return kind != nil || title != nil || description != nil || identifier != nil || placeholder != nil
+                || valueText != nil || actions.contains { !Self.passiveActions.contains($0) }
+        }
+    }
+
+    private func accessibilityTree(window: AXUIElement, bounds: CGRect, application: AXUIElement, focused: AXUIElement?,
+                                   expanded: Set<AXIdentity>) -> (lines: [String], elements: [Int: AXUIElement], webContent: Bool) {
         var lines: [String] = []
         var elements: [Int: AXUIElement] = [:]
         var indexes: [AXIdentity: Int] = [:]
-        var pending: [(AXUIElement, Int)] = []
-        if let menuBar = elementAttribute(application, kAXMenuBarAttribute) { pending.append((menuBar, 0)) }
-        pending.append((window, 0))
+        var webContent = false
+        var inspected = Set<AXIdentity>()
+        // Element, printed depth, nesting depth, menu bar membership, and the
+        // nearest printed ancestor's label.
+        var pending: [(AXUIElement, Int, Int, Bool, String?)] = []
+        if let menuBar = elementAttribute(application, kAXMenuBarAttribute) { pending.append((menuBar, 0, 0, true, nil)) }
+        pending.append((window, 0, 0, false, nil))
+        let focusedIdentity = focused.map(AXIdentity.init)
         let deadline = Date().addingTimeInterval(4)
         var characters = 0
-        var depthLimited = false
+        var outside = 0
+        var nestingLimited = false
         var childListLimited = false
         var stopReason: String?
-        while let (element, depth) = pending.popLast() {
-            if indexes[AXIdentity(element)] != nil { continue }
+        while let (element, depth, nesting, inMenuBar, label) = pending.popLast() {
+            let identity = AXIdentity(element)
+            guard inspected.insert(identity).inserted else { continue }
             if elements.count >= maximumElements { stopReason = "\(maximumElements) element limit"; break }
+            if inspected.count > maximumInspected { stopReason = "\(maximumInspected) inspected element limit"; break }
             if Date() >= deadline { stopReason = "4 second traversal limit"; break }
             AXUIElementSetMessagingTimeout(element, 0.5)
-            let index = elements.count + 1
-            let line = String(repeating: "  ", count: depth) + "[\(index)] " + describe(element, focused: focused)
-            if characters + line.count > maximumTextCharacters { stopReason = "\(maximumTextCharacters) character limit"; break }
-            elements[index] = element
-            indexes[AXIdentity(element)] = index
-            lines.append(line)
-            characters += line.count + 1
-            let role = axString(element, kAXRoleAttribute)
-            if role == kAXMenuBarItemRole || role == kAXMenuItemRole {
-                let open = axValue(element, kAXSelectedAttribute) as? Bool == true
-                    || axValue(element, kAXExpandedAttribute) as? Bool == true
-                if !open && !expanded.contains(AXIdentity(element)) { continue } // Read submenu contents after the caller opens them.
+            let node = AXNode(element)
+            // Content scrolled outside the window is skipped with its subtree.
+            // Menu bar items lie outside every window and are always listed.
+            if !inMenuBar, let frame = node.frame, frame.width > 0, frame.height > 0, !frame.intersects(bounds) {
+                outside += 1
+                continue
+            }
+            var childDepth = depth
+            var childLabel = label
+            // A link or button's own text child repeats its label.
+            let repeatsLabel = node.role == kAXStaticTextRole && label != nil && node.valueText == label
+            if (node.informative && !repeatsLabel) || identity == focusedIdentity {
+                let index = elements.count + 1
+                let line = String(repeating: "  ", count: depth) + "[\(index)] " + describe(element, node, focused: focusedIdentity)
+                if characters + line.count > maximumTextCharacters { stopReason = "\(maximumTextCharacters) character limit"; break }
+                elements[index] = element
+                indexes[identity] = index
+                lines.append(line)
+                characters += line.count + 1
+                childDepth += 1
+                childLabel = node.title ?? node.description
+            }
+            if node.role == kAXMenuBarItemRole || node.role == kAXMenuItemRole,
+               node.selected != true, node.expanded != true, !expanded.contains(identity) {
+                continue // Read submenu contents after the caller opens them.
             }
             var childCount: CFIndex = 0
             guard AXUIElementGetAttributeValueCount(element, kAXChildrenAttribute as CFString, &childCount) == .success,
                   childCount > 0 else { continue }
-            if depth >= maximumDepth {
-                depthLimited = true
+            if node.role == "AXWebArea" { webContent = true }
+            if nesting >= maximumNesting {
+                nestingLimited = true
             } else {
-                let count = min(childCount, max(0, maximumElements - elements.count - pending.count))
+                let count = min(childCount, max(0, maximumInspected - inspected.count - pending.count))
                 childListLimited = childListLimited || count < childCount
                 var values: CFArray?
                 if count > 0, AXUIElementCopyAttributeValues(element, kAXChildrenAttribute as CFString, 0, count, &values) == .success,
                    let children = values as? [AXUIElement] {
-                    pending.append(contentsOf: children.reversed().map { ($0, depth + 1) })
+                    pending.append(contentsOf: children.reversed().map { ($0, childDepth, nesting + 1, inMenuBar, childLabel) })
                 }
             }
         }
         if let stopReason { lines.append("Tree truncated: \(stopReason). Remaining descendants were not inspected.") }
-        if depthLimited { lines.append("Tree truncated: descendants below depth \(maximumDepth) were not inspected.") }
-        if childListLimited { lines.append("Tree truncated: child lists exceeded the remaining \(maximumElements) element budget.") }
-        if let focused {
+        if nestingLimited { lines.append("Tree truncated: descendants nested deeper than \(maximumNesting) levels were not inspected.") }
+        if childListLimited { lines.append("Tree truncated: child lists exceeded the remaining \(maximumInspected) inspected element budget.") }
+        if outside > 0 { lines.append("\(outside) element groups outside the window bounds were omitted; scroll to bring them into view.") }
+        if let focused, let focusedIdentity {
             let index: Int
-            if let existing = indexes[AXIdentity(focused)] { index = existing }
+            if let existing = indexes[focusedIdentity] { index = existing }
             else {
                 index = elements.count + 1
                 elements[index] = focused
                 AXUIElementSetMessagingTimeout(focused, 0.5)
-                lines.append("[\(index)] " + describe(focused, focused: focused))
+                lines.append("[\(index)] " + describe(focused, AXNode(focused), focused: focusedIdentity))
             }
             lines.append("Focused element: [\(index)].")
         } else { lines.append("Focused element: unavailable.") }
-        return (lines, elements)
+        return (lines, elements, webContent)
     }
 
-    private func describe(_ element: AXUIElement, focused: AXUIElement?) -> String {
-        let role = axString(element, kAXRoleAttribute) ?? "AXUnknown"
-        let englishRole = (role.hasPrefix("AX") ? String(role.dropFirst(2)) : role)
+    private func describe(_ element: AXUIElement, _ node: AXNode, focused: AXIdentity?) -> String {
+        let englishRole = (node.role.hasPrefix("AX") ? String(node.role.dropFirst(2)) : node.role)
             .replacingOccurrences(of: "([a-z0-9])([A-Z])", with: "$1 $2", options: .regularExpression)
         var parts = [englishRole]
-        let title = axString(element, kAXTitleAttribute)
-        if let title, !title.isEmpty { parts.append("title=\(quoted(title, limit: 512))") }
-        if let description = axString(element, kAXDescriptionAttribute), !description.isEmpty, description != title {
+        if let kind = node.kind { parts.append("kind=\(quoted(kind, limit: 128))") }
+        if let title = node.title { parts.append("title=\(quoted(title, limit: 512))") }
+        if let description = node.description, description != node.title {
             parts.append("description=\(quoted(description, limit: 512))")
         }
-        if let value = axValue(element, kAXValueAttribute) {
-            if let text = value as? String { parts.append("value=\(quoted(text, limit: 2048))") }
-            else if let number = value as? NSNumber { parts.append("value=\(number)") }
+        if let placeholder = node.placeholder, placeholder != node.title, placeholder != node.description {
+            parts.append("placeholder=\(quoted(placeholder, limit: 512))")
         }
-        if let identifier = axString(element, kAXIdentifierAttribute), !identifier.isEmpty {
-            parts.append("ID=\(quoted(identifier, limit: 512))")
-        }
+        if node.value is String, let text = node.valueText { parts.append("value=\(quoted(text, limit: 2048))") }
+        else if let number = node.value as? NSNumber { parts.append("value=\(number)") }
+        if let identifier = node.identifier { parts.append("ID=\(quoted(identifier, limit: 512))") }
         var settable = DarwinBoolean(false)
-        if AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &settable) == .success, settable.boolValue {
+        if node.valueText != nil || AXNode.editable.contains(node.role),
+           AXUIElementIsAttributeSettable(element, kAXValueAttribute as CFString, &settable) == .success, settable.boolValue {
             parts.append("settable")
         }
-        if axValue(element, kAXEnabledAttribute) as? Bool == false { parts.append("disabled") }
-        if let focused, CFEqual(element, focused) { parts.append("focused") }
-        var names: CFArray?
-        if AXUIElementCopyActionNames(element, &names) == .success, let actions = names as? [String], !actions.isEmpty {
-            parts.append("Secondary Actions: \(actions.joined(separator: ", "))")
-        }
+        if node.enabled == false { parts.append("disabled") }
+        if let focused, AXIdentity(element) == focused { parts.append("focused") }
+        // Context-menu and scroll-into-view actions are on nearly every element.
+        let actions = node.actions.filter { !AXNode.passiveActions.contains($0) }
+        if !actions.isEmpty { parts.append("Secondary Actions: \(actions.joined(separator: ", "))") }
         return parts.joined(separator: " ")
     }
 
@@ -324,7 +480,7 @@ final class MacObserver {
         guard matches.count == 1 else {
             let message = matches.isEmpty ? "The selected Accessibility window's exact window ID is not available for capture."
                 : "Several capture entries share the selected Accessibility window's exact ID."
-            throw OpenCUError("SCREENSHOT_WINDOW_AMBIGUOUS", message + " If Stage Manager reduced it to a thumbnail, use activate_app and read it again. No other window was captured.")
+            throw OpenCUError("SCREENSHOT_WINDOW_UNAVAILABLE", message + " A hidden window or a Stage Manager thumbnail cannot be captured; use activate_app to show it. No other window was captured.")
         }
         let selected = matches[0]
         let filter = SCContentFilter(desktopIndependentWindow: selected)
@@ -332,7 +488,7 @@ final class MacObserver {
         guard scale.isFinite, scale > 0,
               abs(filter.contentRect.width - bounds.width) <= 1,
               abs(filter.contentRect.height - bounds.height) <= 1 else {
-            throw OpenCUError("SCREENSHOT_GEOMETRY_MISMATCH", "The capture content size is \(filter.contentRect.width) x \(filter.contentRect.height) points, but the observed window is \(bounds.width) x \(bounds.height) points. Stage Manager may be showing a thumbnail. Use activate_app to restore the full window, then read it again before using coordinates.")
+            throw OpenCUError("SCREENSHOT_THUMBNAIL", "Stage Manager shows this window as a \(filter.contentRect.width) x \(filter.contentRect.height) point thumbnail instead of its \(bounds.width) x \(bounds.height) point window, and macOS provides no full image of it. Use activate_app to show the window, then read it again.")
         }
         let pixelWidth = (bounds.width * scale).rounded()
         let pixelHeight = (bounds.height * scale).rounded()
@@ -363,6 +519,17 @@ final class MacObserver {
         guard CGImageDestinationFinalize(destination) else { throw OpenCUError("SCREENSHOT_ENCODING_FAILED", "Could not encode the window PNG image.") }
         return (["data": (data as Data).base64EncodedString(), "mimeType": "image/png", "width": image.width, "height": image.height],
                 selected.windowID, image.width, image.height)
+    }
+
+    /// How WindowServer presents the window: its composited size differs from the
+    /// Accessibility size for a Stage Manager thumbnail, and a hidden window is
+    /// not on screen. No capture permission is needed.
+    private func windowPresentation(_ windowID: CGWindowID) -> (size: CGSize, onscreen: Bool)? {
+        guard let records = CGWindowListCopyWindowInfo(.optionIncludingWindow, windowID) as? [[String: Any]],
+              let record = records.first(where: { ($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value == windowID }),
+              let dictionary = record[kCGWindowBounds as String] as? NSDictionary,
+              let rect = CGRect(dictionaryRepresentation: dictionary as CFDictionary) else { return nil }
+        return (rect.size, record[kCGWindowIsOnscreen as String] as? Bool ?? false)
     }
 
     // Stage Manager can translate or scale rendered windows independently of AX

@@ -228,12 +228,12 @@ final class InputController {
         return .none
     }
 
-    /// A menu bar item is opened once, so the application populates and validates
-    /// its items, then closed: an open background menu would cover the user's
-    /// screen and close on their next click. Closed items stay readable and
-    /// AXPress still chooses them. A submenu is only listed: pressing it inside a
-    /// closed menu would show it alone. AppKit sends a command chosen from an open
-    /// menu after its dismissal animation, so wait for that menu to close as well.
+    /// Clicking a menu bar item or submenu lists its items without opening it:
+    /// AppKit populates delegate menus and validates items when Accessibility
+    /// reads them, and AXPress on a closed item still runs it after validation.
+    /// An open background menu would cover the user's screen and close on their
+    /// next click. AppKit sends a command chosen from an already open menu after
+    /// its dismissal animation, so wait for that menu to close.
     private func perform(_ action: String, on element: AXUIElement) async throws -> MenuEffect {
         let role = axString(element, kAXRoleAttribute)
         guard [kAXPressAction, kAXPickAction].contains(action), role == kAXMenuBarItemRole || role == kAXMenuItemRole else {
@@ -242,12 +242,6 @@ final class InputController {
         }
         var submenus: CFIndex = 0
         if AXUIElementGetAttributeValueCount(element, kAXChildrenAttribute as CFString, &submenus) == .success, submenus > 0 {
-            if role == kAXMenuBarItemRole {
-                try check(AXUIElementPerformAction(element, action as CFString), operation: action)
-                try await waitForMenu(element, open: true, attempts: 20)
-                _ = AXUIElementPerformAction(element, kAXCancelAction as CFString)
-                try await waitForMenu(element, open: false, attempts: 60)
-            }
             return .opened(element)
         }
         var menuBarItem: AXUIElement?
@@ -257,17 +251,12 @@ final class InputController {
             if axString(current, kAXRoleAttribute) == kAXMenuBarItemRole { menuBarItem = current; break }
         }
         try check(AXUIElementPerformAction(element, action as CFString), operation: action)
-        if let menuBarItem { try await waitForMenu(menuBarItem, open: false, attempts: 60) }
-        return .chose
-    }
-
-    private func waitForMenu(_ element: AXUIElement, open: Bool, attempts: Int) async throws {
-        for _ in 0..<attempts {
-            let isOpen = axValue(element, kAXSelectedAttribute) as? Bool == true
-                || axValue(element, kAXExpandedAttribute) as? Bool == true
-            if isOpen == open { return }
+        // Up to 1.5 s: the command is sent when the open menu finishes closing.
+        for _ in 0..<60 {
+            guard let menuBarItem, axValue(menuBarItem, kAXSelectedAttribute) as? Bool == true else { break }
             try await pause(0.025)
         }
+        return .chose
     }
 
     private func drag(_ args: Arguments, _ snapshot: WindowSnapshot) async throws {

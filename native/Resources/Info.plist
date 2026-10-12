@@ -3,6 +3,7 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleDevelopmentRegion</key><string>en</string>
+    <key>CFBundleAllowMixedLocalizations</key><true/>
     <key>CFBundleDisplayName</key><string>OpenCU</string>
     <key>CFBundleExecutable</key><string>opencu-engine</string>
     <key>CFBundleIdentifier</key><string>dev.opencu.engine</string>
