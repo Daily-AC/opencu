@@ -7,8 +7,9 @@ final class Engine {
     private let observer = MacObserver()
     private let input = InputController()
     private var snapshot: WindowSnapshot?
+    private let focusGuard = FocusGuard()
 
-    func shutdown() { input.releaseFocus() }
+    func shutdown() { input.releaseFocus(); observer.restoreAccessibilityModes() }
 
     func dispatch(_ method: String, _ args: Arguments) async throws -> Any {
         if method == "doctor" { return permissions() }
@@ -22,6 +23,7 @@ final class Engine {
         input.releaseFocus(unlessTarget: app.pid)
         if method == "activate_app" {
             input.releaseFocus()
+            focusGuard.cancel()
             guard app.application.activate(options: []) else {
                 throw OpenCUError("ACTIVATION_FAILED", "The application could not be activated. No input was sent.")
             }
@@ -49,6 +51,7 @@ final class Engine {
         snapshot = WindowSnapshot(app: current.app, window: current.window, bounds: current.bounds,
                                   windowID: current.windowID, elements: current.elements,
                                   screenshotWidth: nil, screenshotHeight: nil)
+        focusGuard.protect(target: app.pid)
         observer.record(try await input.perform(method: method, args: args, snapshot: current), pid: app.pid)
         return ["ok": true, "app": app.json]
     }

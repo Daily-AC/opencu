@@ -102,7 +102,7 @@ test('permission failures are actionable and never retried', async t => {
 });
 
 test('a failed final observation distinguishes already completed input', async t => {
-  const f = await fixture(t, [{ result: { ok: true } }, { error: { code: 'SCREEN_RECORDING_PERMISSION_REQUIRED', message: 'Screen recording not allowed' } }]);
+  const f = await fixture(t, [{ result: { ok: true } }, { error: { code: 'SCREEN_LOCKED', message: 'macOS is locked' } }]);
   const result = await f.call('run_actions', { app: 'Fixture', actions: [{ method: 'press_key', key: 'Return' }], includeScreenshot: true });
   assert.equal(result.isError, true);
   assert.match(result.content[0].text, /All 1 actions returned.*Do not repeat/);

@@ -2,7 +2,7 @@
   "test": "independent-background-gui",
   "date": "2026-10-12",
   "status": "passed",
-  "engine_sha256": "5c0b94c650fe9a67dd2de945ab1850146b582bdbb042f45c9376bce744130178",
+  "engine_sha256": "021647c815627ec21e1d6ea1c02dca1332782693272d8273193d0d6ce56ddeef",
   "launch": "Ordinary MCP stdio client started bin/opencu from a host without Accessibility or Screen Recording grants; the engine respawned with responsibility disclaimed and used OpenCU's own grants",
   "host_without_disclaim": {
     "accessibility": false,
@@ -26,7 +26,7 @@
     "background pointer coordinates, modifiers and input hold durations",
     "background coordinate drag",
     "background pixel scroll",
-    "background menus close after reading; listed and nested commands run before the call returns",
+    "menus are listed without being displayed: validated, nested and delegate-filled items run; disabled items refused",
     "target never became foreground; no input delivered to foreground sentinel",
     "disconnect releases synthetic activation"
   ],
@@ -34,20 +34,20 @@
     "open_menu_command_delay": "AppKit sent a command chosen from an open background menu 0.25-0.45 s after AXPress returned",
     "open_menu_dismissed_by_user_input": "A background menu left open between calls closed before the next read in 1 of 3 probes while the user was active",
     "closed_menu_item_axpress": "Executed synchronously in about 40 ms; target stayed in the background",
-    "submenu_press_in_closed_menu": "Opened the submenu alone; OpenCU now lists submenu items without pressing"
+    "closed_menu_listing": "Accessibility reads validate and populate closed menus; no menu is displayed"
   },
   "stage_manager_thumbnail_capture": "not supported; see evidence/opencu-stage-manager-capture-2026-10-12.json",
   "reproduce": "node scripts/verify-gui.mjs",
   "signature": "per-machine OpenCU identity; designated requirement pins the certificate",
   "mouse_hold_ms_requested_350": [
-    365.9,
-    365.2,
-    373.5
+    373.5,
+    373.3,
+    372.2
   ],
   "key_hold_ms_requested_250": [
-    264.6,
-    266.8,
-    264.2
+    266.7,
+    258.7,
+    266.7
   ],
   "spoofed_bundle_identifier": {
     "before_certificate_pin": {

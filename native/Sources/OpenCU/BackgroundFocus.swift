@@ -79,3 +79,50 @@ final class BackgroundFocus {
         event.postToPid(pid)
     }
 }
+
+/// Some apps activate themselves in response to background input, for example a
+/// browser opening a link in a new tab. Shortly after OpenCU sends input, give the
+/// foreground back to the app the user was using, unless the user's own click
+/// could have chosen the target.
+@MainActor
+final class FocusGuard {
+    private var observer: NSObjectProtocol?
+    private var target: pid_t = 0
+    private var previous: NSRunningApplication?
+    private var until = Date.distantPast
+    private(set) var restored = 0
+
+    init() {
+        observer = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification,
+                                                                     object: nil, queue: .main) { [weak self] note in
+            let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            MainActor.assumeIsolated { self?.activated(app) }
+        }
+    }
+
+    func protect(target pid: pid_t, seconds: Double = 2) {
+        guard let front = NSWorkspace.shared.frontmostApplication, front.processIdentifier != pid else {
+            cancel()
+            return
+        }
+        target = pid
+        previous = front
+        until = Date().addingTimeInterval(seconds)
+    }
+
+    func cancel() { previous = nil }
+
+    private func activated(_ app: NSRunningApplication?) {
+        guard let app, app.processIdentifier == target, Date() < until,
+              let previous, !previous.isTerminated else { return }
+        let click = [CGEventType.leftMouseDown, .rightMouseDown, .otherMouseDown]
+            .map { CGEventSource.secondsSinceLastEventType(.hidSystemState, eventType: $0) }.min() ?? .infinity
+        guard click > 0.5 else { return }
+        // AXFrontmost activates the app without the cooperative-activation
+        // handoff that a background process cannot provide.
+        if AXUIElementSetAttributeValue(AXUIElementCreateApplication(previous.processIdentifier),
+                                        kAXFrontmostAttribute as CFString, kCFBooleanTrue) == .success {
+            restored += 1
+        }
+    }
+}

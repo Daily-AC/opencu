@@ -7,8 +7,9 @@ It needs no account, model credentials or proprietary runtime. Any compatible MC
 client can call it; the calling agent supplies the model and decides what to do.
 
 **Development status:** the engine passes background GUI acceptance on disposable
-AppKit fixtures and isolated release verification. Real applications and other UI
-toolkits are not yet accepted. See the [current evidence and limits](docs/opencu-independent-2026-10-12.md).
+AppKit fixtures and isolated release verification, and completed a real web task
+in Chrome in the background. Safari/WebKit, Qt and Java apps are not yet accepted.
+See the [current evidence and limits](docs/opencu-independent-2026-10-12.md).
 
 The current target is **macOS 14 or later on Apple silicon**. Windows and other
 platforms are separate future work.
@@ -67,13 +68,24 @@ Coordinate input checks the screenshot size and current window geometry; a
 screenshot becomes stale after input or a text-only observation. Apps can still
 move, change focus or handle synthesized input differently: inspect the returned
 state before deciding what to do next. Use `activate_app` explicitly when
-foreground interaction is needed. A Stage Manager thumbnail is not accepted as a
-full-window screenshot.
+foreground interaction is needed. If the target app activates itself in response
+to background input, for example a browser opening a new tab, OpenCU returns the
+foreground to the app you were using unless you clicked in the meantime.
 
-Clicking a menu bar item lists its menu: OpenCU opens it once so the app fills in
-and validates the items, then closes it. Clicking a submenu lists its items without
-opening it. Clicking a listed item runs the command before the call returns. No
-menu is left open over the user's screen between calls.
+With Stage Manager, an app that is not on the stage is shown as a thumbnail or
+hidden. macOS then provides no full screenshot, Chromium-based apps stop rendering
+their pages, and the window cannot run commands such as Save or Close. OpenCU
+reports this in the returned state; reading and indexed actions still work, and
+`activate_app` covers the rest. A requested screenshot that cannot be taken is
+replaced by its reason instead of failing the call.
+
+Chromium browsers and Electron apps expose their web content to OpenCU: Electron
+through `AXManualAccessibility`, Chrome-family browsers through
+`AXEnhancedUserInterface`, which OpenCU resets when it disconnects.
+
+Clicking a menu bar item or submenu lists its items without displaying the menu;
+the app validates and fills them for the read. Clicking a listed item runs the
+command before the call returns. A disabled item is refused by the app.
 
 Standalone input returns updated Accessibility text. Coordinate input and drag
 also return a new screenshot. `run_actions` executes up to 16 known actions and

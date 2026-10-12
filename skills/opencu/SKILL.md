@@ -23,9 +23,11 @@ particular agent identity or official third-party desktop runtime is required.
 4. Verify the returned application state before further input. If the final read
    fails after input, inspect state without repeating the action. New read calls
    cannot inherit another connection's element/screenshot observations.
-5. Use `activate_app` only when foreground interaction is needed. A Stage Manager
-   thumbnail does not provide usable full-window coordinates. Activation changes
-   focus; inspect the returned window and do not compete with user activity.
+5. Use `activate_app` only when foreground interaction is needed. When the state
+   says the window is a Stage Manager thumbnail or not on screen, use
+   `activate_app` for screenshots, web pages in Chromium-based apps and window
+   commands such as Save. Activation changes focus; inspect the returned window
+   and do not compete with user activity.
 
 `get_app_state`, `activate_app` and `run_actions` accept `disableDiff`,
 `includeScreenshot`, `waitForText` and `waitTimeoutMs`. Text is the default.
@@ -39,8 +41,8 @@ modifier such as `Shift`; `click.duration` and `press_key.duration` hold for
 `Escape`, `Tab`, `super+a`, `Control_L+a` and arrow keys.
 
 For menus, click the menu bar item, then the listed item; click a submenu first to
-list its items. Menus are read and closed again, so nothing stays open between
-calls, and a listed command has run when the click returns.
+list its items. Menus are listed without being displayed, and a listed command has
+run when the click returns. Disabled items are marked and refused.
 
 Prefer `paste` for Unicode and multiline content. Formats are `text`, `md` and
 `html`. The engine restores its previous clipboard snapshot unless another app
