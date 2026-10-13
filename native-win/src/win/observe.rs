@@ -1,8 +1,8 @@
 use super::{
-    apps::{App, Window},
+    apps::{self, App, Window},
     capture, safety,
 };
-use opencu_engine::{Error, Node, Rect, Result, Screenshot};
+use opencu_engine::{observation::*, Error, Node, Rect, Result, Screenshot};
 use serde_json::{json, Value};
 use std::time::{Duration, Instant};
 use windows::{
@@ -117,6 +117,15 @@ unsafe fn cache_request(uia: &IUIAutomation) -> Result<IUIAutomationCacheRequest
         UIA_IsEnabledPropertyId,
         UIA_IsOffscreenPropertyId,
         UIA_IsKeyboardFocusablePropertyId,
+        UIA_HasKeyboardFocusPropertyId,
+        UIA_FrameworkIdPropertyId,
+        UIA_ToggleToggleStatePropertyId,
+        UIA_SelectionItemIsSelectedPropertyId,
+        UIA_ExpandCollapseExpandCollapseStatePropertyId,
+        UIA_RangeValueMinimumPropertyId,
+        UIA_RangeValueMaximumPropertyId,
+        UIA_RangeValueSmallChangePropertyId,
+        UIA_RangeValueLargeChangePropertyId,
         UIA_IsPasswordPropertyId,
         UIA_ValueIsReadOnlyPropertyId,
         UIA_RangeValueIsReadOnlyPropertyId,
@@ -164,6 +173,7 @@ unsafe fn node(el: &IUIAutomationElement, children: bool) -> Result<Node> {
         offscreen: el.CachedIsOffscreen()?.as_bool(),
         has_children: children,
         focusable: el.CachedIsKeyboardFocusable().unwrap_or_default().as_bool(),
+        focused: el.CachedHasKeyboardFocus().unwrap_or_default().as_bool(),
         ..Default::default()
     };
     if cached::<IUIAutomationInvokePattern>(el, UIA_InvokePatternId).is_some() {
@@ -187,6 +197,26 @@ unsafe fn node(el: &IUIAutomationElement, children: bool) -> Result<Node> {
             node.actions.push("DoDefaultAction".into());
         }
     }
+    if let Some(p) = cached::<IUIAutomationTogglePattern>(el, UIA_TogglePatternId) {
+        node.toggle = p.CachedToggleState().ok().map(|v| match v.0 {
+            0 => "off".into(),
+            1 => "on".into(),
+            2 => "mixed".into(),
+            n => n.to_string(),
+        });
+    }
+    if let Some(p) = cached::<IUIAutomationSelectionItemPattern>(el, UIA_SelectionItemPatternId) {
+        node.selected = p.CachedIsSelected().ok().map(|v| v.as_bool());
+    }
+    if let Some(p) = cached::<IUIAutomationExpandCollapsePattern>(el, UIA_ExpandCollapsePatternId) {
+        node.expanded = p.CachedExpandCollapseState().ok().map(|v| match v.0 {
+            0 => "collapsed".into(),
+            1 => "expanded".into(),
+            2 => "partial".into(),
+            3 => "leaf".into(),
+            n => n.to_string(),
+        });
+    }
     if public {
         if let Some(p) = cached::<IUIAutomationValuePattern>(el, UIA_ValuePatternId) {
             // Recheck the live flag immediately before fetching content as a
@@ -195,13 +225,20 @@ unsafe fn node(el: &IUIAutomationElement, children: bool) -> Result<Node> {
                 node.value = p.CurrentValue().ok().map(|v| v.to_string());
             }
             node.settable = p.CachedIsReadOnly().is_ok_and(|v| !v.as_bool());
-        } else if let Some(p) =
-            cached::<IUIAutomationRangeValuePattern>(el, UIA_RangeValuePatternId)
-        {
+        }
+        if let Some(p) = cached::<IUIAutomationRangeValuePattern>(el, UIA_RangeValuePatternId) {
             if el.CurrentIsPassword().is_ok_and(|v| !v.as_bool()) {
                 node.value = p.CurrentValue().ok().map(|v| v.to_string());
             }
             node.settable = p.CachedIsReadOnly().is_ok_and(|v| !v.as_bool());
+            if let (Ok(min), Ok(max), Ok(small), Ok(large)) = (
+                p.CachedMinimum(),
+                p.CachedMaximum(),
+                p.CachedSmallChange(),
+                p.CachedLargeChange(),
+            ) {
+                node.range = Some((min, max, small, large));
+            }
         }
     }
     // Bound individual provider strings, as well as overall traversal.
@@ -221,19 +258,96 @@ unsafe fn node(el: &IUIAutomationElement, children: bool) -> Result<Node> {
     }
     Ok(node)
 }
+// UIA owns the identity semantics; never merge controls by title, role or bounds.
+unsafe fn runtime_id(el: &IUIAutomationElement) -> Option<Vec<i32>> {
+    use windows::Win32::System::Ole::*;
+    let array = el.GetRuntimeId().ok()?;
+    if array.is_null() {
+        return None;
+    }
+    let result = (|| {
+        if SafeArrayGetDim(array) != 1 || SafeArrayGetElemsize(array) != 4 {
+            return None;
+        }
+        let low = SafeArrayGetLBound(array, 1).ok()?;
+        let high = SafeArrayGetUBound(array, 1).ok()?;
+        if !(1..=256).contains(&(high as i64 - low as i64 + 1)) {
+            return None;
+        }
+        let mut id = vec![];
+        for i in low..=high {
+            let mut value = 0i32;
+            SafeArrayGetElement(array, &i, &mut value as *mut _ as _).ok()?;
+            id.push(value);
+        }
+        Some(id)
+    })();
+    let _ = SafeArrayDestroy(array);
+    result
+}
 pub unsafe fn observe(uia: &IUIAutomation, app: App, include: bool) -> Result<(Value, Snapshot)> {
     safety::desktop()?;
-    let primary = app
-        .windows
-        .first()
+    // Start with the resolver's candidates; tool-only title matches may expand
+    // to content below. Discover owned windows and summaries across the PID.
+    let desktop = apps::observation_windows()?;
+    let desktop_info: Vec<_> = desktop.iter().map(|w| apps::observation_info(w)).collect();
+    let mut candidates: Vec<_> = desktop_info
+        .iter()
+        .filter(|info| {
+            desktop
+                .iter()
+                .find(|w| w.hwnd.0 as usize == info.hwnd)
+                .is_some_and(|w| {
+                    app.windows
+                        .iter()
+                        .any(|c| c.hwnd == w.hwnd && c.pid == w.pid && c.created == w.created)
+                })
+        })
+        .cloned()
+        .collect();
+    // An explicit tool title must not force a transparent capture when this
+    // process has usable content. Preserve title restriction for content matches.
+    if !candidates
+        .iter()
+        .any(|w| w.visible && !w.minimized && !w.tool)
+    {
+        candidates = desktop_info
+            .iter()
+            .zip(&desktop)
+            .filter(|(_, w)| {
+                w.pid == app.pid
+                    && app
+                        .windows
+                        .iter()
+                        .any(|c| c.pid == w.pid && c.created == w.created)
+            })
+            .map(|(info, _)| info.clone())
+            .collect();
+    }
+    let selected = capture_target(&candidates, GetForegroundWindow().0 as usize)
         .ok_or_else(|| Error::new("NO_ACCESSIBLE_WINDOW", "No visible top-level window"))?;
+    let primary = desktop
+        .iter()
+        .find(|w| w.hwnd.0 as usize == candidates[selected].hwnd)
+        .unwrap();
+    let family: Vec<_> = desktop_info
+        .iter()
+        .zip(&desktop)
+        .filter(|(_, w)| w.pid == app.pid && w.created == primary.created)
+        .map(|(info, _)| info.clone())
+        .collect();
+    // The existing input contract uses windows[0] for captured coordinates.
+    // Keep that invariant without changing input routing or authorization.
+    let mut app = app;
+    app.windows.retain(|w| w.hwnd != primary.hwnd);
+    app.windows.insert(0, primary.clone());
     let mut text = format!(
         "App: {} ({})\nWindow: {}\nWindows input requires foreground focus.\n",
         app.name,
         app.id,
         json!(primary.title)
     );
-    text += &format!("Capture target: hwnd={:x} class={} (prefer non-tool, unowned content window, then largest area).\n",primary.hwnd.0 as usize,json!(primary.class_name));
+    text += &format!("Capture target: hwnd={:x} class={} (foreground non-tool, otherwise topmost visible non-tool window).\n", primary.hwnd.0 as usize, json!(primary.class_name));
     let mut snapshot = Snapshot {
         app: app.clone(),
         keyboard_window: primary.clone(),
@@ -245,12 +359,43 @@ pub unsafe fn observe(uia: &IUIAutomation, app: App, include: bool) -> Result<(V
     let started = Instant::now();
     let mut inspected = 0;
     let mut truncated = false;
-    for window in &app.windows {
-        text += &format!(
-            "Window: {} hwnd={:x}\n",
-            json!(window.title),
-            window.hwnd.0 as usize
+    let mut identities = ElementIdentities::default();
+    let mut identity_missing = Vec::<usize>::new();
+    let mut hidden = 0;
+    // Target first, then its owned descendants; all unrelated windows are summaries.
+    let mut order: Vec<_> = desktop
+        .iter()
+        .enumerate()
+        .filter(|(_, w)| w.pid == app.pid && w.created == primary.created)
+        .collect();
+    order.sort_by_key(|(_, w)| w.hwnd != primary.hwnd);
+    for (desktop_index, window) in order {
+        let info = &desktop_info[desktop_index];
+        if !info.visible {
+            hidden += 1;
+            continue;
+        }
+        let tree = info.visible
+            && !info.minimized
+            && owned_by(&family, info.hwnd, primary.hwnd.0 as usize);
+        text += &window_line(
+            info,
+            covered(info.bounds, &desktop_info[..desktop_index]),
+            !tree,
         );
+        if !tree {
+            continue;
+        }
+        if inspected >= 8000
+            || snapshot.elements.len() >= 1200
+            || text.len() > 180000
+            || started.elapsed() > Duration::from_secs(8)
+        {
+            truncated = true;
+            continue;
+        }
+        let client = apps::client_rect(window);
+        let mut omitted = 0usize;
         let root = match uia.ElementFromHandleBuildCache(window.hwnd, &cache) {
             Ok(r) => r,
             Err(e) => {
@@ -258,8 +403,8 @@ pub unsafe fn observe(uia: &IUIAutomation, app: App, include: bool) -> Result<(V
                 continue;
             }
         };
-        let mut stack = vec![(root, 0usize, 0usize)];
-        while let Some((el, depth, visual_depth)) = stack.pop() {
+        let mut stack = vec![(root, 0usize, 0usize, false)];
+        while let Some((el, depth, visual_depth, chromium)) = stack.pop() {
             if inspected >= 8000
                 || snapshot.elements.len() >= 1200
                 || text.len() > 180000
@@ -283,7 +428,7 @@ pub unsafe fn observe(uia: &IUIAutomation, app: App, include: bool) -> Result<(V
             // even for a broken provider. Structural depth doesn't consume display depth.
             if depth > 0 {
                 if let Ok(next) = walker.GetNextSiblingElementBuildCache(&el, &cache) {
-                    stack.push((next, depth, visual_depth));
+                    stack.push((next, depth, visual_depth, chromium));
                 }
             }
             let node = match node(&el, child.is_some()) {
@@ -291,14 +436,48 @@ pub unsafe fn observe(uia: &IUIAutomation, app: App, include: bool) -> Result<(V
                 Err(_) => {
                     text += "[UIA element unavailable during read]\n";
                     if let Some(child) = child {
-                        stack.push((child, depth + 1, visual_depth));
+                        stack.push((child, depth + 1, visual_depth, chromium));
                     }
                     continue;
                 }
             };
-            let visible = node.visible_in_tree();
+            let chromium = chromium_context(
+                chromium,
+                &node.role,
+                &node.class_name,
+                &el.CachedFrameworkId()
+                    .map(|s| s.to_string())
+                    .unwrap_or_default(),
+            );
+            let outside = outside_chromium(chromium, node.bounds, client);
+            if outside {
+                omitted += 1;
+            }
+            let eligible = !outside && node.visible_in_tree();
+            let id = if eligible { runtime_id(&el) } else { None };
+            let duplicate = eligible
+                && (id.as_ref().and_then(|id| identities.index(id)).is_some()
+                    || if id.is_none() {
+                        snapshot.elements.iter().any(|previous| {
+                            uia.CompareElements(&previous.element, &el)
+                                .is_ok_and(|v| v.as_bool())
+                        })
+                    } else {
+                        identity_missing.iter().any(|&i| {
+                            uia.CompareElements(&snapshot.elements[i].element, &el)
+                                .is_ok_and(|v| v.as_bool())
+                        })
+                    });
+            // Do not prune descendants: a provider can expose new children via
+            // another root. Only the first occurrence receives an action index.
+            let visible = eligible && !duplicate;
             if visible {
                 let index = snapshot.elements.len() + 1;
+                if let Some(id) = id {
+                    identities.remember(id, index);
+                } else {
+                    identity_missing.push(snapshot.elements.len());
+                }
                 text += &(node.line(index, visual_depth) + "\n");
                 snapshot.elements.push(Element {
                     element: el.clone(),
@@ -307,13 +486,18 @@ pub unsafe fn observe(uia: &IUIAutomation, app: App, include: bool) -> Result<(V
                 });
             }
             if let Some(child) = child {
-                stack.push((child, depth + 1, visual_depth + usize::from(visible)));
+                stack.push((
+                    child,
+                    depth + 1,
+                    visual_depth + usize::from(visible),
+                    chromium,
+                ));
             }
         }
-        if truncated {
-            break;
-        }
+        text += &omitted_line(omitted);
+        // Continue summaries even if a tree exhausts its traversal budget.
     }
+    text += &hidden_windows_line(hidden);
     if truncated {
         text+="Tree truncated: limit 1200 listed / 8000 inspected nodes, depth 120, 180000 bytes, or 8 seconds.\n";
     }
