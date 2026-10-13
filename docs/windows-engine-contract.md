@@ -67,8 +67,9 @@ nodes, 8,000 inspected nodes, depth 120, 180,000 bytes and an 8-second traversal
 budget, with explicit truncation text. Individual UIA calls have 2-second timeout
 settings; a misbehaving provider can still overrun the traversal budget.
 
-The first listed window is the keyboard and screenshot target; indexed elements
-retain their own top-level window. Use a unique title to select a specific window.
+The first listed window is the screenshot and initial keyboard target. Indexed
+input retains its own top-level window, which becomes the keyboard target for
+following input in the same batch. Use a unique title to select a specific window.
 Capture uses full-window PrintWindow (`PW_RENDERFULLCONTENT`) and WIC PNG encoding.
 No screen-wide fallback can accidentally capture another app. Minimized/failed
 captures return tree text with a reason and no usable image. GPU video/DRM/CEF may

@@ -117,7 +117,7 @@ impl Engine {
         }
         let s = self
             .snapshot
-            .as_ref()
+            .as_mut()
             .filter(|s| {
                 s.app.id == app.id
                     && s.app.pid == app.pid
