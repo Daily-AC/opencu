@@ -6,7 +6,7 @@ $temp = Join-Path $root ('.cache\direct-' + [Guid]::NewGuid().ToString())
 New-Item -ItemType Directory -Force -Path $temp | Out-Null
 $env:TEMP = $temp
 $env:TMP = $temp
-$title = 'OpenCU Direct Fixture ' + [Guid]::NewGuid().ToString()
+$title = 'OpenCU Direct Fixture ' + [char]0x6d4b + [char]0x8bd5 + ' ' + [Guid]::NewGuid().ToString()
 $output = Join-Path $temp 'state.json'
 $command = Join-Path $temp 'command.txt'
 $fixture = $null
@@ -22,8 +22,8 @@ function State {
 }
 function Request([string]$method, [hashtable]$params, [string]$expectedError='') {
     $script:sequence++
-    $engine.StandardInput.WriteLine((@{id=$script:sequence;method=$method;params=$params}|ConvertTo-Json -Compress))
-    $engine.StandardInput.Flush()
+    $writer.WriteLine((@{id=$script:sequence;method=$method;params=$params}|ConvertTo-Json -Compress))
+    $writer.Flush()
     $reading=$engine.StandardOutput.ReadLineAsync()
     if(-not $reading.Wait(30000)){throw 'Engine request timed out; input was not retried'}
     $response=$reading.Result|ConvertFrom-Json
@@ -45,6 +45,8 @@ try {
     $info.RedirectStandardInput=$true;$info.RedirectStandardOutput=$true;$info.RedirectStandardError=$true
     $info.StandardOutputEncoding=[Text.UTF8Encoding]::new($false)
     $engine=[Diagnostics.Process]::Start($info)
+    $writer=[IO.StreamWriter]::new($engine.StandardInput.BaseStream,[Text.UTF8Encoding]::new($false))
+    $writer.AutoFlush=$true
     $state=Request 'get_app_state' @{app=$title;includeScreenshot=$true}
     if(-not $state.screenshot){throw ('Missing screenshot: '+$state.text)}
     $index=[regex]::Match($state.text,'(?m)^\s*\[(\d+)\] Button title="Fixture counter"').Groups[1].Value
