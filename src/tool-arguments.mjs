@@ -9,6 +9,11 @@ export function normalizeAction(action) {
     delete normalized.x;
     delete normalized.y;
   }
+  // Element indexes start at 1, so 0 or a negative index next to coordinates is a placeholder.
+  if (['click', 'scroll'].includes(normalized.method) && Number.isInteger(normalized.element_index) && normalized.element_index < 1
+    && normalized.x !== undefined && normalized.y !== undefined) {
+    delete normalized.element_index;
+  }
   if (typeof normalized.key === 'string' && normalized.method === 'click' && emptyKeys.has(normalized.key.trim().toLowerCase())) {
     delete normalized.key;
   }
