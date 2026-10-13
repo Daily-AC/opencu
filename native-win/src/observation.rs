@@ -21,7 +21,7 @@ pub fn capture_target(windows: &[WindowInfo], foreground: usize) -> Option<usize
     let usable = |w: &&WindowInfo| w.visible && !w.minimized;
     windows
         .iter()
-        .position(|w| w.hwnd == foreground && usable(&w))
+        .position(|w| w.hwnd == foreground && usable(&w) && !w.tool)
         .or_else(|| windows.iter().position(|w| usable(&w) && !w.tool))
         .or_else(|| windows.iter().position(|w| usable(&w)))
         .or_else(|| windows.iter().position(|w| w.visible))
@@ -160,5 +160,26 @@ pub fn omitted_line(count: usize) -> String {
         String::new()
     } else {
         format!("Chromium: {count} elements outside the visible client area omitted; scrolling reveals them.\n")
+    }
+}
+
+/// Snapshot-local UIA runtime identities; labels/bounds are never identity keys.
+#[derive(Default)]
+pub struct ElementIdentities(std::collections::HashMap<Vec<i32>, usize>);
+impl ElementIdentities {
+    pub fn index(&self, id: &[i32]) -> Option<usize> {
+        self.0.get(id).copied()
+    }
+    pub fn remember(&mut self, id: Vec<i32>, index: usize) {
+        if !id.is_empty() {
+            self.0.entry(id).or_insert(index);
+        }
+    }
+}
+pub fn hidden_windows_line(count: usize) -> String {
+    if count == 0 {
+        String::new()
+    } else {
+        format!("Hidden windows: {count} (summaries omitted).\n")
     }
 }
