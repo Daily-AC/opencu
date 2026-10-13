@@ -254,7 +254,7 @@ unsafe fn pointer(point: (i32, i32), window: &super::apps::Window, g: &Guard<'_>
 pub unsafe fn perform(
     method: &str,
     args: &Value,
-    s: &Snapshot,
+    s: &mut Snapshot,
     image: Option<Screenshot>,
     g: &mut Guard<'_>,
 ) -> Result<()> {
@@ -264,14 +264,25 @@ pub unsafe fn perform(
         return Err(invalid("Supply either element_index or both x and y"));
     }
     let e = if indexed_arg {
-        Some(indexed(args, s)?)
+        Some(indexed(args, s)?.clone())
     } else {
         None
     };
     if ["set_value", "perform_secondary_action"].contains(&method) && e.is_none() {
         return Err(invalid("element_index is required"));
     }
-    let window = e.map(|e| &e.window).unwrap_or(&s.app.windows[0]);
+    let target = e
+        .as_ref()
+        .map(|e| &e.window)
+        .unwrap_or_else(|| {
+            if coordinate {
+                &s.app.windows[0]
+            } else {
+                &s.keyboard_window
+            }
+        })
+        .clone();
+    let window = &target;
     // Validate before activation (which may move/restore the window), and again after.
     let screenshot_point = || -> Result<Option<(i32, i32)>> {
         if coordinate {
@@ -347,11 +358,12 @@ pub unsafe fn perform(
         return Err(invalid("Unknown scroll direction"));
     }
     g.activate(window)?;
+    s.keyboard_window = target.clone();
     screenshot_point()?;
     g.check()?;
     match method {
         "click" => {
-            if let Some(e) = e {
+            if let Some(e) = &e {
                 if down == MOUSEEVENTF_LEFTDOWN
                     && count == 1
                     && chord.is_none()
@@ -376,7 +388,7 @@ pub unsafe fn perform(
                 let point = if let Some(p) = screenshot_point()? {
                     p
                 } else {
-                    element_point(e.unwrap())?
+                    element_point(e.as_ref().unwrap())?
                 };
                 pointer(point, window, g)?;
                 screenshot_point()?;
@@ -411,7 +423,7 @@ pub unsafe fn perform(
             let point = if let Some(p) = screenshot_point()? {
                 p
             } else {
-                element_point(e.unwrap())?
+                element_point(e.as_ref().unwrap())?
             };
             pointer(point, window, g)?;
             g.check()?;

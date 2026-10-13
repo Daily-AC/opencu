@@ -17,6 +17,7 @@ pub struct Element {
 }
 pub struct Snapshot {
     pub app: App,
+    pub keyboard_window: Window,
     pub elements: Vec<Element>,
     pub image: Option<Screenshot>,
 }
@@ -168,6 +169,7 @@ pub unsafe fn observe(uia: &IUIAutomation, app: App, include: bool) -> Result<(V
     );
     let mut snapshot = Snapshot {
         app: app.clone(),
+        keyboard_window: primary.clone(),
         elements: vec![],
         image: None,
     };
