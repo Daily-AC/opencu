@@ -73,9 +73,9 @@ final class InputController {
         case "select_text": try selectText(args, snapshot)
         case "perform_secondary_action":
             let element = try indexedElement(args, snapshot)
-            let action = try requiredString(args, "action")
-            guard try actionNames(element).contains(action) else {
-                throw OpenCUError("UNSUPPORTED_ACTION", "The element does not expose \(action); read the current state for its available actions")
+            let requested = try requiredString(args, "action")
+            guard let action = axResolveAction(requested, in: try actionNames(element)) else {
+                throw OpenCUError("UNSUPPORTED_ACTION", "The element does not expose \(requested); read the current state for its available actions")
             }
             return try await perform(action, on: element)
         default: throw OpenCUError("UNKNOWN_METHOD", "Unknown input method: \(method)")

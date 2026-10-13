@@ -137,3 +137,18 @@ func axChildren(_ element: AXUIElement) -> [AXUIElement] {
     guard AXUIElementCopyAttributeValues(element, kAXChildrenAttribute as CFString, 0, 8_000, &values) == .success else { return [] }
     return values as? [AXUIElement] ?? []
 }
+
+/// AppKit custom actions report their AX action name as
+/// "Name:<label>\nTarget:…\nSelector:…". Listings show the label alone.
+func axActionLabel(_ name: String) -> String {
+    guard name.hasPrefix("Name:") else { return name }
+    let label = name.dropFirst(5).prefix { $0 != "\n" && $0 != "\r" }
+    return label.isEmpty ? name : String(label)
+}
+
+/// Accept the exact action name, or a label that names exactly one action.
+func axResolveAction(_ requested: String, in names: [String]) -> String? {
+    if names.contains(requested) { return requested }
+    let matches = names.filter { axActionLabel($0) == requested }
+    return matches.count == 1 ? matches[0] : nil
+}
