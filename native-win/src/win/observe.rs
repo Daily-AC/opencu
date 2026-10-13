@@ -120,6 +120,10 @@ unsafe fn node(el: &IUIAutomationElement, children: bool) -> Result<Node> {
         offscreen: el.CurrentIsOffscreen()?.as_bool(),
         actions: actions(el),
         has_children: children,
+        focusable: el
+            .CurrentIsKeyboardFocusable()
+            .unwrap_or_default()
+            .as_bool(),
         ..Default::default()
     };
     if !el.CurrentIsPassword().unwrap_or_default().as_bool() {
