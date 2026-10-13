@@ -48,10 +48,14 @@ App selection accepts case-insensitive executable path, process name with or
 without `.exe`, `pid:<pid>`, exact title or unique title fragment, and exact
 Start-menu shortcut name/path. Matches across different processes or duplicate
 shortcuts are rejected. Same-process title matches form one window set, not an
-ambiguity. A non-tool, unowned content window takes priority over utility windows,
-then larger area wins; equal ranks retain Z order. The chosen HWND and class are
-shown in the observation. Process/path selection observes its listed windows;
-title selection restricts that set. The returned canonical `app.id` is
+ambiguity. For observation, choose the foreground HWND if it is a candidate and
+is visible and not minimized. Otherwise choose the first visible, non-minimized,
+non-tool candidate in desktop Z order (not by area); fall back to the first
+visible non-minimized tool window, then a visible minimized window. A tool window
+includes `WS_EX_TOOLWINDOW`, `WS_EX_NOACTIVATE` and the existing Qt ToolSaveBits
+classification. The selected HWND and class are shown in the observation.
+Process/path selection considers the process's windows; an explicit title limits
+capture candidates to its matches. The returned canonical `app.id` is
 `pid:<pid>`, so isolated Chrome profiles do not share an ambiguous executable ID.
 Process creation time and HWND ownership are revalidated before input.
 
@@ -63,19 +67,62 @@ the connection and returns `APP_LAUNCH_PENDING`; subsequent reads cannot repeat
 that launch. Inspect state/list_apps, or reconnect to deliberately launch again.
 
 Observation JSON remains `{text, app:{id,displayName,pid}, screenshot?}`. The image
-is `{data:<base64>, mimeType:"image/png", width, height}`. The raw UIA tree uses
-`[1] Button title="..." ID="..." class="..." value="..." settable actions=Invoke`
-with `disabled`/`offscreen` flags. Unnamed controls include physical screen bounds
-`(x,y,width,height)` and class names. Empty structural containers are omitted but
-their children are visited; unnamed leaves remain, including Qt IconButton and
-CEF's Chrome Legacy Window. Metadata and patterns are fetched with UIA cache
+is `{data:<base64>, mimeType:"image/png", width, height}`. The raw UIA tree lists only the capture target and its visible,
+non-minimized owned descendants (transitive `GW_OWNER`, same PID and process
+creation time, at most 64 links). An owner or sibling of the capture target is
+not a descendant. Enumerate the target first, then owned windows in Z order.
+All other enumerated top-level windows of the process get one `Window summary:`
+line with JSON-escaped title/class, hexadecimal HWND and `visible`, `covered`,
+`hidden` (including cloaked), or `minimized`. Message-only HWNDs are not top-level
+windows and are not enumerated. Title selection still discovers owned popups,
+menus and dialogs, even when their titles differ. Summaries have no element index.
+
+`covered` means that higher visible, non-minimized, non-layered/non-transparent
+desktop window rectangles completely cover the rectangle, possibly as a union.
+`visible` means not proven fully covered; partial coverage is included. This is a
+geometric observation hint: shaped windows, transparent application-rendered
+surfaces and animation can differ from these rectangles. It does not authorize
+input or replace the existing live pointer hit test.
+
+Elements use `[1] Button title="..." ID="..." class="..."`. Empty values are omitted.
+`settable` is shown only for writable Edit/ComboBox/Slider/Spinner/ScrollBar roles,
+a range pattern, or a focusable Custom/Document with a writable value pattern.
+A hyperlink URL does not make that element an editable value. A list consisting only of the role's default
+actions is omitted: Button/Hyperlink Invoke and Legacy DoDefaultAction; CheckBox
+Toggle and DoDefaultAction; RadioButton/ListItem/TabItem selection actions and
+DoDefaultAction. If any other action exists, the complete list remains. These
+are display rules only: all original pattern actions stay in the indexed snapshot
+and are still available to click and `perform_secondary_action`.
+
+Nonempty names/values, IDs/classes, disabled/offscreen, keyboard focus, toggle state,
+selected state (including false), expansion state, range minimum/maximum and
+small/large changes are retained. Bounds are physical screen `(x,y,width,height)`
+for unnamed elements, elements without semantic actions, and Slider/ScrollBar/
+Spinner/Document roles. Empty structural containers are omitted but their children
+are visited; unnamed leaves remain, including Qt IconButton and CEF's Chrome
+Legacy Window. Listed indexes are dense, one-based snapshot references to the
+original UIA element and its own top-level window; omitted nodes consume no index.
+A fresh observation can renumber them, as before.
+
+Within a Chromium Document (`FrameworkId=Chrome` or a `Chrome_` class), descendants
+whose rectangles do not intersect the containing top-level window's client area
+are omitted, including zero-area rectangles. Partially intersecting elements stay.
+A single per-window line counts omitted elements and says scrolling reveals them.
+Traversal still visits their children, since a container's rectangle does not
+prove that all descendants lie outside. Native Qt/WinForms documents and controls
+are not clipped by this rule; if client geometry cannot be read, keep the elements.
+The client rectangle is mapped to physical screen coordinates with ClientToScreen;
+this is client-area clipping, not arbitrary ancestor/CSS clipping or pixel-level
+occlusion detection.
+
+Metadata and patterns are fetched with UIA cache
 requests. Password values/names and descendants are omitted; an unreadable
 password flag is treated as protected, not as false. Listing caps are 1,200
 nodes, 8,000 inspected nodes, depth 120, 180,000 bytes and an 8-second traversal
 budget, with explicit truncation text. Individual UIA calls have 2-second timeout
 settings; a misbehaving provider can still overrun the traversal budget.
 
-The first listed window is the screenshot and initial keyboard target. Indexed
+The selected capture window is the screenshot and initial keyboard target. Indexed
 input retains its own top-level window, which becomes the keyboard target for
 following input in the same batch. Use a unique title to select a specific window.
 Capture uses Windows.Graphics.Capture for the selected HWND, with D3D11 hardware
@@ -85,6 +132,28 @@ the standard OS capture border is retained without a permission prompt. No
 screen-wide fallback can accidentally capture another app. Minimized/failed
 captures return a reason and no image. Protected video can remain unavailable.
 Chrome/Edge are traversed through native UIA without changing browser flags.
+
+### Compact-format host validation
+
+`cargo test --manifest-path native-win/Cargo.toml -- --nocapture` includes window
+selection, directional ownership, coverage unions, Chromium clipping and state
+formatting checks. Its synthetic player model has 43 target controls, an additional
+37 owned controls, and a separate 930-element page plus two small unrelated
+windows. It uses invented fixture content only. The pre-change formatter emits
+116,344 UTF-8 bytes; the compact formatter emits 7,320 bytes including window
+summaries and the observation header, excluding image data and optional screenshot
+metadata. This is a regression model, not a new real-device measurement.
+
+Control models sourced from the existing WinForms fixture and local Chrome HTML
+measure 390 → 468 bytes and 270 → 356 bytes respectively (element lines only).
+Small fixtures grow because focus/state/range and coordinate information is now
+preserved; the large savings come from excluding unrelated trees. These models do
+not include live provider wrappers or browser chrome. Device fixture before/after
+sizes and actual Qt/Chromium ownership, framework metadata, viewport clipping,
+index actions, screenshot choice and speech-session context/latency must still be
+verified with `scripts/verify-gui-win.mjs` and the real-app session. No Windows
+device was operated for this change. The earlier acceptance evidence above
+predates this observation policy.
 
 ## Input and engine-side safety
 
