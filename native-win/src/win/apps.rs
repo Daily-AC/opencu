@@ -128,13 +128,19 @@ unsafe fn process(pid: u32) -> Result<(String, u64)> {
         ((creation.dwHighDateTime as u64) << 32) | creation.dwLowDateTime as u64,
     ))
 }
+struct Enumeration {
+    list: Vec<Window>,
+    include_hidden: bool,
+}
 unsafe extern "system" fn enumerate(hwnd: HWND, data: LPARAM) -> BOOL {
-    if !IsWindowVisible(hwnd).as_bool() {
+    let enumeration = &mut *(data.0 as *mut Enumeration);
+    if !enumeration.include_hidden && !IsWindowVisible(hwnd).as_bool() {
         return true.into();
     }
     let mut cloaked = 0u32;
     if DwmGetWindowAttribute(hwnd, DWMWA_CLOAKED, &mut cloaked as *mut _ as _, 4).is_ok()
         && cloaked != 0
+        && !enumeration.include_hidden
     {
         return true.into();
     }
@@ -160,12 +166,11 @@ unsafe extern "system" fn enumerate(hwnd: HWND, data: LPARAM) -> BOOL {
     let _ = GetWindowRect(hwnd, &mut bounds);
     let area =
         (bounds.right - bounds.left).max(0) as i64 * (bounds.bottom - bounds.top).max(0) as i64;
-    if area == 0 {
+    if area == 0 && !enumeration.include_hidden {
         return true.into();
     }
     let (path, created) = process(pid).unwrap_or((String::new(), 0));
-    let list = &mut *(data.0 as *mut Vec<Window>);
-    list.push(Window {
+    enumeration.list.push(Window {
         hwnd,
         pid,
         title,
@@ -179,9 +184,69 @@ unsafe extern "system" fn enumerate(hwnd: HWND, data: LPARAM) -> BOOL {
     true.into()
 }
 pub unsafe fn windows() -> Result<Vec<Window>> {
-    let mut list = Vec::<Window>::new();
-    EnumWindows(Some(enumerate), LPARAM(&mut list as *mut _ as isize))?;
-    Ok(list)
+    enumerate_windows(false)
+}
+/// Observation inventory preserves EnumWindows Z order and includes hidden
+/// same-process windows for summaries. Existing resolve/input inventory is unchanged.
+pub unsafe fn observation_windows() -> Result<Vec<Window>> {
+    enumerate_windows(true)
+}
+unsafe fn enumerate_windows(include_hidden: bool) -> Result<Vec<Window>> {
+    let mut enumeration = Enumeration {
+        list: vec![],
+        include_hidden,
+    };
+    EnumWindows(Some(enumerate), LPARAM(&mut enumeration as *mut _ as isize))?;
+    Ok(enumeration.list)
+}
+pub unsafe fn observation_info(w: &Window) -> opencu_engine::observation::WindowInfo {
+    let mut bounds = RECT::default();
+    // DWM frame bounds exclude invisible resize borders, important when a
+    // fullscreen player covers a maximized window of the same application.
+    if DwmGetWindowAttribute(
+        w.hwnd,
+        DWMWA_EXTENDED_FRAME_BOUNDS,
+        &mut bounds as *mut _ as _,
+        std::mem::size_of::<RECT>() as u32,
+    )
+    .is_err()
+    {
+        let _ = GetWindowRect(w.hwnd, &mut bounds);
+    }
+    let mut cloaked = 0u32;
+    let _ = DwmGetWindowAttribute(w.hwnd, DWMWA_CLOAKED, &mut cloaked as *mut _ as _, 4);
+    let style = GetWindowLongPtrW(w.hwnd, GWL_EXSTYLE) as u32;
+    opencu_engine::observation::WindowInfo {
+        hwnd: w.hwnd.0 as usize,
+        owner: GetWindow(w.hwnd, GW_OWNER)
+            .ok()
+            .filter(|h| !h.is_invalid())
+            .map(|h| h.0 as usize),
+        title: w.title.clone(),
+        class_name: w.class_name.clone(),
+        bounds: super::observe::rect(bounds),
+        visible: IsWindowVisible(w.hwnd).as_bool() && cloaked == 0,
+        minimized: IsIconic(w.hwnd).as_bool(),
+        tool: w.tool,
+        opaque: style & (WS_EX_LAYERED.0 | WS_EX_TRANSPARENT.0) == 0,
+    }
+}
+pub unsafe fn client_rect(w: &Window) -> Option<Rect> {
+    let mut r = RECT::default();
+    GetClientRect(w.hwnd, &mut r).ok()?;
+    let mut origin = POINT {
+        x: r.left,
+        y: r.top,
+    };
+    if !windows::Win32::Graphics::Gdi::ClientToScreen(w.hwnd, &mut origin).as_bool() {
+        return None;
+    }
+    Some(Rect {
+        x: origin.x,
+        y: origin.y,
+        width: r.right - r.left,
+        height: r.bottom - r.top,
+    })
 }
 #[derive(Clone)]
 struct Shortcut {

@@ -1,4 +1,5 @@
 //! Platform-independent parts of the inherited-stdio engine contract.
+pub mod observation;
 use serde_json::{json, Value};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -304,6 +305,11 @@ pub struct Node {
     pub actions: Vec<String>,
     pub has_children: bool,
     pub focusable: bool,
+    pub focused: bool,
+    pub toggle: Option<String>,
+    pub selected: Option<bool>,
+    pub expanded: Option<String>,
+    pub range: Option<(f64, f64, f64, f64)>,
 }
 impl Node {
     pub fn visible_in_tree(&self) -> bool {
@@ -312,6 +318,11 @@ impl Node {
             && ["Pane", "Group"].contains(&self.role.as_str())
             && ["", "Pane", "Group", "QWidget", "QFrame"].contains(&self.class_name.as_str())
             && !self.focusable
+            && !self.focused
+            && self.toggle.is_none()
+            && self.selected.is_none()
+            && self.expanded.is_none()
+            && self.range.is_none()
             && self.name.is_empty()
             && self.automation_id.is_empty()
             && self.value.is_none()
@@ -329,13 +340,19 @@ impl Node {
         if !self.class_name.is_empty() {
             line += &format!(" class={}", json!(self.class_name));
         }
-        if self.name.is_empty() {
+        if self.name.is_empty()
+            || self.actions.is_empty()
+            || matches!(
+                self.role.as_str(),
+                "Slider" | "ScrollBar" | "Spinner" | "Document"
+            )
+        {
             line += &format!(
                 " bounds=({},{},{},{})",
                 self.bounds.x, self.bounds.y, self.bounds.width, self.bounds.height
             );
         }
-        if let Some(value) = &self.value {
+        if let Some(value) = self.value.as_ref().filter(|v| !v.is_empty()) {
             line += &format!(" value={}", json!(value));
         }
         if !self.enabled {
@@ -344,10 +361,43 @@ impl Node {
         if self.offscreen {
             line += " offscreen";
         }
-        if self.settable {
+        if self.settable
+            && (matches!(
+                self.role.as_str(),
+                "Edit" | "ComboBox" | "Slider" | "Spinner" | "ScrollBar"
+            ) || self.range.is_some()
+                || (self.focusable && matches!(self.role.as_str(), "Custom" | "Document")))
+        {
             line += " settable";
         }
-        if !self.actions.is_empty() {
+        if self.focused {
+            line += " focused";
+        }
+        if let Some(v) = &self.toggle {
+            line += &format!(" toggle={v}");
+        }
+        if let Some(v) = self.selected {
+            line += &format!(" selected={v}");
+        }
+        if let Some(v) = &self.expanded {
+            line += &format!(" expanded={v}");
+        }
+        if let Some((min, max, small, large)) = self.range {
+            line += &format!(" range=({min},{max}) step={small} page={large}");
+        }
+        let defaults: &[&str] = match self.role.as_str() {
+            "Button" | "Hyperlink" => &["Invoke", "DoDefaultAction"],
+            "CheckBox" => &["Toggle", "DoDefaultAction"],
+            "RadioButton" | "ListItem" | "TabItem" => &[
+                "Select",
+                "AddToSelection",
+                "RemoveFromSelection",
+                "DoDefaultAction",
+            ],
+            _ => &[],
+        };
+        // Preserve the complete list whenever it contains any non-default action.
+        if self.actions.iter().any(|a| !defaults.contains(&a.as_str())) {
             line += &format!(" actions={}", self.actions.join(","));
         }
         line
@@ -555,3 +605,6 @@ mod clipboard_tests {
         assert!(super::restore_clipboard(true, true, false)); // rollback a failed write
     }
 }
+
+#[cfg(test)]
+mod observation_tests;
