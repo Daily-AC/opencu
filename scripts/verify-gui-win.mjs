@@ -124,23 +124,38 @@ try {
   checks.push('indexed click');
   await call('click', title, { element_index: index('Fixture notes'), duration: 0.05 });
   await call('run_actions', title, { actions: [{ method: 'press_key', key: 'ctrl+a' }, { method: 'type_text', text: 'Windows 中文 😀' }] });
-  assert.equal((await fixtureState()).notes, 'Windows 中文 😀');
+  report.unicode = await fixtureState();
+  assert.equal(report.unicode.notes, 'Windows 中文 😀');
   checks.push('key chord and Unicode typing');
   const holding = call('press_key', title, { key: 'Shift', duration: 3 }).then(value => ({ value }), error => ({ error }));
   await pause(700);
-  const indicator = powershell(`Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class OpenCUIndicatorProbe { [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern IntPtr FindWindow(string cls,string title); [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr w); [DllImport("user32.dll")] public static extern bool GetWindowDisplayAffinity(IntPtr w,out uint a); }'; $w=[OpenCUIndicatorProbe]::FindWindow('OpenCUOperationIndicator',$null); [uint32]$a=0; $ok=[OpenCUIndicatorProbe]::GetWindowDisplayAffinity($w,[ref]$a); @{visible=[OpenCUIndicatorProbe]::IsWindowVisible($w);affinity=$a;affinityReadable=$ok} | ConvertTo-Json -Compress`);
+  await fixtureCommand('indicator');
+  const indicatorState = await fixtureState();
   const held = await holding; if (held.error) throw held.error;
-  const indicatorState = JSON.parse(indicator);
-  assert.equal(indicatorState.visible, true); assert.equal(indicatorState.affinityReadable, true); assert.equal(indicatorState.affinity, 17);
+  report.indicator = { visible: indicatorState.indicatorVisible, affinity: indicatorState.indicatorAffinity, readable: indicatorState.indicatorReadable };
+  assert.equal(report.indicator.visible, true); assert.equal(report.indicator.readable, true); assert.equal(report.indicator.affinity, 17);
   checks.push('visible operation indicator is excluded from capture');
+  await fixtureCommand('indicator-cover');
+  await call('get_app_state', title, { disableDiff: true });
+  await call('press_key', title, { key: 'Shift', duration: 0.1 });
+  await imageState(title);
+  await fixtureCommand('indicator');
+  const underneath = await fixtureState();
+  assert.equal(underneath.indicatorVisible, true, 'Indicator must remain visible during capture');
+  const indicatorImage = path.join(area, report.lastFixtureImage);
+  const underneathRgb = powershell(`Add-Type -AssemblyName System.Drawing; $image=[Drawing.Bitmap]::new(${quote(indicatorImage)}); try { $p=$image.GetPixel(${underneath.markerX},${underneath.markerY}); Write-Output ([string]$p.R+','+$p.G+','+$p.B) } finally { $image.Dispose() }`);
+  assert.equal(underneathRgb, '255,0,255', 'Capture must contain target pixels beneath the visible indicator');
+  checks.push('target pixels remain intact beneath the visible indicator');
+
   await call('press_key', title, { key: 'Escape' });
   checks.push('engine-injected Escape does not trigger the physical stop latch');
 
 
   await fixtureCommand('digest');
   const baseline = await fixtureState(); assert.equal(baseline.error, '');
-  await call('run_actions', title, { actions: [{ method: 'press_key', key: 'ctrl+a' }, { method: 'paste', format: 'text', text: '粘贴 😀\r\nSecond line' }] });
-  assert.equal((await fixtureState()).notes.replaceAll('\r\n', '\n'), '粘贴 😀\nSecond line');
+  const pasteText = `粘贴 😀\r\nSecond line ${token}`;
+  await call('run_actions', title, { actions: [{ method: 'press_key', key: 'ctrl+a' }, { method: 'paste', format: 'text', text: pasteText }] });
+  assert.equal((await fixtureState()).notes.replaceAll('\r\n', '\n'), pasteText.replaceAll('\r\n', '\n'));
   await fixtureCommand('digest');
   assert.equal((await fixtureState()).clipboardDigest, baseline.clipboardDigest);
   checks.push('plain-text paste and original clipboard digest restored');
@@ -182,7 +197,7 @@ try {
   const chromeTitle = `OpenCU Chrome ${token}`;
   http = createServer((req, res) => {
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.end(`<!doctype html><meta charset="utf-8"><title>${chromeTitle}</title><h1>OpenCU Chrome page text</h1><p>这是一次本地页面验收</p><a href="#result" onclick="document.querySelector('output').textContent='Fixture link clicked'">Fixture test link</a><output></output><input aria-label="Fixture web password" type="password" value="OpenCU-Web-Secret-2917"><div style="height:1600px">Scroll fixture</div>`);
+    res.end(`<!doctype html><meta charset="utf-8"><title>${chromeTitle}</title><h1>OpenCU Chrome page text</h1><p>这是一次本地页面验收</p><a href="#result" onclick="document.querySelector('output').textContent='Fixture link clicked'">Fixture test link</a><output></output><input aria-label="Fixture web notes" oninput="document.querySelector('output').textContent=this.value"><input aria-label="Fixture web password" type="password" value="OpenCU-Web-Secret-2917"><div style="height:1600px">Scroll fixture</div>`);
   });
   await new Promise(resolve => http.listen(0, '127.0.0.1', resolve));
   const url = `http://127.0.0.1:${http.address().port}/`;
@@ -198,6 +213,12 @@ try {
   await call('click', chromeTitle, { element_index: index('Fixture test link') });
   await call('get_app_state', chromeTitle, { waitForText: 'Fixture link clicked', disableDiff: true });
   checks.push('Chrome indexed link action');
+  await call('click', chromeTitle, { element_index: index('Fixture web notes'), duration: 0.05 });
+  await call('type_text', chromeTitle, { text: 'Web 中文 😀' });
+  await call('get_app_state', chromeTitle, { waitForText: 'value="Web 中文 😀"', disableDiff: true });
+  assert.match(tree, /Text title="Web 中文 😀"/, 'The web input handler must update its output element');
+  checks.push('Chrome literal Unicode typing preserves spaces and dispatches input');
+
   report.ok = true;
 } catch (error) {
   report.error = error.stack ?? String(error); process.exitCode = 1;
