@@ -89,7 +89,7 @@ Every input first activates its target window and verifies the actual foreground
 HWND. If Windows denies SetForegroundWindow, `ACTIVATION_FAILED` is returned;
 there is no synthetic Alt, AttachThreadInput, or foreground-lock bypass. Foreground
 identity, live process identity and desktop accessibility are checked before each
-new SendInput event and each UIA action. Pointer input also checks that the target
+new SendInput event, Unicode character message and each UIA action. Pointer input also checks that the target
 window owns the screen point. UIA actions cannot be cancelled after entering the
 provider; events already delivered cannot be undone. Held engine keys/buttons are
 released on failure, including PERSON_ACTIVE; no remaining action is replayed.
@@ -132,6 +132,13 @@ activation. Per-monitor-v2 awareness makes image pixels physical pixels: at
 120 DPI, no additional factor of 1.25 is applied. Absolute SendInput coordinates
 use virtual-desktop pixel centres, including negative monitor origins.
 
+Literal `type_text` uses bounded WM_CHAR delivery to the foreground thread's
+focused HWND, revalidating that exact focus before each UTF-16 unit. This avoids
+IME composition consuming spaces and does not change the user's input method.
+It emits character/input events, not a physical keydown/keyup pair for every
+character; use `press_key` for key-event semantics. Native Edit and Chrome input
+acceptance cover this distinction.
+
 Supported inputs: click (Invoke, Toggle, SelectionItem or Legacy default action,
 then centre-click fallback), Unicode typing, plain-text paste, xdotool-style keys,
 vertical/horizontal wheel, Value/RangeValue and exposed secondary actions. `super`
@@ -141,8 +148,10 @@ detents (user wheel settings still apply), limited to 100 pages per request.
 `drag`, `select_text`, HTML and Markdown paste return UNSUPPORTED_ON_WINDOWS.
 
 Paste snapshots every copyable HGLOBAL clipboard format before mutation, then
-restores it after Ctrl+V and a short settling wait, unless the clipboard sequence
-changed. Handle/private/owner-rendered or uncopyable formats and snapshots over
+restores it after Ctrl+V and a short settling wait. Windows can synthesize legacy
+text formats and advance the sequence while consuming the paste; unchanged owner
+and Unicode payload still identify the engine's clipboard. A changed owner or
+payload with a new sequence is preserved as an external copy. Handle/private/owner-rendered or uncopyable formats and snapshots over
 64 MiB are refused before mutation. Busy clipboard failures and restoration
 failures are explicit; paste is never replayed. Applications consuming clipboard
 data asynchronously after the settling wait require real verification.

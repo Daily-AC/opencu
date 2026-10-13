@@ -541,3 +541,17 @@ mod interruption_tests {
         assert!(!super::physical_escape(0x41, 0, 0x100));
     }
 }
+
+pub fn restore_clipboard(sequence_unchanged: bool, same_owner: bool, same_payload: bool) -> bool {
+    sequence_unchanged || (same_owner && same_payload)
+}
+#[cfg(test)]
+mod clipboard_tests {
+    #[test]
+    fn synthesized_formats_are_not_an_external_copy() {
+        assert!(super::restore_clipboard(false, true, true));
+        assert!(!super::restore_clipboard(false, false, true));
+        assert!(!super::restore_clipboard(false, true, false));
+        assert!(super::restore_clipboard(true, true, false)); // rollback a failed write
+    }
+}

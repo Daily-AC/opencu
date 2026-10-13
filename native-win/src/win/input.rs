@@ -205,22 +205,58 @@ unsafe fn hold(keys: &[u16], hwnd: HWND, g: &Guard<'_>) -> Result<Held> {
     }
     Ok(held)
 }
-unsafe fn unicode(text: &str, g: &Guard<'_>) -> Result<()> {
+/// Deliver literal UTF-16 characters to the foreground thread's focused HWND.
+/// VK_PACKET can enter IME composition and consume spaces; WM_CHAR is already
+/// translated text, so it preserves the caller's string without changing IME mode.
+unsafe fn unicode(text: &str, window: HWND, g: &Guard<'_>) -> Result<()> {
+    let thread = GetWindowThreadProcessId(window, None);
+    let focused = || -> Result<HWND> {
+        let mut gui = GUITHREADINFO {
+            cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+            ..Default::default()
+        };
+        GetGUIThreadInfo(thread, &mut gui)?;
+        if gui.hwndFocus.is_invalid() || GetAncestor(gui.hwndFocus, GA_ROOT) != window {
+            return Err(Error::new(
+                "WINDOW_FOCUS_CHANGED",
+                "No focused control in the observed foreground window; no further text was sent",
+            ));
+        }
+        Ok(gui.hwndFocus)
+    };
+    g.check()?;
+    let target = focused()?;
     for unit in text.encode_utf16() {
-        let mut held = Held::new();
-        held.down(
-            key_input(0, unit, KEYEVENTF_UNICODE),
-            key_input(0, unit, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP),
-            g,
-        )?;
-        held.release()?;
+        g.check()?;
+        if focused()? != target {
+            return Err(Error::new(
+                "WINDOW_FOCUS_CHANGED",
+                "The focused text control changed; remaining text was stopped",
+            ));
+        }
+        if SendMessageTimeoutW(
+            target,
+            WM_CHAR,
+            WPARAM(unit as usize),
+            LPARAM(1),
+            SMTO_ABORTIFHUNG | SMTO_ERRORONEXIT,
+            1000,
+            None,
+        )
+        .0 == 0
+        {
+            return Err(Error::new(
+                "INPUT_FAILED",
+                "The foreground control did not accept a Unicode character; no text was retried",
+            ));
+        }
     }
     g.check()
 }
 unsafe fn press(chord: Chord, hwnd: HWND, seconds: f64, g: &Guard<'_>) -> Result<()> {
     let (keys, c) = chord_keys(chord, hwnd)?;
     if let Some(c) = c {
-        return unicode(&c.to_string(), g);
+        return unicode(&c.to_string(), hwnd, g);
     }
     let mut held = hold(&keys, hwnd, g)?;
     g.pause(seconds)?;
@@ -403,7 +439,7 @@ pub unsafe fn perform(
             modifiers.release()?;
         }
         "press_key" => press(chord.unwrap(), window.hwnd, seconds, g)?,
-        "type_text" => unicode(string(args, "text")?, g)?,
+        "type_text" => unicode(string(args, "text")?, window.hwnd, g)?,
         "paste" => {
             g.check()?;
             let mut clipboard = Clipboard::replace(string(args, "text")?)?;
