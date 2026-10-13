@@ -395,6 +395,8 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegat
         let panel = NSSavePanel()
         panel.directoryURL = saveDirectory
         panel.nameFieldStringValue = "fixture-default.txt"
+        // Independent of the owner's "show all filename extensions" setting.
+        panel.isExtensionHidden = false
         panel.canCreateDirectories = false
         savePanel = panel
         panel.beginSheetModal(for: window) { [weak self] response in
