@@ -206,6 +206,7 @@ try {
     assert.ok(result.isError, 'Unsafe action unexpectedly succeeded');
     assert.ok(codes.includes(result._meta?.['opencu/error']), JSON.stringify(result));
     await intactForeground();
+    return result;
   }
   async function fileCommand(title) {
     await call('click', { element_index: menuItem('Menu Bar Item title="File"') });
@@ -220,19 +221,44 @@ try {
   // Real system panel: do not substitute a custom in-process dialog.
   await fileCommand('Save Fixture…');
   assert.equal((await readState(targetFile)).savePanelVisible, true);
+  assert.match(tree, /(?:Window|Sheet).*ID="save-panel"/, 'System save-panel identity missing');
   let filename = matchingIndex(/Text Field.*value="fixture-default.txt"/);
   await call('set_value', { element_index: filename, value: 'fixture-edited.txt' });
   filename = matchingIndex(/Text Field.*value="fixture-edited.txt"/);
   await call('click', { element_index: filename });
-  await call('run_actions', { actions: [{ method: 'press_key', key: 'super+a' },
-    { method: 'type_text', text: 'fixture-saved.txt' }] });
+  const clipboardState = () => JSON.parse(execFileSync(executable, ['--clipboard-state'], { encoding: 'utf8' }));
+  const beforeRefusals = clipboardState();
+  for (const [method, args] of [
+    ['press_key', { key: 'super+a' }],
+    ['type_text', { text: 'must-not-type.txt' }],
+    ['paste', { format: 'text', text: 'must-not-paste.txt' }],
+    ['run_actions', { actions: [{ method: 'press_key', key: 'super+a' },
+      { method: 'type_text', text: 'must-not-type-in-batch.txt' }] }],
+  ]) {
+    const result = await refused(method, args, ['BACKGROUND_REMOTE_FOCUS']);
+    const message = result.content.filter(c => c.type === 'text').map(c => c.text).join('\n');
+    assert.match(message, /set_value/);
+    assert.match(message, /AX actions/);
+    assert.match(message, /activate_app/);
+    assert.deepEqual(clipboardState(), beforeRefusals, 'refused keyboard input modified the clipboard');
+    await call('get_app_state', { disableDiff: true });
+    assert.match(tree, /Text Field.*value="fixture-edited.txt".*focused/);
+  }
+  checks.push('system file-panel identity refuses background keys, text, paste and batches regardless of proxy PID; field and clipboard change count stay unchanged');
+  await call('set_value', { element_index: matchingIndex(/Text Field.*value="fixture-edited.txt"/), value: 'fixture-saved.txt' });
   assert.match(tree, /Text Field.*value="fixture-saved.txt"/);
-  await call('click', { element_index: matchingIndex(/Button.*(?:title|description)="Save"(?: |$)/) });
+  await call('perform_secondary_action', {
+    element_index: matchingIndex(/Button.*(?:title|description)="Save"(?: |$)/), action: 'AXPress',
+  });
   const saved = path.join(fixtureArea, 'saved/fixture-saved.txt');
-  await waitUntil(async () => (await readState(targetFile)).savedPath === saved, 'save panel completion');
+  try { await waitUntil(async () => (await readState(targetFile)).savedPath === saved, 'save panel completion'); }
+  catch (error) {
+    await call('get_app_state', { disableDiff: true }).catch(() => {});
+    throw new Error(`${error.message}; fixture ${JSON.stringify(await readState(targetFile))}\n${tree}`);
+  }
   assert.equal(await readFile(saved, 'utf8'), 'OpenCU save-panel fixture\n');
   assert.equal((await readState(targetFile)).panelError, '');
-  checks.push('NSSavePanel sheet: indexed value, focus, keyboard filename and Save produce the exact temporary file');
+  checks.push('NSSavePanel sheet: indexed set_value and AXPress on Save produce the exact temporary file in the background');
 
   await fileCommand('Save Fixture…');
   filename = matchingIndex(/Text Field.*value="fixture-default.txt"/);
@@ -254,6 +280,15 @@ try {
   checks.push('cross-app input and old-window input refused');
 
   await fileCommand('Close All Windows');
+  // An action's reply is read right after input; a window the app opens
+  // asynchronously may appear only in the next observation.
+  async function untilTree(text, label) {
+    for (let attempt = 0; attempt < 20 && !tree.includes(text); attempt++) {
+      await pause(100);
+      await call('get_app_state', { disableDiff: true });
+    }
+    assert.ok(tree.includes(text), label);
+  }
   async function windowless() {
     await call('get_app_state', { includeScreenshot: true, disableDiff: true });
     assert.match(tree, /No accessible window is open/);
@@ -266,12 +301,13 @@ try {
   await refused('click', { x: 10, y: 10 }, ['RUNTIME_ERROR', 'SCREENSHOT_REQUIRED']);
   await fileCommand('New');
   assert.equal((await readState(targetFile)).newCommands, 1);
-  assert.ok(tree.includes('ID="textField"'));
+  await untilTree('ID="textField"', 'File > New window missing from the state');
   await fileCommand('Close All Windows');
   await windowless();
   await call('press_key', { key: 'super+n' });
   assert.equal((await readState(targetFile)).newCommands, 2);
-  assert.ok(tree.includes('ID="textField"'));
+  assert.ok((await readState(targetFile)).visibleWindows > 0, 'Cmd+N did not create a visible window');
+  await untilTree('ID="textField"', 'Cmd+N window missing from the state');
   checks.push('windowless state exposes menus without a screenshot; indexed File > New and Cmd+N reopen a window');
 
   for (const viaMenu of [true, false]) {
@@ -280,9 +316,19 @@ try {
     if (viaMenu) await fileCommand('Open…');
     else await call('press_key', { key: 'super+o' });
     assert.equal((await readState(targetFile)).openCommands, viaMenu ? 1 : 2);
+    assert.ok((await readState(targetFile)).visibleWindows > 0, 'Open did not present a panel');
+    assert.match(tree, /(?:Window|Sheet).*ID="open-panel"/, 'System open-panel identity missing');
+    await refused('press_key', { key: 'super+shift+g' }, ['BACKGROUND_REMOTE_FOCUS']);
+    await call('get_app_state', { disableDiff: true });
+    assert.match(tree, /(?:Window|Sheet).*ID="open-panel"/);
     await call('click', { element_index: matchingIndex(/Button.*(?:title|description)="Cancel"(?: |$)/) });
     await windowless();
+    const newBefore = (await readState(targetFile)).newCommands;
     await call('press_key', { key: 'super+n' });
+    const reopened = await readState(targetFile);
+    assert.equal(reopened.newCommands, newBefore + 1, 'Cmd+N did not invoke New after panel cancellation');
+    assert.ok(reopened.visibleWindows > 0, 'Cmd+N did not reopen a visible window');
+    await untilTree('ID="textField"', 'reopened window missing from the state');
   }
   checks.push('windowless File > Open and Cmd+O present NSOpenPanel; indexed Cancel returns to a windowless state');
 

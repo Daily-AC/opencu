@@ -479,7 +479,7 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegat
 }
 
 let arguments = Array(CommandLine.arguments.dropFirst())
-if arguments == ["--clipboard-digest"] {
+if arguments == ["--clipboard-digest"] || arguments == ["--clipboard-state"] {
     var digest = SHA256()
     for (index, item) in (NSPasteboard.general.pasteboardItems ?? []).enumerated() {
         digest.update(data: Data("item:\(index)\n".utf8))
@@ -489,7 +489,12 @@ if arguments == ["--clipboard-digest"] {
             digest.update(data: data)
         }
     }
-    print(digest.finalize().map { String(format: "%02x", $0) }.joined())
+    let checksum = digest.finalize().map { String(format: "%02x", $0) }.joined()
+    if arguments == ["--clipboard-state"] {
+        let state: [String: Any] = ["digest": checksum, "changeCount": NSPasteboard.general.changeCount]
+        let data = try JSONSerialization.data(withJSONObject: state, options: [.sortedKeys])
+        print(String(decoding: data, as: UTF8.self))
+    } else { print(checksum) }
     exit(0)
 }
 guard (arguments.count == 2 || arguments.count == 3 && arguments[2] == "--stage-managed"), arguments[0] == "--output", arguments[1].hasPrefix("/") else {
