@@ -24,3 +24,8 @@ test('batched actions are normalized and checked one by one', () => {
   assert.deepEqual(args.actions, [{ method: 'scroll', element_index: 2, scrollY: 3 }, { method: 'press_key', key: 'NONE' }]);
   assert.throws(() => normalizeArguments('run_actions', { app: 'A', actions: [{ method: 'click' }] }), /Provide element_index or both x and y/);
 });
+
+test('a zero or negative element index next to coordinates is treated as a placeholder', () => {
+  assert.deepEqual(normalizeArguments('click', { app: 'A', element_index: 0, x: 654, y: 51 }), { app: 'A', x: 654, y: 51 });
+  assert.deepEqual(normalizeArguments('click', { app: 'A', element_index: -1, x: 654, y: 51 }), { app: 'A', x: 654, y: 51 });
+});
