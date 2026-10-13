@@ -11,6 +11,11 @@ export function toolError(error) {
   return { isError: true, content: [{ type: 'text', text: error.message }], _meta: { 'opencu/error': error.code ?? 'RUNTIME_ERROR' } };
 }
 
+export function defaultEnginePath(root, platform = process.platform) {
+  if (platform === 'win32') return path.join(root, '.build/win/opencu-engine.exe');
+  return path.join(root, '.build/OpenCU.app/Contents/MacOS/opencu-engine');
+}
+
 export class OpenCURuntime {
   #child;
   #started;
@@ -23,14 +28,14 @@ export class OpenCURuntime {
   #lastText = new Map();
 
   constructor({ root, enginePath } = {}) {
-    this.enginePath = enginePath ?? path.join(root, '.build/OpenCU.app/Contents/MacOS/opencu-engine');
+    this.enginePath = enginePath ?? defaultEnginePath(root);
   }
 
   async #start() {
     try { await access(this.enginePath); }
-    catch { throw new Error('OpenCU engine is missing. Run npm run build, or use the prepared OpenCU release.'); }
+    catch { throw new Error(`OpenCU engine is missing. Run npm run ${process.platform === 'win32' ? 'build:win' : 'build'}, or use the prepared OpenCU release.`); }
     this.#active();
-    this.#child = spawn(this.enginePath, ['serve'], { stdio: ['pipe', 'pipe', 'pipe'] });
+    this.#child = spawn(this.enginePath, ['serve'], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     this.#child.stderr.on('data', () => {});
     this.#child.stdin.on('error', () => this.#fail(new Error('OpenCU engine input closed; no operation was retried.')));
     this.#child.on('error', error => this.#fail(error));
