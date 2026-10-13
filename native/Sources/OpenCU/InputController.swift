@@ -134,11 +134,10 @@ final class InputController {
         // app shortcuts do not require a focused control at all.
         if isFrontmost { return }
         let alternatives = "Use indexed set_value or exposed AX actions on the panel controls, or explicitly use activate_app before keyboard input."
+        // Only a positively remote focus is refused. Some apps report no focused
+        // element in the background, and their PID-targeted input still works.
         if let focusedPID, focusedPID != targetPID {
             throw OpenCUError("BACKGROUND_REMOTE_FOCUS", "Keyboard input cannot reach a remote-process focused control while the target app is in the background. " + alternatives)
-        }
-        if hasWindow && focusedPID == nil {
-            throw OpenCUError("KEYBOARD_FOCUS_UNAVAILABLE", "The background window's focused control owner could not be verified. Read its state again. " + alternatives)
         }
     }
 

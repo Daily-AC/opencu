@@ -85,10 +85,10 @@ delivery. Before `press_key`, `type_text` or `paste` sends any events, the engin
 reads the live `AXFocusedUIElement` owner. If that PID differs from the target's
 PID and the target is not the system's frontmost application, it refuses with
 `BACKGROUND_REMOTE_FOCUS`. The message directs callers to indexed `set_value`,
-exposed AX actions, or explicit `activate_app` for keyboard input. A background
-window whose focused owner cannot be read fails with `KEYBOARD_FOCUS_UNAVAILABLE`;
-a truly windowless app can still receive application shortcuts without a focused
-control. The frontmost remote-panel path retains its existing PID-targeted input.
+exposed AX actions, or explicit `activate_app` for keyboard input. When the focused
+owner cannot be read (some apps report no focused element in the background, and
+windowless apps have none), input keeps the existing PID-targeted path, so
+application shortcuts still work. The frontmost remote-panel path retains its existing PID-targeted input.
 Synthetic AppKit activation is not foreground status. The guard runs before
 synthetic focus, again before each character/chord, and before paste changes the
 clipboard. If focus changes during a multi-character operation, input already
