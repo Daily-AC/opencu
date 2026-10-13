@@ -1,6 +1,7 @@
 mod apps;
 mod capture;
 mod clipboard;
+mod indicator;
 mod input;
 mod observe;
 mod safety;
@@ -10,7 +11,7 @@ use std::io::{self, BufRead, Write};
 use windows::{
     core::*,
     Win32::{
-        System::Com::*,
+        System::{Com::*, WinRT::*},
         UI::{Accessibility::*, HiDpi::*},
     },
 };
@@ -21,16 +22,27 @@ pub fn wide(s: &str) -> Vec<u16> {
 pub fn from_wide(s: &[u16]) -> String {
     String::from_utf16_lossy(&s[..s.iter().position(|n| *n == 0).unwrap_or(s.len())])
 }
+struct Apartment;
+impl Drop for Apartment {
+    fn drop(&mut self) {
+        unsafe {
+            RoUninitialize();
+        }
+    }
+}
 struct Engine {
     automation: IUIAutomation,
     snapshot: Option<observe::Snapshot>,
     monitor: safety::Monitor,
+    indicator: indicator::Indicator,
     launches: std::collections::BTreeSet<String>,
+    _apartment: Apartment,
 }
 impl Engine {
     unsafe fn new() -> Result<Self> {
         SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)?;
-        CoInitializeEx(None, COINIT_MULTITHREADED).ok()?;
+        RoInitialize(RO_INIT_MULTITHREADED)?;
+        let apartment = Apartment;
         let automation: IUIAutomation =
             CoCreateInstance(&CUIAutomation8, None, CLSCTX_INPROC_SERVER)?;
         let options: IUIAutomation2 = automation.cast()?;
@@ -40,7 +52,9 @@ impl Engine {
             automation,
             snapshot: None,
             monitor: safety::Monitor::new()?,
+            indicator: indicator::Indicator::new()?,
             launches: Default::default(),
+            _apartment: apartment,
         })
     }
     unsafe fn dispatch(&mut self, method: &str, args: &Value) -> Result<Value> {
@@ -85,7 +99,7 @@ impl Engine {
         }
         // Guard includes resolution/launch and activation; no action is replayed.
         let mut guard = if method != "get_app_state" {
-            Some(self.monitor.begin()?)
+            Some(self.monitor.begin(&self.indicator)?)
         } else {
             None
         };
@@ -94,7 +108,12 @@ impl Engine {
         if query.trim().is_empty() {
             return Err(Error::new("INVALID_ARGUMENT", "app must not be empty"));
         }
-        let app = apps::resolve(query, observing, &mut self.launches, guard.as_ref())?;
+        let app = apps::resolve(
+            query,
+            observing && !self.monitor.stopped(),
+            &mut self.launches,
+            guard.as_ref(),
+        )?;
         for window in &app.windows {
             safety::target(window)?;
         }
@@ -113,6 +132,9 @@ impl Engine {
                 g.finish()?;
             }
             self.snapshot = Some(snapshot);
+            if method == "get_app_state" {
+                self.monitor.observed();
+            }
             return Ok(state);
         }
         let s = self

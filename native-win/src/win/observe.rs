@@ -104,38 +104,104 @@ fn role(id: i32) -> String {
         .map(|s| s.to_string())
         .unwrap_or_else(|| format!("Control({id})"))
 }
+unsafe fn cache_request(uia: &IUIAutomation) -> Result<IUIAutomationCacheRequest> {
+    let cache = uia.CreateCacheRequest()?;
+    cache.SetTreeScope(TreeScope_Element)?;
+    cache.SetTreeFilter(&uia.RawViewCondition()?)?;
+    for property in [
+        UIA_ControlTypePropertyId,
+        UIA_NamePropertyId,
+        UIA_AutomationIdPropertyId,
+        UIA_ClassNamePropertyId,
+        UIA_BoundingRectanglePropertyId,
+        UIA_IsEnabledPropertyId,
+        UIA_IsOffscreenPropertyId,
+        UIA_IsKeyboardFocusablePropertyId,
+        UIA_IsPasswordPropertyId,
+        UIA_ValueIsReadOnlyPropertyId,
+        UIA_RangeValueIsReadOnlyPropertyId,
+        UIA_LegacyIAccessibleDefaultActionPropertyId,
+    ] {
+        cache.AddProperty(property)?;
+    }
+    for pattern in [
+        UIA_InvokePatternId,
+        UIA_TogglePatternId,
+        UIA_SelectionItemPatternId,
+        UIA_ExpandCollapsePatternId,
+        UIA_LegacyIAccessiblePatternId,
+        UIA_ValuePatternId,
+        UIA_RangeValuePatternId,
+    ] {
+        cache.AddPattern(pattern)?;
+    }
+    // Value content is deliberately not in this request. Read it only after the
+    // password flag was successfully read as false.
+    Ok(cache)
+}
+unsafe fn cached<T: Interface>(el: &IUIAutomationElement, id: UIA_PATTERN_ID) -> Option<T> {
+    el.GetCachedPattern(id).ok()?.cast().ok()
+}
 unsafe fn node(el: &IUIAutomationElement, children: bool) -> Result<Node> {
+    let public = opencu_engine::may_read_value(el.CachedIsPassword().ok().map(|v| v.as_bool()));
     let mut node = Node {
-        role: role(el.CurrentControlType()?.0),
-        name: el.CurrentName().map(|s| s.to_string()).unwrap_or_default(),
+        role: role(el.CachedControlType()?.0),
+        name: if public {
+            el.CachedName().map(|s| s.to_string()).unwrap_or_default()
+        } else {
+            "[protected]".into()
+        },
         automation_id: el
-            .CurrentAutomationId()
+            .CachedAutomationId()
             .map(|s| s.to_string())
             .unwrap_or_default(),
         class_name: el
-            .CurrentClassName()
+            .CachedClassName()
             .map(|s| s.to_string())
             .unwrap_or_default(),
-        bounds: rect(el.CurrentBoundingRectangle()?),
-        enabled: el.CurrentIsEnabled()?.as_bool(),
-        offscreen: el.CurrentIsOffscreen()?.as_bool(),
-        actions: actions(el),
+        bounds: rect(el.CachedBoundingRectangle()?),
+        enabled: el.CachedIsEnabled()?.as_bool(),
+        offscreen: el.CachedIsOffscreen()?.as_bool(),
         has_children: children,
-        focusable: el
-            .CurrentIsKeyboardFocusable()
-            .unwrap_or_default()
-            .as_bool(),
+        focusable: el.CachedIsKeyboardFocusable().unwrap_or_default().as_bool(),
         ..Default::default()
     };
-    if !el.CurrentIsPassword().unwrap_or_default().as_bool() {
-        if let Some(p) = pattern::<IUIAutomationValuePattern>(el, UIA_ValuePatternId) {
-            node.value = p.CurrentValue().ok().map(|v| v.to_string());
-            node.settable = p.CurrentIsReadOnly().is_ok_and(|v| !v.as_bool());
+    if cached::<IUIAutomationInvokePattern>(el, UIA_InvokePatternId).is_some() {
+        node.actions.push("Invoke".into());
+    }
+    if cached::<IUIAutomationTogglePattern>(el, UIA_TogglePatternId).is_some() {
+        node.actions.push("Toggle".into());
+    }
+    if cached::<IUIAutomationSelectionItemPattern>(el, UIA_SelectionItemPatternId).is_some() {
+        node.actions
+            .extend(["Select", "AddToSelection", "RemoveFromSelection"].map(String::from));
+    }
+    if cached::<IUIAutomationExpandCollapsePattern>(el, UIA_ExpandCollapsePatternId).is_some() {
+        node.actions
+            .extend(["Expand", "Collapse"].map(String::from));
+    }
+    if let Some(p) =
+        cached::<IUIAutomationLegacyIAccessiblePattern>(el, UIA_LegacyIAccessiblePatternId)
+    {
+        if p.CachedDefaultAction().is_ok_and(|s| !s.is_empty()) {
+            node.actions.push("DoDefaultAction".into());
+        }
+    }
+    if public {
+        if let Some(p) = cached::<IUIAutomationValuePattern>(el, UIA_ValuePatternId) {
+            // Recheck the live flag immediately before fetching content as a
+            // provider can change its secure state since the metadata snapshot.
+            if el.CurrentIsPassword().is_ok_and(|v| !v.as_bool()) {
+                node.value = p.CurrentValue().ok().map(|v| v.to_string());
+            }
+            node.settable = p.CachedIsReadOnly().is_ok_and(|v| !v.as_bool());
         } else if let Some(p) =
-            pattern::<IUIAutomationRangeValuePattern>(el, UIA_RangeValuePatternId)
+            cached::<IUIAutomationRangeValuePattern>(el, UIA_RangeValuePatternId)
         {
-            node.value = p.CurrentValue().ok().map(|v| v.to_string());
-            node.settable = p.CurrentIsReadOnly().is_ok_and(|v| !v.as_bool());
+            if el.CurrentIsPassword().is_ok_and(|v| !v.as_bool()) {
+                node.value = p.CurrentValue().ok().map(|v| v.to_string());
+            }
+            node.settable = p.CachedIsReadOnly().is_ok_and(|v| !v.as_bool());
         }
     }
     // Bound individual provider strings, as well as overall traversal.
@@ -167,6 +233,7 @@ pub unsafe fn observe(uia: &IUIAutomation, app: App, include: bool) -> Result<(V
         app.id,
         json!(primary.title)
     );
+    text += &format!("Capture target: hwnd={:x} class={} (prefer non-tool, unowned content window, then largest area).\n",primary.hwnd.0 as usize,json!(primary.class_name));
     let mut snapshot = Snapshot {
         app: app.clone(),
         keyboard_window: primary.clone(),
@@ -174,6 +241,7 @@ pub unsafe fn observe(uia: &IUIAutomation, app: App, include: bool) -> Result<(V
         image: None,
     };
     let walker = uia.RawViewWalker()?;
+    let cache = cache_request(uia)?;
     let started = Instant::now();
     let mut inspected = 0;
     let mut truncated = false;
@@ -183,7 +251,7 @@ pub unsafe fn observe(uia: &IUIAutomation, app: App, include: bool) -> Result<(V
             json!(window.title),
             window.hwnd.0 as usize
         );
-        let root = match uia.ElementFromHandle(window.hwnd) {
+        let root = match uia.ElementFromHandleBuildCache(window.hwnd, &cache) {
             Ok(r) => r,
             Err(e) => {
                 text += &format!("UIA unavailable: {}\n", e.code());
@@ -201,8 +269,12 @@ pub unsafe fn observe(uia: &IUIAutomation, app: App, include: bool) -> Result<(V
                 break;
             }
             inspected += 1;
-            let child = if depth < 120 {
-                walker.GetFirstChildElement(&el).ok()
+            let public =
+                opencu_engine::may_read_value(el.CachedIsPassword().ok().map(|v| v.as_bool()));
+            let child = if !public {
+                None
+            } else if depth < 120 {
+                walker.GetFirstChildElementBuildCache(&el, &cache).ok()
             } else {
                 truncated = true;
                 None
@@ -210,7 +282,7 @@ pub unsafe fn observe(uia: &IUIAutomation, app: App, include: bool) -> Result<(V
             // Push only the next sibling, not every sibling at once: bounded work
             // even for a broken provider. Structural depth doesn't consume display depth.
             if depth > 0 {
-                if let Ok(next) = walker.GetNextSiblingElement(&el) {
+                if let Ok(next) = walker.GetNextSiblingElementBuildCache(&el, &cache) {
                     stack.push((next, depth, visual_depth));
                 }
             }
@@ -252,11 +324,11 @@ pub unsafe fn observe(uia: &IUIAutomation, app: App, include: bool) -> Result<(V
                 "{text}Screenshot unavailable: target window is minimized; activate it first.\n"
             ));
         } else {
-            let bounds = primary.rect()?;
+            let bounds = primary.capture_rect()?;
             let dpi = primary.dpi();
             match capture::capture(primary, bounds) {
                 Ok((png, width, height)) => {
-                    if primary.rect()? != bounds || primary.dpi() != dpi {
+                    if primary.capture_rect()? != bounds || primary.dpi() != dpi {
                         return Err(Error::new(
                             "WINDOW_CHANGED",
                             "Window moved or resized during capture; read state again",

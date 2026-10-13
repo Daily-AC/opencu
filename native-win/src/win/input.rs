@@ -288,7 +288,7 @@ pub unsafe fn perform(
         if coordinate {
             let shot=image.ok_or_else(||Error::new("SCREENSHOT_REQUIRED","Coordinate input requires the latest successful screenshot from this engine connection"))?;
             Ok(Some(shot.point(
-                window.rect()?,
+                window.capture_rect()?,
                 window.dpi(),
                 number(args, "x")?,
                 number(args, "y")?,

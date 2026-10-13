@@ -23,6 +23,9 @@ use windows::{
         },
     },
 };
+static STOPPED: AtomicBool = AtomicBool::new(false);
+static NEEDS_OBSERVATION: AtomicBool = AtomicBool::new(false);
+static ACTING: AtomicBool = AtomicBool::new(false);
 static EVENTS: AtomicU64 = AtomicU64::new(0);
 static FAILED: AtomicBool = AtomicBool::new(false);
 static HEARTBEAT: AtomicU64 = AtomicU64::new(0);
@@ -118,6 +121,18 @@ pub unsafe fn target(w: &Window) -> Result<()> {
     w.validate()?;
     Ok(())
 }
+unsafe extern "system" fn escape_hook(code: i32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+    if code >= 0 {
+        let event = &*(lp.0 as *const KBDLLHOOKSTRUCT);
+        if opencu_engine::physical_escape(event.vkCode, event.flags.0, wp.0 as u32) {
+            STOPPED.store(true, SeqCst);
+        }
+    }
+    CallNextHookEx(None, code, wp, lp)
+}
+fn user_stopped() -> Error {
+    Error::new("USER_STOPPED", "A person stopped OpenCU with Escape. All later input and activation on this connection are disabled; do not reconnect automatically.")
+}
 unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     if msg == WM_INPUT {
         let mut header = RAWINPUTHEADER::default();
@@ -132,7 +147,31 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
         if n != std::mem::size_of::<RAWINPUTHEADER>() as u32 {
             FAILED.store(true, SeqCst);
         } else if header.dwType <= 1 && GetMessageExtraInfo().0 as usize != INPUT_TAG {
+            if header.dwType == RIM_TYPEKEYBOARD.0 {
+                // Escape has a Raw Input path as well: Windows can silently remove
+                // low-level hooks after a timeout. Retain no typed content.
+                let mut raw = RAWINPUT::default();
+                let mut size = std::mem::size_of::<RAWINPUT>() as u32;
+                let copied = GetRawInputData(
+                    HRAWINPUT(lp.0 as _),
+                    RID_INPUT,
+                    Some(&mut raw as *mut _ as _),
+                    &mut size,
+                    std::mem::size_of::<RAWINPUTHEADER>() as u32,
+                );
+                if copied == u32::MAX {
+                    FAILED.store(true, SeqCst);
+                } else if raw.data.keyboard.VKey == 0x1b
+                    && raw.data.keyboard.Flags & RI_KEY_BREAK as u16 == 0
+                    && raw.data.keyboard.ExtraInformation as usize != INPUT_TAG
+                {
+                    STOPPED.store(true, SeqCst);
+                }
+            }
             EVENTS.fetch_add(1, SeqCst);
+            if ACTING.load(SeqCst) {
+                NEEDS_OBSERVATION.store(true, SeqCst);
+            }
         }
     }
     DefWindowProcW(hwnd, msg, wp, lp)
@@ -153,6 +192,8 @@ impl Monitor {
             let result = (|| -> Result<()> {
                 desktop()?;
                 let module = GetModuleHandleW(None)?;
+                let keyboard =
+                    SetWindowsHookExW(WH_KEYBOARD_LL, Some(escape_hook), Some(module.into()), 0)?;
                 let class = w!("OpenCUInputMonitor");
                 let wc = WNDCLASSW {
                     lpfnWndProc: Some(proc),
@@ -232,6 +273,7 @@ impl Monitor {
                 });
                 let _ =
                     RegisterRawInputDevices(&remove, std::mem::size_of::<RAWINPUTDEVICE>() as u32);
+                let _ = UnhookWindowsHookEx(keyboard);
                 let _ = DestroyWindow(hwnd);
                 let _ = UnregisterClassW(class, Some(module.into()));
                 Ok(())
@@ -261,7 +303,26 @@ impl Monitor {
         }
         Ok(())
     }
-    pub unsafe fn begin(&self) -> Result<Guard<'_>> {
+    pub fn stopped(&self) -> bool {
+        STOPPED.load(SeqCst)
+    }
+    pub fn observed(&self) {
+        NEEDS_OBSERVATION.store(false, SeqCst);
+    }
+    pub unsafe fn begin<'a>(
+        &'a self,
+        indicator: &'a super::indicator::Indicator,
+    ) -> Result<Guard<'a>> {
+        if self.stopped() {
+            indicator.hide();
+            return Err(user_stopped());
+        }
+        if NEEDS_OBSERVATION.load(SeqCst) {
+            return Err(Error::new(
+                "OBSERVATION_REQUIRED",
+                "Human activity interrupted input; read the app state before new input",
+            ));
+        }
         let epoch = EVENTS.load(SeqCst);
         self.fence()?;
         if EVENTS.load(SeqCst) != epoch {
@@ -272,7 +333,11 @@ impl Monitor {
                 return Err(person());
             }
         }
+        let visible = indicator.begin()?;
+        ACTING.store(true, SeqCst);
         Ok(Guard {
+            visible: Some(visible),
+            indicator,
             monitor: self,
             epoch,
             target: None,
@@ -288,6 +353,8 @@ impl Drop for Monitor {
     }
 }
 pub struct Guard<'a> {
+    visible: Option<super::indicator::Active<'a>>,
+    indicator: &'a super::indicator::Indicator,
     monitor: &'a Monitor,
     epoch: u64,
     target: Option<Window>,
@@ -297,12 +364,17 @@ impl Guard<'_> {
         // Drain queued device events before every new input, independent of UIA
         // provider or capture latency on the engine thread.
         self.monitor.fence()?;
+        if STOPPED.load(SeqCst) {
+            self.indicator.hide();
+            return Err(user_stopped());
+        }
         if EVENTS.load(SeqCst) != self.epoch {
             return Err(person());
         }
         if FAILED.load(SeqCst) || GetTickCount64().saturating_sub(HEARTBEAT.load(SeqCst)) > 500 {
             return Err(monitor_error());
         }
+        self.indicator.check()?;
         desktop()?;
         if let Some(w) = &self.target {
             w.validate()?;
@@ -354,5 +426,15 @@ impl Guard<'_> {
     pub unsafe fn finish(&mut self) -> Result<()> {
         self.monitor.fence()?;
         self.check()
+    }
+}
+
+impl Drop for Guard<'_> {
+    fn drop(&mut self) {
+        ACTING.store(false, SeqCst);
+        self.visible.take();
+        if STOPPED.load(SeqCst) {
+            self.indicator.hide();
+        }
     }
 }
