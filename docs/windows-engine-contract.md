@@ -3,6 +3,8 @@
 Status: cross-compiled on macOS and accepted on disposable Windows 11 native and
 Chrome fixtures in three consecutive runs. Direct UTF-8 stdio was also exercised
 from PowerShell without Node. See the [fixture evidence](../evidence/opencu-windows-gui-2026-10-13.json).
+The owned-foreground regression and foreign-process refusals were additionally
+accepted in [three consecutive fixture runs](../evidence/opencu-windows-owned-foreground-2026-10-13.json).
 Physical takeover and privileged/locked-desktop cases remain manual follow-ups.
 
 ## Standalone transport and embedding
@@ -86,8 +88,24 @@ Chrome/Edge are traversed through native UIA without changing browser flags.
 
 ## Input and engine-side safety
 
-Every input first activates its target window and verifies the actual foreground
-HWND. If Windows denies SetForegroundWindow, `ACTIVATION_FAILED` is returned;
+Every input verifies that the actual foreground window belongs to the target's
+top-level ownership family: normalize children with `GetAncestor(GA_ROOT)`, then
+walk `GetWindow(GW_OWNER)` to the ultimate owner (at most 64 steps). Both windows
+must reach the same live owner, and every HWND visited must belong to the target
+PID. This includes the owner, owned overlays/dialogs, siblings sharing that root
+owner, and their child controls. Same PID alone does
+not include unrelated top-level windows, and a cross-process owned window is
+never accepted. Walking the actual ownership chain also handles non-`WS_POPUP`
+owned windows that [`GA_ROOTOWNER`/`GetParent`](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-getparent)
+omit. The observed process creation
+time and HWND are still validated.
+The same live predicate guards activation, each subsequent input safety check,
+pointer hit testing, and the focused control used for literal text.
+
+If this family already holds foreground, activation succeeds without calling
+SetForegroundWindow or changing the active overlay. Otherwise the engine makes
+the existing single SetForegroundWindow attempt and waits up to 500 ms for the
+target family. If Windows denies it, `ACTIVATION_FAILED` is returned;
 there is no synthetic Alt, AttachThreadInput, or foreground-lock bypass. Foreground
 identity, live process identity and desktop accessibility are checked before each
 new SendInput event, Unicode character message and each UIA action. Pointer input also checks that the target
@@ -133,8 +151,10 @@ activation. Per-monitor-v2 awareness makes image pixels physical pixels: at
 120 DPI, no additional factor of 1.25 is applied. Absolute SendInput coordinates
 use virtual-desktop pixel centres, including negative monitor origins.
 
-Literal `type_text` uses bounded WM_CHAR delivery to the foreground thread's
-focused HWND, revalidating that exact focus before each UTF-16 unit. This avoids
+Keyboard input goes to the actual foreground family window, using its keyboard
+layout. Literal `type_text` uses bounded WM_CHAR delivery to the actual foreground
+thread's focused HWND (including an owned overlay on a separate UI thread),
+revalidating its family and that exact focus before each UTF-16 unit. This avoids
 IME composition consuming spaces and does not change the user's input method.
 It emits character/input events, not a physical keydown/keyup pair for every
 character; use `press_key` for key-event semantics. Native Edit and Chrome input
@@ -214,6 +234,15 @@ Separate manual acceptance remains required for real human interruption, held-ke
 cleanup, elevated targets, locked/secure desktops, multiple monitors/DPI changes,
 Start-menu launch variants, and Qt/CEF desktop clients and protected video surfaces. The automatic
 script does not synthesize “human” input or attempt to lock/elevate the desktop.
+
+The owned-foreground fixture keeps its control overlay active when its content
+window is requested. The old engine refuses the main-window indexed click with
+`ACTIVATION_FAILED`; the fixed engine accepts it while leaving the overlay active.
+The suite covers owned popup and non-popup windows, pointer and text focus, and
+stopping a held key when foreground leaves the ownership family. Foreign-process
+refusal uses a separate cold engine connection with no preceding SendInput grant:
+the original connection may legitimately receive foreground rights from Windows
+after its own input. This does not reconnect after physical Escape or interruption.
 
 API references: [UIA raw tree](https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-treeoverview),
 [Chrome native UIA](https://developer.chrome.com/blog/windows-uia-support-update),
