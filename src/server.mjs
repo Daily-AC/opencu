@@ -5,6 +5,7 @@ import { z } from 'zod';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { OpenCURuntime, toolError } from './opencu-runtime.mjs';
+import { normalizeArguments } from './tool-arguments.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const server = new McpServer(
@@ -101,16 +102,7 @@ for (const [name, definition] of Object.entries(definitions)) {
     annotations: { readOnlyHint: !!definition.readOnly, openWorldHint: true },
   }, async (args, extra) => {
     try {
-      const actions = name === 'run_actions' ? args.actions : [{ method: name, ...args }];
-      for (const action of actions) {
-        if (['click', 'scroll'].includes(action.method) && action.element_index !== undefined && (action.x !== undefined || action.y !== undefined)) {
-          throw new Error('Provide either element_index or screenshot coordinates, not both. No actions were sent.');
-        }
-        if (['click', 'scroll'].includes(action.method) && action.element_index === undefined && (action.x === undefined || action.y === undefined)) {
-          throw new Error('Provide element_index or both x and y from the latest app state');
-        }
-      }
-      return await runtime.call(name, args, extra.signal);
+      return await runtime.call(name, normalizeArguments(name, args), extra.signal);
     } catch (error) {
       return toolError(error);
     }
