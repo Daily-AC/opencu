@@ -151,7 +151,19 @@ final class MacObserver {
         let application = AXUIElementCreateApplication(app.pid)
         AXUIElementSetMessagingTimeout(application, 1)
         try await requestWebAccessibility(application, app)
-        let window = try await observedWindow(application)
+        guard let window = try await observedWindow(application) else {
+            let tree = accessibilityTree(window: nil, bounds: .zero, application: application, focused: nil,
+                                         expanded: expandedMenusPID == app.pid ? expandedMenus : [])
+            guard axSelectedWindow(application) == nil, axWindows(application).isEmpty else {
+                throw OpenCUError("WINDOW_CHANGED", "A window appeared while observing the application; read its state again")
+            }
+            let note = "No accessible window is open. Use the menu bar or press_key shortcuts (for example Cmd+N or Cmd+O) to open one. Screenshots, coordinate input, typing and paste require a window."
+            return Observation(text: (["App: \(quoted(app.name)) (\(app.id), pid \(app.pid), \(app.isFrontmost ? "foreground" : "background"))", note] + tree.lines).joined(separator: "\n"),
+                               screenshot: nil,
+                               snapshot: WindowSnapshot(app: app, window: nil, bounds: .zero, windowID: nil,
+                                                        elements: tree.elements, elementPaths: tree.paths,
+                                                        screenshotWidth: nil, screenshotHeight: nil))
+        }
         guard let bounds = axRect(window), usableBounds(bounds) else {
             throw OpenCUError("WINDOW_BOUNDS_UNAVAILABLE", "The selected window does not expose usable Accessibility bounds. Select a visible window and try again.")
         }
@@ -192,14 +204,14 @@ final class MacObserver {
                 lines.append("Screenshot unavailable (\(error.code)): \(error.message) Indexed elements above can still be used.")
             }
         }
-        guard let currentWindow = selectedWindow(application), CFEqual(currentWindow, window),
+        guard let currentWindow = axSelectedWindow(application), CFEqual(currentWindow, window),
               let currentBounds = axRect(window), sameBounds(currentBounds, bounds),
               (axString(window, kAXTitleAttribute) ?? "") == windowTitle else {
             throw OpenCUError("WINDOW_CHANGED", "The selected window changed while it was being observed. Read the application state again before interacting.")
         }
         return Observation(text: lines.joined(separator: "\n"), screenshot: screenshot,
                            snapshot: WindowSnapshot(app: app, window: window, bounds: bounds, windowID: windowID,
-                                                    elements: tree.elements, screenshotWidth: width, screenshotHeight: height))
+                                                    elements: tree.elements, elementPaths: tree.paths, screenshotWidth: width, screenshotHeight: height))
     }
 
     private func resolveURL(_ url: URL, running: [NSRunningApplication], launch: Bool) async throws -> TargetApp {
@@ -257,9 +269,9 @@ final class MacObserver {
     private func uniqueURLs(_ urls: [URL]) -> [URL] { Array(Set(urls.map(canonicalURL))).sorted { $0.path < $1.path } }
     private func matches(_ value: String?, _ query: String) -> Bool { value?.caseInsensitiveCompare(query) == .orderedSame }
 
-    private func observedWindow(_ application: AXUIElement) async throws -> AXUIElement {
+    private func observedWindow(_ application: AXUIElement) async throws -> AXUIElement? {
         for attempt in 0..<8 {
-            if let window = selectedWindow(application) {
+            if let window = axSelectedWindow(application) {
                 if axValue(window, kAXMinimizedAttribute) as? Bool == true {
                     throw OpenCUError("WINDOW_MINIMIZED", "The selected application window is minimized. Restore the intended window and try again.")
                 }
@@ -267,18 +279,11 @@ final class MacObserver {
             }
             if attempt < 7 { try await Task.sleep(nanoseconds: 125_000_000) }
         }
-        let windows = axValue(application, kAXWindowsAttribute) as? [AXUIElement] ?? []
+        let windows = axWindows(application)
         if windows.count > 1 {
             throw OpenCUError("AMBIGUOUS_WINDOW", "The application has several windows but no focused or main Accessibility window. Select the intended window and read its state again.")
         }
-        throw OpenCUError("NO_ACCESSIBLE_WINDOW", "The application does not expose an accessible window yet. Open its intended window, confirm Accessibility permission, and try again.")
-    }
-
-    private func selectedWindow(_ application: AXUIElement) -> AXUIElement? {
-        if let focused = elementAttribute(application, kAXFocusedWindowAttribute) { return focused }
-        if let main = elementAttribute(application, kAXMainWindowAttribute) { return main }
-        let windows = axValue(application, kAXWindowsAttribute) as? [AXUIElement] ?? []
-        return windows.count == 1 ? windows[0] : nil
+        return nil
     }
 
     private func elementAttribute(_ element: AXUIElement, _ name: String) -> AXUIElement? {
@@ -352,18 +357,19 @@ final class MacObserver {
         }
     }
 
-    private func accessibilityTree(window: AXUIElement, bounds: CGRect, application: AXUIElement, focused: AXUIElement?,
-                                   expanded: Set<AXIdentity>) -> (lines: [String], elements: [Int: AXUIElement], webContent: Bool) {
+    private func accessibilityTree(window: AXUIElement?, bounds: CGRect, application: AXUIElement, focused: AXUIElement?,
+                                   expanded: Set<AXIdentity>) -> (lines: [String], elements: [Int: AXUIElement], paths: [Int: [AXUIElement]], webContent: Bool) {
         var lines: [String] = []
         var elements: [Int: AXUIElement] = [:]
+        var paths: [Int: [AXUIElement]] = [:]
         var indexes: [AXIdentity: Int] = [:]
         var webContent = false
         var inspected = Set<AXIdentity>()
         // Element, printed depth, nesting depth, menu bar membership, and the
         // nearest printed ancestor's label.
-        var pending: [(AXUIElement, Int, Int, Bool, String?)] = []
-        if let menuBar = elementAttribute(application, kAXMenuBarAttribute) { pending.append((menuBar, 0, 0, true, nil)) }
-        pending.append((window, 0, 0, false, nil))
+        var pending: [(AXUIElement, Int, Int, Bool, String?, [AXUIElement])] = []
+        if let menuBar = elementAttribute(application, kAXMenuBarAttribute) { pending.append((menuBar, 0, 0, true, nil, [menuBar])) }
+        if let window { pending.append((window, 0, 0, false, nil, [window])) }
         let focusedIdentity = focused.map(AXIdentity.init)
         let deadline = Date().addingTimeInterval(4)
         var characters = 0
@@ -371,7 +377,7 @@ final class MacObserver {
         var nestingLimited = false
         var childListLimited = false
         var stopReason: String?
-        while let (element, depth, nesting, inMenuBar, label) = pending.popLast() {
+        while let (element, depth, nesting, inMenuBar, label, path) = pending.popLast() {
             let identity = AXIdentity(element)
             guard inspected.insert(identity).inserted else { continue }
             if elements.count >= maximumElements { stopReason = "\(maximumElements) element limit"; break }
@@ -394,6 +400,7 @@ final class MacObserver {
                 let line = String(repeating: "  ", count: depth) + "[\(index)] " + describe(element, node, focused: focusedIdentity)
                 if characters + line.count > maximumTextCharacters { stopReason = "\(maximumTextCharacters) character limit"; break }
                 elements[index] = element
+                paths[index] = path
                 indexes[identity] = index
                 lines.append(line)
                 characters += line.count + 1
@@ -416,7 +423,7 @@ final class MacObserver {
                 var values: CFArray?
                 if count > 0, AXUIElementCopyAttributeValues(element, kAXChildrenAttribute as CFString, 0, count, &values) == .success,
                    let children = values as? [AXUIElement] {
-                    pending.append(contentsOf: children.reversed().map { ($0, childDepth, nesting + 1, inMenuBar, childLabel) })
+                    pending.append(contentsOf: children.reversed().map { ($0, childDepth, nesting + 1, inMenuBar, childLabel, path + [$0]) })
                 }
             }
         }
@@ -424,18 +431,12 @@ final class MacObserver {
         if nestingLimited { lines.append("Tree truncated: descendants nested deeper than \(maximumNesting) levels were not inspected.") }
         if childListLimited { lines.append("Tree truncated: child lists exceeded the remaining \(maximumInspected) inspected element budget.") }
         if outside > 0 { lines.append("\(outside) element groups outside the window bounds were omitted; scroll to bring them into view.") }
-        if let focused, let focusedIdentity {
-            let index: Int
-            if let existing = indexes[focusedIdentity] { index = existing }
-            else {
-                index = elements.count + 1
-                elements[index] = focused
-                AXUIElementSetMessagingTimeout(focused, 0.5)
-                lines.append("[\(index)] " + describe(focused, AXNode(focused), focused: focusedIdentity))
-            }
+        // A focused element outside the traversed roots must not acquire an
+        // index: AXFocusedUIElement alone does not prove window membership.
+        if let focusedIdentity, let index = indexes[focusedIdentity] {
             lines.append("Focused element: [\(index)].")
-        } else { lines.append("Focused element: unavailable.") }
-        return (lines, elements, webContent)
+        } else { lines.append("Focused element: unavailable within the observed window/menu bar.") }
+        return (lines, elements, paths, webContent)
     }
 
     private func describe(_ element: AXUIElement, _ node: AXNode, focused: AXIdentity?) -> String {
