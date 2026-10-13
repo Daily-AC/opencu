@@ -1,8 +1,10 @@
 # OpenCU
 
 OpenCU is an independent local computer-use engine with an MCP interface. Its
-Swift engine uses macOS Accessibility, CoreGraphics and ScreenCaptureKit directly
+macOS Swift engine uses Accessibility, CoreGraphics and ScreenCaptureKit directly
 and operates apps in the background without taking over your keyboard or cursor.
+A Windows Rust engine is implemented for foreground operation; its real-desktop
+acceptance is pending.
 It needs no account, model credentials or proprietary runtime. Any compatible MCP
 client can call it; the calling agent supplies the model and decides what to do.
 
@@ -11,8 +13,8 @@ AppKit fixtures and isolated release verification, and completed a real web task
 in Chrome in the background. Safari/WebKit, Qt and Java apps are not yet accepted.
 See the [current evidence and limits](docs/opencu-independent-2026-10-12.md).
 
-The current target is **macOS 14 or later on Apple silicon**. Windows and other
-platforms are separate future work.
+The accepted target is **macOS 14 or later on Apple silicon**. Windows phase 1
+is cross-compiled for **Windows 11 x64**; see the Windows section below.
 
 ## Quick start
 
@@ -112,6 +114,38 @@ State options include `disableDiff`, `includeScreenshot`, `waitForText` and
 an error with the last observed state. The tree reports its node/depth/time limits
 when truncated. Image coordinates never silently fall back to another window.
 
+## Windows (phase 1)
+
+The Rust engine implements UI Automation trees (including unnamed controls),
+window PNGs, indexed/coordinate click, Unicode typing, plain-text paste, keys,
+scroll, writable values and exposed secondary actions. Input brings the target
+window to the foreground; Windows can refuse activation. Human keyboard/mouse
+activity stops the current call. Drag and text selection are not supported yet.
+These paths are implemented, **not yet accepted on a Windows desktop**.
+
+Cross-compile on a Mac with Rust's `x86_64-pc-windows-gnu` target and MinGW-w64
+(`x86_64-w64-mingw32-gcc` on PATH):
+
+```sh
+npm ci --ignore-scripts
+npm run build:win
+cd native-win
+cargo test
+cargo build --release --target x86_64-pc-windows-gnu
+```
+
+The stable executable is `.build/win/opencu-engine.exe`. On Windows, install Node
+22+ and the npm dependencies, copy that executable to the same path, then run
+`bin\opencu.cmd doctor` or `bin\opencu.cmd mcp`. MCP clients can also launch
+`node C:\path\to\opencu\src\server.mjs` directly. Go or other hosts can spawn
+`opencu-engine.exe serve` with pipes; Node is not required for the engine.
+
+Windows acceptance, when the desktop is available for foreground testing:
+`node scripts/verify-gui-win.mjs`. It uses disposable WinForms/Chrome fixtures.
+See the [Windows contract and pending checks](docs/windows-engine-contract.md)
+for error codes, embedding, clipboard/capture limits and safety behavior. The
+background-focus, closed-menu and rich-paste behavior described above is macOS-only.
+
 ## Development
 
 ```sh
@@ -123,7 +157,7 @@ node scripts/verify-gui.mjs
 `verify-gui.mjs` builds two disposable AppKit fixtures, keeps one in the
 foreground and operates the other in the background through the MCP server.
 
-The native engine has no package dependencies. `native/Package.swift` links only
+The macOS native engine has no package dependencies. `native/Package.swift` links only
 system frameworks. The first build creates this Mac's OpenCU signing identity in
 `~/Library/Application Support/OpenCU/signing`, in its own keychain; the login
 keychain is not modified. Every build of `.build/OpenCU.app` is signed with it,
