@@ -8,7 +8,6 @@ import { spawn, execFileSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
 import { access, mkdir, mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as pause } from 'node:timers/promises';
@@ -20,7 +19,9 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const token = randomUUID();
 const title = `OpenCU Fixture ${token}`;
 const area = path.join(root, '.cache', `windows-acceptance-${token}`);
-const temp = await mkdtemp(path.join(tmpdir(), 'opencu-win-'));
+const temporaryRoot = path.join(root, '.cache', 'windows-temp');
+await mkdir(temporaryRoot, { recursive: true });
+const temp = await mkdtemp(path.join(temporaryRoot, 'opencu-win-'));
 const profile = path.join(temp, 'chrome-profile');
 const output = path.join(temp, 'fixture.json');
 const commandFile = path.join(temp, 'command.txt');
@@ -81,7 +82,9 @@ async function imageState(app) {
   const image = result.content.find(c => c.type === 'image');
   assert.ok(image, 'Expected a window PNG');
   const png = Buffer.from(image.data, 'base64');
-  await writeFile(path.join(area, `screenshot-${sequence}.png`), png);
+  const imageFile = path.join(area, `screenshot-${sequence}.png`);
+  await writeFile(imageFile, png);
+  report.lastFixtureImage = path.basename(imageFile);
   assert.equal(png.subarray(1, 4).toString(), 'PNG');
   return { width: png.readUInt32BE(16), height: png.readUInt32BE(20) };
 }
@@ -103,6 +106,17 @@ try {
   assert.deepEqual(size, { width: initial.width, height: initial.height });
   index('Fixture notes'); index('Fixture counter');
   checks.push('tree read and physical-size window PNG');
+  assert.ok(!tree.includes('OpenCU-Fixture-Secret-7391'));
+  assert.ok(tree.includes('[protected]'), 'Password control must be identified without its content');
+  checks.push('native password text is redacted');
+  await fixtureCommand('cover');
+  await imageState(title);
+  const marker = await fixtureState();
+  const coveredImage = path.join(area, report.lastFixtureImage);
+  const rgb = powershell(`Add-Type -AssemblyName System.Drawing; $image=[Drawing.Bitmap]::new(${quote(coveredImage)}); try { $p=$image.GetPixel(${marker.markerX},${marker.markerY}); Write-Output ([string]$p.R+','+$p.G+','+$p.B) } finally { $image.Dispose() }`);
+  assert.equal(rgb, '255,0,255', 'Covered target must contain its own magenta marker, not the lime cover');
+  checks.push('covered-window capture preserves target pixels');
+  await fixtureCommand('uncover');
 
   await call('click', title, { element_index: index('Fixture counter') });
   assert.equal((await fixtureState()).clicks, 1);
@@ -111,6 +125,16 @@ try {
   await call('run_actions', title, { actions: [{ method: 'press_key', key: 'ctrl+a' }, { method: 'type_text', text: 'Windows 中文 😀' }] });
   assert.equal((await fixtureState()).notes, 'Windows 中文 😀');
   checks.push('key chord and Unicode typing');
+  const holding = call('press_key', title, { key: 'Shift', duration: 3 }).then(value => ({ value }), error => ({ error }));
+  await pause(700);
+  const indicator = powershell(`Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class OpenCUIndicatorProbe { [DllImport("user32.dll",CharSet=CharSet.Unicode)] public static extern IntPtr FindWindow(string cls,string title); [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr w); [DllImport("user32.dll")] public static extern bool GetWindowDisplayAffinity(IntPtr w,out uint a); }'; $w=[OpenCUIndicatorProbe]::FindWindow('OpenCUOperationIndicator',$null); [uint32]$a=0; $ok=[OpenCUIndicatorProbe]::GetWindowDisplayAffinity($w,[ref]$a); @{visible=[OpenCUIndicatorProbe]::IsWindowVisible($w);affinity=$a;affinityReadable=$ok} | ConvertTo-Json -Compress`);
+  const held = await holding; if (held.error) throw held.error;
+  const indicatorState = JSON.parse(indicator);
+  assert.equal(indicatorState.visible, true); assert.equal(indicatorState.affinityReadable, true); assert.equal(indicatorState.affinity, 17);
+  checks.push('visible operation indicator is excluded from capture');
+  await call('press_key', title, { key: 'Escape' });
+  checks.push('engine-injected Escape does not trigger the physical stop latch');
+
 
   await fixtureCommand('digest');
   const baseline = await fixtureState(); assert.equal(baseline.error, '');
@@ -157,7 +181,7 @@ try {
   const chromeTitle = `OpenCU Chrome ${token}`;
   http = createServer((req, res) => {
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
-    res.end(`<!doctype html><meta charset="utf-8"><title>${chromeTitle}</title><h1>OpenCU Chrome page text</h1><p>这是一次本地页面验收</p><a href="#result" onclick="document.querySelector('output').textContent='Fixture link clicked'">Fixture test link</a><output></output><div style="height:1600px">Scroll fixture</div>`);
+    res.end(`<!doctype html><meta charset="utf-8"><title>${chromeTitle}</title><h1>OpenCU Chrome page text</h1><p>这是一次本地页面验收</p><a href="#result" onclick="document.querySelector('output').textContent='Fixture link clicked'">Fixture test link</a><output></output><input aria-label="Fixture web password" type="password" value="OpenCU-Web-Secret-2917"><div style="height:1600px">Scroll fixture</div>`);
   });
   await new Promise(resolve => http.listen(0, '127.0.0.1', resolve));
   const url = `http://127.0.0.1:${http.address().port}/`;
@@ -167,6 +191,8 @@ try {
   await pause(2500);
   await call('get_app_state', chromeTitle, { waitForText: 'OpenCU Chrome page text', waitTimeoutMs: 15000, disableDiff: true });
   index('Fixture test link');
+  assert.ok(!tree.includes('OpenCU-Web-Secret-2917'));
+  checks.push('web password value is redacted');
   checks.push('Chrome native UIA reaches local page text and links without accessibility flags');
   await call('click', chromeTitle, { element_index: index('Fixture test link') });
   await call('get_app_state', chromeTitle, { waitForText: 'Fixture link clicked', disableDiff: true });

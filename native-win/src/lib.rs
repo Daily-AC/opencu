@@ -504,3 +504,40 @@ mod encoding_tests {
         }
     }
 }
+
+/// Prefer content windows over utility overlays even when their rectangles match.
+pub fn window_rank(tool: bool, owned: bool, area: i64) -> (bool, bool, i64) {
+    (!tool, !owned, area)
+}
+pub fn may_read_value(password: Option<bool>) -> bool {
+    password == Some(false)
+}
+#[cfg(test)]
+mod windows_policy_tests {
+    #[test]
+    fn content_beats_same_size_tool() {
+        assert!(super::window_rank(false, false, 100) > super::window_rank(true, false, 100));
+        assert!(super::window_rank(false, false, 100) > super::window_rank(false, true, 100));
+    }
+    #[test]
+    fn password_or_unknown_is_closed() {
+        assert!(super::may_read_value(Some(false)));
+        assert!(!super::may_read_value(Some(true)));
+        assert!(!super::may_read_value(None));
+    }
+}
+
+/// Low-level keyboard hook metadata: injected Escape must not stop its own host.
+pub fn physical_escape(vk: u32, flags: u32, message: u32) -> bool {
+    vk == 0x1b && flags & 0x10 == 0 && (message == 0x100 || message == 0x104)
+}
+#[cfg(test)]
+mod interruption_tests {
+    #[test]
+    fn only_physical_escape_keydown_stops() {
+        assert!(super::physical_escape(0x1b, 0, 0x100));
+        assert!(!super::physical_escape(0x1b, 0x10, 0x100));
+        assert!(!super::physical_escape(0x1b, 0, 0x101));
+        assert!(!super::physical_escape(0x41, 0, 0x100));
+    }
+}

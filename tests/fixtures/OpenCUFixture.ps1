@@ -12,7 +12,7 @@ using System.Security.Cryptography;
 using System.Text;
 public class OpenCUFixture : Form {
     [DllImport("user32.dll")] static extern bool SetProcessDpiAwarenessContext(IntPtr ctx);
-    [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr w, out RECT r);
+    [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr w, int a, out RECT r, int size);
     [DllImport("user32.dll")] static extern bool OpenClipboard(IntPtr w);
     [DllImport("user32.dll")] static extern bool CloseClipboard();
     [DllImport("user32.dll")] static extern uint EnumClipboardFormats(uint f);
@@ -25,6 +25,9 @@ public class OpenCUFixture : Form {
     readonly TextBox notes = new TextBox();
     readonly Button counter = new Button();
     readonly CheckBox check = new CheckBox();
+    readonly TextBox password = new TextBox();
+    readonly Panel marker = new Panel();
+    Form cover;
     readonly TrackBar slider = new TrackBar();
     readonly Panel scrolling = new Panel();
     readonly Timer timer = new Timer();
@@ -36,16 +39,20 @@ public class OpenCUFixture : Form {
         counter.Name="counterButton"; counter.AccessibleName="Fixture counter"; counter.Text="Fixture counter";
         counter.SetBounds(20,20,220,45); counter.Click += delegate { clicks++; Save(); };
         notes.Name="notes"; notes.AccessibleName="Fixture notes"; notes.Multiline=true; notes.SetBounds(20,90,620,100); notes.TextChanged += delegate { Save(); };
+        password.Name="password";password.AccessibleName="Fixture password";password.UseSystemPasswordChar=true;password.Text="OpenCU-Fixture-Secret-7391";password.SetBounds(320,215,250,30);
+        marker.BackColor=Color.Magenta;marker.SetBounds(590,20,50,45);
         check.Name="checkbox"; check.AccessibleName="Fixture checkbox"; check.Text="Fixture checkbox";check.SetBounds(20,215,260,40);check.CheckedChanged += delegate { Save(); };
         slider.Name="slider"; slider.AccessibleName="Fixture slider";slider.Minimum=0;slider.Maximum=100;slider.SetBounds(20,275,620,50);slider.ValueChanged += delegate { Save(); };
         scrolling.Name="scrollArea";scrolling.AccessibleName="Fixture scroll area";scrolling.SetBounds(20,355,620,170);scrolling.AutoScroll=true;
         var content=new Label();content.Text="Fixture scroll content";content.SetBounds(10,10,500,1500);scrolling.Controls.Add(content);
         scrolling.MouseWheel += delegate { wheel++; }; content.MouseWheel += delegate { wheel++; };
-        Controls.AddRange(new Control[]{counter,notes,check,slider,scrolling});
+        Controls.AddRange(new Control[]{counter,notes,check,password,marker,slider,scrolling});
         timer.Interval=100;timer.Tick += delegate {
             if(File.Exists(command)) { var cmd=File.ReadAllText(command).Trim();File.Delete(command);
                 if(cmd=="move") { Location=new Point(Location.X+40,Location.Y+30);moves++; }
                 else if(cmd=="digest") { try{digest=ClipboardDigest();}catch(Exception e){error=e.Message;} }
+                else if(cmd=="cover") { cover=new Form();cover.Text=Text+" Cover";cover.FormBorderStyle=FormBorderStyle.None;cover.StartPosition=FormStartPosition.Manual;cover.Bounds=Bounds;cover.BackColor=Color.Lime;cover.Show(this); }
+                else if(cmd=="uncover") { if(cover!=null){cover.Close();cover.Dispose();cover=null;} }
                 else if(cmd=="close") { Close();return; }
             }
             Save();
@@ -55,8 +62,8 @@ public class OpenCUFixture : Form {
     static string Q(string s) {var b=new StringBuilder("\"");foreach(char c in s){if(c=='"'||c=='\\'){b.Append('\\');b.Append(c);}else if(c<32){b.Append("\\u");b.Append(((int)c).ToString("x4"));}else b.Append(c);}return b.Append('"').ToString();}
     void Save() {
         if(!IsHandleCreated)return;
-        RECT r;GetWindowRect(Handle,out r);Point p=counter.PointToScreen(new Point(counter.Width/2,counter.Height/2));
-        var json="{\"pid\":"+System.Diagnostics.Process.GetCurrentProcess().Id+",\"clicks\":"+clicks+",\"notes\":"+Q(notes.Text)+",\"checked\":"+(check.Checked?"true":"false")+",\"slider\":"+slider.Value+",\"scroll\":"+(-scrolling.AutoScrollPosition.Y)+",\"wheel\":"+wheel+",\"moves\":"+moves+",\"x\":"+(p.X-r.Left)+",\"y\":"+(p.Y-r.Top)+",\"width\":"+(r.Right-r.Left)+",\"height\":"+(r.Bottom-r.Top)+",\"clipboardDigest\":"+Q(digest)+",\"error\":"+Q(error)+"}";
+        RECT r;DwmGetWindowAttribute(Handle,9,out r,16);Point p=counter.PointToScreen(new Point(counter.Width/2,counter.Height/2));Point m=marker.PointToScreen(new Point(marker.Width/2,marker.Height/2));
+        var json="{\"pid\":"+System.Diagnostics.Process.GetCurrentProcess().Id+",\"clicks\":"+clicks+",\"notes\":"+Q(notes.Text)+",\"checked\":"+(check.Checked?"true":"false")+",\"slider\":"+slider.Value+",\"scroll\":"+(-scrolling.AutoScrollPosition.Y)+",\"wheel\":"+wheel+",\"moves\":"+moves+",\"x\":"+(p.X-r.Left)+",\"y\":"+(p.Y-r.Top)+",\"markerX\":"+(m.X-r.Left)+",\"markerY\":"+(m.Y-r.Top)+",\"width\":"+(r.Right-r.Left)+",\"height\":"+(r.Bottom-r.Top)+",\"clipboardDigest\":"+Q(digest)+",\"error\":"+Q(error)+"}";
         try{File.WriteAllText(output,json,new UTF8Encoding(false));}catch(IOException){}
     }
     static string ClipboardDigest(){

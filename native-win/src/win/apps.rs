@@ -23,12 +23,21 @@ pub struct Window {
     pub title: String,
     pub path: String,
     pub created: u64,
+    pub class_name: String,
+    pub tool: bool,
+    pub owned: bool,
+    pub area: i64,
 }
 impl Window {
-    pub unsafe fn rect(&self) -> Result<Rect> {
+    pub unsafe fn capture_rect(&self) -> Result<Rect> {
         self.validate()?;
         let mut r = RECT::default();
-        GetWindowRect(self.hwnd, &mut r)?;
+        DwmGetWindowAttribute(
+            self.hwnd,
+            DWMWA_EXTENDED_FRAME_BOUNDS,
+            &mut r as *mut _ as _,
+            std::mem::size_of::<RECT>() as u32,
+        )?;
         Ok(Rect {
             x: r.left,
             y: r.top,
@@ -109,10 +118,21 @@ unsafe extern "system" fn enumerate(hwnd: HWND, data: LPARAM) -> BOOL {
     let mut title = vec![0u16; (GetWindowTextLengthW(hwnd).max(0) + 1) as usize];
     GetWindowTextW(hwnd, &mut title);
     let title = from_wide(&title);
-    // Keep unnamed visible windows too, but omit tool windows and shell desktop.
-    if GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32 & WS_EX_TOOLWINDOW.0 != 0
-        || hwnd == GetShellWindow()
-    {
+    if hwnd == GetShellWindow() {
+        return true.into();
+    }
+    let mut class = [0u16; 256];
+    GetClassNameW(hwnd, &mut class);
+    let class_name = from_wide(&class);
+    let style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
+    let tool = style & (WS_EX_TOOLWINDOW.0 | WS_EX_NOACTIVATE.0) != 0
+        || class_name.ends_with("ToolSaveBits");
+    let owned = GetWindow(hwnd, GW_OWNER).is_ok_and(|owner| !owner.is_invalid());
+    let mut bounds = RECT::default();
+    let _ = GetWindowRect(hwnd, &mut bounds);
+    let area =
+        (bounds.right - bounds.left).max(0) as i64 * (bounds.bottom - bounds.top).max(0) as i64;
+    if area == 0 {
         return true.into();
     }
     let (path, created) = process(pid).unwrap_or((String::new(), 0));
@@ -123,6 +143,10 @@ unsafe extern "system" fn enumerate(hwnd: HWND, data: LPARAM) -> BOOL {
         title,
         path,
         created,
+        class_name,
+        tool,
+        owned,
+        area,
     });
     true.into()
 }
@@ -252,12 +276,18 @@ fn matching(query: &str, all: &[Window]) -> Result<Vec<Window>> {
     } else {
         exact
     };
-    if titles.len() > 1 {
+    if titles
+        .iter()
+        .map(|w| w.pid)
+        .collect::<std::collections::BTreeSet<_>>()
+        .len()
+        > 1
+    {
         return Err(Error::new("AMBIGUOUS_APP", "Multiple window titles match; use a unique title or an executable path to observe all its windows"));
     }
     Ok(titles)
 }
-fn unique(matches: Vec<Window>) -> Result<Option<App>> {
+fn unique(mut matches: Vec<Window>) -> Result<Option<App>> {
     let mut pids: Vec<_> = matches.iter().map(|w| w.pid).collect();
     pids.sort();
     pids.dedup();
@@ -267,6 +297,7 @@ fn unique(matches: Vec<Window>) -> Result<Option<App>> {
             "More than one process matches; use a unique window title or pid:<pid> from list_apps",
         ));
     }
+    matches.sort_by_key(|w| std::cmp::Reverse(opencu_engine::window_rank(w.tool, w.owned, w.area)));
     Ok(matches.first().map(|w| App {
         // A browser can have multiple processes for isolated profiles. The
         // observation's canonical ID must select this instance, not all chrome.exe.

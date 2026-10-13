@@ -120,7 +120,8 @@ The Rust engine implements UI Automation trees (including unnamed controls),
 window PNGs, indexed/coordinate click, Unicode typing, plain-text paste, keys,
 scroll, writable values and exposed secondary actions. Input brings the target
 window to the foreground; Windows can refuse activation. Human keyboard/mouse
-activity stops the current call. Drag and text selection are not supported yet.
+activity stops the current call. A capture-excluded banner shows that OpenCU is
+operating; physical Esc disables further input on that connection. Drag and text selection are not supported yet.
 These paths are implemented, **not yet accepted on a Windows desktop**.
 
 Cross-compile on a Mac with Rust's `x86_64-pc-windows-gnu` target and MinGW-w64

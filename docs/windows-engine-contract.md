@@ -10,7 +10,8 @@ Run `.build/win/opencu-engine.exe serve` with inherited stdin/stdout pipes in th
 signed-in user's interactive Windows session. Node is optional: a Go helper (for
 example a future `wanctl act` integration) can spawn the same executable. OpenCU
 neither imports nor invokes wanctl. The PE uses the Windows GUI subsystem, creates
-no console, dialog or visible window, and only creates message-only windows for
+no console or dialogs. A nonactivating status banner is visible during input and
+briefly afterwards; Windows excludes it from captures. Message-only windows handle
 input monitoring and clipboard ownership. It exposes no network listener.
 
 Each UTF-8 JSON line is `{id, method, params}`; each flushed response is either
@@ -21,9 +22,9 @@ from multiple engine connections. No caller/account/signing-team allowlist exist
 Example requests (send one line, await its reply before sending the next):
 
 ```json
-{"id":1,"method":"get_app_state","params":{"app":"芒果TV.exe","includeScreenshot":true}}
-{"id":2,"method":"click","params":{"app":"芒果TV.exe","x":400,"y":250}}
-{"id":3,"method":"get_app_state","params":{"app":"芒果TV.exe","includeScreenshot":true}}
+{"id":1,"method":"get_app_state","params":{"app":"Example.exe","includeScreenshot":true}}
+{"id":2,"method":"click","params":{"app":"Example.exe","x":400,"y":250}}
+{"id":3,"method":"get_app_state","params":{"app":"Example.exe","includeScreenshot":true}}
 ```
 
 `list_apps`, `get_app_state`, `activate_app` and input names/parameters match the
@@ -37,15 +38,17 @@ foreground-only operation, and no account/proprietary-runtime requirement.
 
 `list_apps` includes processes with visible, non-cloaked top-level windows and
 user/common Start-menu `.lnk` entries. Records use `id`, `displayName`, `path`,
-`isRunning`, and where available `pid`/`pids`. Tool windows and the shell desktop
-are excluded. Start-menu inventory can include shell/packaged shortcuts whose
+`isRunning`, and where available `pid`/`pids`. The shell desktop is excluded. Start-menu inventory can include shell/packaged shortcuts whose
 launch target cannot be resolved; those fail explicitly on launch.
 
 App selection accepts case-insensitive executable path, process name with or
 without `.exe`, `pid:<pid>`, exact title or unique title fragment, and exact
-Start-menu shortcut name/path. Ambiguous processes, titles or shortcut names are
-rejected. Process/path selection observes all of that process's listed windows;
-title selection observes that window. The returned canonical `app.id` is
+Start-menu shortcut name/path. Matches across different processes or duplicate
+shortcuts are rejected. Same-process title matches form one window set, not an
+ambiguity. A non-tool, unowned content window takes priority over utility windows,
+then larger area wins; equal ranks retain Z order. The chosen HWND and class are
+shown in the observation. Process/path selection observes its listed windows;
+title selection restricts that set. The returned canonical `app.id` is
 `pid:<pid>`, so isolated Chrome profiles do not share an ambiguous executable ID.
 Process creation time and HWND ownership are revalidated before input.
 
@@ -62,7 +65,9 @@ is `{data:<base64>, mimeType:"image/png", width, height}`. The raw UIA tree uses
 with `disabled`/`offscreen` flags. Unnamed controls include physical screen bounds
 `(x,y,width,height)` and class names. Empty structural containers are omitted but
 their children are visited; unnamed leaves remain, including Qt IconButton and
-CEF's Chrome Legacy Window. Password values are omitted. Listing caps are 1,200
+CEF's Chrome Legacy Window. Metadata and patterns are fetched with UIA cache
+requests. Password values/names and descendants are omitted; an unreadable
+password flag is treated as protected, not as false. Listing caps are 1,200
 nodes, 8,000 inspected nodes, depth 120, 180,000 bytes and an 8-second traversal
 budget, with explicit truncation text. Individual UIA calls have 2-second timeout
 settings; a misbehaving provider can still overrun the traversal budget.
@@ -70,10 +75,12 @@ settings; a misbehaving provider can still overrun the traversal budget.
 The first listed window is the screenshot and initial keyboard target. Indexed
 input retains its own top-level window, which becomes the keyboard target for
 following input in the same batch. Use a unique title to select a specific window.
-Capture uses full-window PrintWindow (`PW_RENDERFULLCONTENT`) and WIC PNG encoding.
-No screen-wide fallback can accidentally capture another app. Minimized/failed
-captures return tree text with a reason and no usable image. GPU video/DRM/CEF may
-return blank or incomplete pixels despite API success; this requires real checks.
+Capture uses Windows.Graphics.Capture for the selected HWND, with D3D11 hardware
+or WARP readback and WIC PNG encoding. Physical bounds use DWM's visible frame;
+covering windows never supply replacement pixels. Cursor capture is disabled;
+the standard OS capture border is retained without a permission prompt. No
+screen-wide fallback can accidentally capture another app. Minimized/failed
+captures return a reason and no image. Protected video can remain unavailable.
 Chrome/Edge are traversed through native UIA without changing browser flags.
 
 ## Input and engine-side safety
@@ -89,13 +96,24 @@ released on failure, including PERSON_ACTIVE; no remaining action is replayed.
 
 A dedicated invisible Raw Input thread watches keyboard/mouse device events.
 Only source metadata is inspected; no human key text or pointer coordinates are
-recorded. Engine-tagged input is exempt; unrecognized keyboard/mouse input,
+recorded. Escape key metadata is also inspected for the stop control.
+Engine-tagged input is exempt; unrecognized keyboard/mouse input,
 including zero-device touchpad events, stops the call. Already-held keys/buttons
 refuse a call. A bounded message drain and request/ack fence before each input and
 at completion detect activity queued during the last API call. A failed monitor
 or a 500 ms response timeout fails closed. Raw Input delivery, precision touchpads,
-RDP and injected-input attribution need Windows acceptance; no visible heartbeat
-window or timeout-sensitive low-level hook is used.
+RDP and injected-input attribution need Windows acceptance. The indicator runs on
+a separate UI thread, with acknowledgement/visibility checks before input. It is
+not the physical-input monitor's heartbeat.
+
+Physical Escape latches `USER_STOPPED` for this engine connection. In-flight input
+stops at its next safety check, held engine keys/buttons are released, and all
+later input/activation is refused. Existing apps can still be observed, but reads
+cannot launch an app or clear the latch. There is no reset method; a host must not
+reconnect automatically to defeat the person's stop. Escape detection has both a
+low-level hook (ignoring injected events) and a Raw Input path. Ordinary physical
+input returns `PERSON_ACTIVE`; the next input needs a fresh observation. No
+system cursor scheme is changed and no foreground-lock bypass is used.
 
 Session 0, disconnected/locked sessions, a non-Default input/thread desktop, or
 an unreadable session/desktop return SCREEN_LOCKED. The engine does not unlock,
@@ -137,6 +155,8 @@ can represent partial completion; re-observe instead of automatically retrying.
 
 | Code | Meaning |
 | --- | --- |
+| `USER_STOPPED` | Physical Escape disabled all further input on this connection. |
+| `INDICATOR_UNAVAILABLE` | Required visible indication could not be shown/verified. |
 | `PERSON_ACTIVE` | Human/foreign device input arrived or a key/button was held; stop. |
 | `SAFETY_MONITOR_UNAVAILABLE` | Input monitoring failed or did not acknowledge in time. |
 | `SCREEN_LOCKED` | Locked, secure, disconnected or inaccessible interactive desktop/session. |
@@ -185,4 +205,4 @@ API references: [UIA raw tree](https://learn.microsoft.com/en-us/windows/win32/w
 [SendInput and UIPI](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-sendinput),
 [foreground restrictions](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setforegroundwindow),
 [Raw Input](https://learn.microsoft.com/en-us/windows/win32/inputdev/raw-input),
-[PrintWindow](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-printwindow).
+[window capture](https://learn.microsoft.com/en-us/windows/win32/api/windows.graphics.capture.interop/nf-windows-graphics-capture-interop-igraphicscaptureiteminterop-createforwindow).
