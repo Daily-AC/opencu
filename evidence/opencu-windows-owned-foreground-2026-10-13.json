@@ -1,0 +1,187 @@
+{
+  "test": "windows-owned-foreground-regression",
+  "source_commit": "148a91ddd2b133384f3246c565de19f510b52fc6",
+  "engine_sha256": "00a9ad6885d45e8a5193615cb1287ffdb4e5c67d067ffa5994cc4f140c2f64ed",
+  "baseline": {
+    "timestamp": "2026-10-13T05:55:04.389Z",
+    "engine_sha256": "a2323e40bf498ab4329eb2d2f7230e866a3bb05bc3f351a378c9fd5c6d6a73fd",
+    "ownedForeground": {
+      "sameProcess": true,
+      "sameRootOwner": true,
+      "distinctHwnd": true
+    },
+    "action": "indexed click on main-window counter with its owned control overlay holding foreground",
+    "error_code": "ACTIVATION_FAILED",
+    "message": "Action 1 failed: Windows refused foreground activation. No input was sent; bring the target forward and read state again. Earlier actions may have run. Read state before retrying.",
+    "expected_failure": true,
+    "temporary_processes_closed": true
+  },
+  "consecutive_runs": 3,
+  "runs": [
+    {
+      "test": "windows-foreground-fixtures",
+      "timestamp": "2026-10-13T06:06:25.575Z",
+      "ok": true,
+      "engine_sha256": "00a9ad6885d45e8a5193615cb1287ffdb4e5c67d067ffa5994cc4f140c2f64ed",
+      "checks": [
+        "tree read and physical-size window PNG",
+        "native password text is redacted",
+        "covered-window capture preserves target pixels",
+        "indexed click",
+        "key chord and Unicode typing",
+        "visible operation indicator is excluded from capture",
+        "target pixels remain intact beneath the visible indicator",
+        "engine-injected Escape does not trigger the physical stop latch",
+        "plain-text paste and original clipboard digest restored",
+        "RangeValue and exposed secondary action",
+        "scroll",
+        "fresh screenshot coordinate click",
+        "engine refuses moved-window coordinates before input",
+        "unsupported operation refused",
+        "owned foreground overlay permits main-window indexed click and activation without stealing focus",
+        "keyboard and literal Unicode input use the foreground family focus",
+        "coordinate hit testing accepts the owned overlay at the main-window point",
+        "cold connection refuses different-process background input and activation without input",
+        "unrelated foreground transition stops in-flight input and releases held keys",
+        "same-process unrelated foreground window is refused",
+        "owned non-popup window is accepted through the actual owner chain",
+        "web password value is redacted",
+        "Chrome native UIA reaches local page text and links without accessibility flags",
+        "Chrome indexed link action",
+        "Chrome literal Unicode typing preserves spaces and dispatches input",
+        "all temporary fixture and browser processes closed"
+      ],
+      "ownedForeground": {
+        "sameProcess": true,
+        "sameRootOwner": true,
+        "distinctHwnd": true
+      },
+      "indicator": {
+        "visible": true,
+        "affinity": 17,
+        "readable": true
+      }
+    },
+    {
+      "test": "windows-foreground-fixtures",
+      "timestamp": "2026-10-13T06:07:13.528Z",
+      "ok": true,
+      "engine_sha256": "00a9ad6885d45e8a5193615cb1287ffdb4e5c67d067ffa5994cc4f140c2f64ed",
+      "checks": [
+        "tree read and physical-size window PNG",
+        "native password text is redacted",
+        "covered-window capture preserves target pixels",
+        "indexed click",
+        "key chord and Unicode typing",
+        "visible operation indicator is excluded from capture",
+        "target pixels remain intact beneath the visible indicator",
+        "engine-injected Escape does not trigger the physical stop latch",
+        "plain-text paste and original clipboard digest restored",
+        "RangeValue and exposed secondary action",
+        "scroll",
+        "fresh screenshot coordinate click",
+        "engine refuses moved-window coordinates before input",
+        "unsupported operation refused",
+        "owned foreground overlay permits main-window indexed click and activation without stealing focus",
+        "keyboard and literal Unicode input use the foreground family focus",
+        "coordinate hit testing accepts the owned overlay at the main-window point",
+        "cold connection refuses different-process background input and activation without input",
+        "unrelated foreground transition stops in-flight input and releases held keys",
+        "same-process unrelated foreground window is refused",
+        "owned non-popup window is accepted through the actual owner chain",
+        "web password value is redacted",
+        "Chrome native UIA reaches local page text and links without accessibility flags",
+        "Chrome indexed link action",
+        "Chrome literal Unicode typing preserves spaces and dispatches input",
+        "all temporary fixture and browser processes closed"
+      ],
+      "ownedForeground": {
+        "sameProcess": true,
+        "sameRootOwner": true,
+        "distinctHwnd": true
+      },
+      "indicator": {
+        "visible": true,
+        "affinity": 17,
+        "readable": true
+      }
+    },
+    {
+      "test": "windows-foreground-fixtures",
+      "timestamp": "2026-10-13T06:08:11.522Z",
+      "ok": true,
+      "engine_sha256": "00a9ad6885d45e8a5193615cb1287ffdb4e5c67d067ffa5994cc4f140c2f64ed",
+      "checks": [
+        "tree read and physical-size window PNG",
+        "native password text is redacted",
+        "covered-window capture preserves target pixels",
+        "indexed click",
+        "key chord and Unicode typing",
+        "visible operation indicator is excluded from capture",
+        "target pixels remain intact beneath the visible indicator",
+        "engine-injected Escape does not trigger the physical stop latch",
+        "plain-text paste and original clipboard digest restored",
+        "RangeValue and exposed secondary action",
+        "scroll",
+        "fresh screenshot coordinate click",
+        "engine refuses moved-window coordinates before input",
+        "unsupported operation refused",
+        "owned foreground overlay permits main-window indexed click and activation without stealing focus",
+        "keyboard and literal Unicode input use the foreground family focus",
+        "coordinate hit testing accepts the owned overlay at the main-window point",
+        "cold connection refuses different-process background input and activation without input",
+        "unrelated foreground transition stops in-flight input and releases held keys",
+        "same-process unrelated foreground window is refused",
+        "owned non-popup window is accepted through the actual owner chain",
+        "web password value is redacted",
+        "Chrome native UIA reaches local page text and links without accessibility flags",
+        "Chrome indexed link action",
+        "Chrome literal Unicode typing preserves spaces and dispatches input",
+        "all temporary fixture and browser processes closed"
+      ],
+      "ownedForeground": {
+        "sameProcess": true,
+        "sameRootOwner": true,
+        "distinctHwnd": true
+      },
+      "indicator": {
+        "visible": true,
+        "affinity": 17,
+        "readable": true
+      }
+    }
+  ],
+  "local_validation": {
+    "cargo_test": {
+      "passed": 9
+    },
+    "npm_test": {
+      "passed": 19
+    },
+    "test_native_py": {
+      "passed": 34
+    },
+    "windows_cross_compile": "passed"
+  },
+  "desktop_preflight": {
+    "local_time": "2026-10-13T13:51:21+08:00",
+    "idle_milliseconds": 645859,
+    "minimum_idle_milliseconds": 300000,
+    "allowed_local_hours": "09:00-18:00"
+  },
+  "cleanup": {
+    "remaining_temporary_processes": 0,
+    "remaining_temporary_profiles": 0
+  },
+  "deployment": {
+    "sha256_matches_local_build": true,
+    "existing_src_unchanged": true
+  },
+  "scope": "Disposable native fixtures and local HTML in an isolated Chrome profile only; no real-app input.",
+  "redactions": [
+    "machine paths",
+    "process IDs and window handles",
+    "keyboard layout metadata",
+    "clipboard digests"
+  ]
+}
