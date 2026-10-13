@@ -57,6 +57,7 @@ pub struct Clipboard {
     hwnd: HWND,
     original: Vec<(u32, Global)>,
     sequence: u32,
+    payload: Vec<u8>,
     changed: bool,
 }
 impl Clipboard {
@@ -79,6 +80,7 @@ impl Clipboard {
             hwnd,
             original: vec![],
             sequence: 0,
+            payload: vec![],
             changed: false,
         };
         let opened = open(hwnd)?;
@@ -134,6 +136,7 @@ impl Clipboard {
             .flat_map(u16::to_le_bytes)
             .collect();
         let data = alloc(&bytes)?;
+        this.payload = bytes;
         if GetClipboardSequenceNumber() != before {
             return Err(Error::new(
                 "CLIPBOARD_CHANGED",
@@ -144,8 +147,8 @@ impl Clipboard {
         this.changed = true;
         this.sequence = GetClipboardSequenceNumber();
         let result = put(13, data);
-        this.sequence = GetClipboardSequenceNumber();
         drop(opened);
+        this.sequence = GetClipboardSequenceNumber();
         if let Err(e) = result {
             this.restore()?;
             return Err(e);
@@ -162,7 +165,30 @@ impl Clipboard {
                 "Paste may have run, but the clipboard is busy and could not be restored",
             )
         })?;
-        if GetClipboardSequenceNumber() != self.sequence {
+        let unchanged = GetClipboardSequenceNumber() == self.sequence;
+        let owner = GetClipboardOwner().ok() == Some(self.hwnd);
+        let same_text = if owner {
+            GetClipboardData(13).ok().is_some_and(|h| {
+                let global = HGLOBAL(h.0);
+                if GlobalSize(global) < self.payload.len() {
+                    return false;
+                }
+                let p = GlobalLock(global);
+                if p.is_null() {
+                    return false;
+                }
+                let same =
+                    std::slice::from_raw_parts(p as *const u8, self.payload.len()) == self.payload;
+                let _ = GlobalUnlock(global);
+                same
+            })
+        } else {
+            false
+        };
+        // Windows may synthesize CF_TEXT/CF_OEMTEXT/CF_LOCALE while the app
+        // consumes our Unicode text. That advances the sequence without a copy
+        // by another application; retain the owner and payload checks as well.
+        if !opencu_engine::restore_clipboard(unchanged, owner, same_text) {
             self.changed = false;
             return Ok(());
         }
