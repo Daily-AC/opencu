@@ -9,7 +9,7 @@ import ApplicationServices
 @MainActor
 final class BackgroundFocus {
     private let target: TargetApp
-    let windowID: CGWindowID
+    let windowID: CGWindowID?
     private let deactivate: CGEvent
     private let removeKeyFocus: CGEvent
     private let activate: CGEvent
@@ -21,15 +21,15 @@ final class BackgroundFocus {
 
     init(snapshot: WindowSnapshot) throws {
         target = snapshot.app
-        guard let windowID = snapshot.windowID else {
+        guard snapshot.window == nil || snapshot.windowID != nil else {
             throw OpenCUError("WINDOW_ID_UNAVAILABLE", "Background input requires the exact target window. Read its state again. No input was sent.")
         }
-        self.windowID = windowID
+        self.windowID = snapshot.windowID
         // Allocate cleanup events before notifying the target, so allocation
         // failure cannot leave synthetic activation behind.
         deactivate = try Self.notification(type: 13, subtype: 2)
         removeKeyFocus = try Self.notification(type: 21, subtype: 0x4000)
-        activate = try Self.notification(type: 13, subtype: 1, window: windowID)
+        activate = try Self.notification(type: 13, subtype: 1, window: snapshot.windowID ?? 0)
         returnKeyFocus = try Self.notification(type: 21, subtype: Int16(bitPattern: 0x8000))
         observer = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor [weak self] in self?.needsRefresh = true }

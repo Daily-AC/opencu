@@ -50,35 +50,32 @@ final class InputController {
         try requireAccessibility()
         try Task.checkCancellation()
         try validate(snapshot)
-        let needsFocus = ["click", "drag", "press_key", "type_text", "paste", "scroll"].contains(method)
-        if needsFocus {
-            if backgroundFocus?.pid != snapshot.app.pid || backgroundFocus?.windowID != snapshot.windowID {
-                releaseFocus()
-                backgroundFocus = try BackgroundFocus(snapshot: snapshot)
-            }
-            if backgroundFocus?.refresh() == true { try await pause(0.025) }
-        }
         switch method {
         case "click": return try await click(args, snapshot)
         case "drag": try await drag(args, snapshot)
         case "press_key":
-            try validateKeyboardWindow(snapshot)
+            try validateKeyboardDelivery(snapshot)
+            try await prepareFocus(snapshot)
             let chord = try OpenCUKeyChord.parse(requiredString(args, "key", allowEmpty: true))
             try await send(chord, duration: duration(args), snapshot: snapshot)
         case "type_text":
-            try validateKeyboardWindow(snapshot)
+            try requireTextWindow(snapshot)
+            try validateKeyboardDelivery(snapshot)
+            try await prepareFocus(snapshot)
             try await typeText(requiredString(args, "text", allowEmpty: true), snapshot)
         case "paste":
-            try validateKeyboardWindow(snapshot)
+            try requireTextWindow(snapshot)
+            try validateKeyboardDelivery(snapshot)
+            try await prepareFocus(snapshot)
             try await paste(args, snapshot)
-        case "scroll": try scroll(args, snapshot)
+        case "scroll": try await scroll(args, snapshot)
         case "set_value": try setValue(args, snapshot)
         case "select_text": try selectText(args, snapshot)
         case "perform_secondary_action":
             let element = try indexedElement(args, snapshot)
-            let action = try requiredString(args, "action")
-            guard try actionNames(element).contains(action) else {
-                throw OpenCUError("UNSUPPORTED_ACTION", "The element does not expose \(action); read the current state for its available actions")
+            let requested = try requiredString(args, "action")
+            guard let action = axResolveAction(requested, in: try actionNames(element)) else {
+                throw OpenCUError("UNSUPPORTED_ACTION", "The element does not expose \(requested); read the current state for its available actions")
             }
             return try await perform(action, on: element)
         default: throw OpenCUError("UNKNOWN_METHOD", "Unknown input method: \(method)")
@@ -92,34 +89,102 @@ final class InputController {
               running.launchDate == snapshot.app.application.launchDate else {
             throw OpenCUError("STALE_APPLICATION", "The observed application exited or was replaced; get a new app state")
         }
-        try validateElement(snapshot.window, pid: snapshot.app.pid)
+        let application = AXUIElementCreateApplication(snapshot.app.pid)
+        if let window = snapshot.window {
+            guard let selected = axSelectedWindow(application), CFEqual(selected, window) else {
+                throw OpenCUError("WINDOW_FOCUS_CHANGED", "The target application's selected window changed; get a new app state")
+            }
+            try validateLiveElement(window)
+        } else if axSelectedWindow(application) != nil || !axWindows(application).isEmpty {
+            throw OpenCUError("WINDOW_FOCUS_CHANGED", "The application now has a window; get a new app state before sending input")
+        }
     }
 
-    private func validateElement(_ element: AXUIElement, pid: pid_t) throws {
-        var owner: pid_t = 0
-        try check(AXUIElementGetPid(element, &owner), operation: "validate accessibility element")
-        guard owner == pid else { throw OpenCUError("STALE_ELEMENT", "The observed element no longer belongs to the target application") }
+    private func validateLiveElement(_ element: AXUIElement) throws {
         var role: CFTypeRef?
         try check(AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &role), operation: "validate accessibility element")
         guard role != nil else { throw OpenCUError("STALE_ELEMENT", "The observed accessibility element is no longer available") }
     }
 
-    private func validateKeyboardWindow(_ snapshot: WindowSnapshot) throws {
+    private func requireTextWindow(_ snapshot: WindowSnapshot) throws {
+        guard snapshot.window != nil else {
+            throw OpenCUError("NO_ACCESSIBLE_WINDOW", "Typing and paste require a window; use a menu command or press_key shortcut to open one")
+        }
+    }
+
+    /// AX attachment authorizes indexed actions, but does not make AppKit's
+    /// background keyboard delivery work across a remote-view process boundary.
+    /// Use WindowServer foreground state, never synthetic NSRunningApplication.isActive.
+    private func validateKeyboardDelivery(_ snapshot: WindowSnapshot) throws {
         try validate(snapshot)
         let application = AXUIElementCreateApplication(snapshot.app.pid)
-        if let current = axValue(application, kAXFocusedWindowAttribute), CFGetTypeID(current) == AXUIElementGetTypeID(),
-           !CFEqual(current, snapshot.window) {
-            throw OpenCUError("WINDOW_FOCUS_CHANGED", "The target application's focused window changed; get a new app state before typing")
+        let focused = axElement(application, kAXFocusedUIElementAttribute)
+        var focusedPID: pid_t?
+        if let focused {
+            var owner: pid_t = 0
+            if AXUIElementGetPid(focused, &owner) == .success, owner > 0 { focusedPID = owner }
         }
+        try Self.requireKeyboardDelivery(isFrontmost: snapshot.app.isFrontmost,
+                                         isFilePanel: isFilePanelFocus(focused, snapshot),
+                                         targetPID: snapshot.app.pid, focusedPID: focusedPID)
+    }
+
+    // On macOS 26 a remote file panel's AX proxy can report the host PID. The
+    // panel identifiers are present in both the macOS 15 VM and macOS 26 traces.
+    // This is a refusal boundary, never a grant of access to another AX tree.
+    static func isFilePanel(role: String?, identifier: String?) -> Bool {
+        axIsWindowRole(role) && (identifier == "save-panel" || identifier == "open-panel")
+    }
+
+    private func isFilePanelFocus(_ focused: AXUIElement?, _ snapshot: WindowSnapshot) -> Bool {
+        func panel(_ element: AXUIElement) -> Bool {
+            Self.isFilePanel(role: axString(element, kAXRoleAttribute),
+                             identifier: axString(element, kAXIdentifierAttribute))
+        }
+        guard let window = snapshot.window else { return false }
+        if panel(window) { return true }
+        // Some apps select their document window rather than the attached sheet.
+        // Only consider the focused control's recorded, still-live window path;
+        // a stale panel elsewhere in the snapshot must not block local typing.
+        guard let focused, let path = snapshot.elementPaths.values.first(where: {
+            $0.last.map { CFEqual($0, focused) } == true
+        }), attachedPath(path, to: [window], equal: { CFEqual($0, $1) }, children: axChildren) else { return false }
+        return path.contains(where: panel)
+    }
+
+    static func requireKeyboardDelivery(isFrontmost: Bool, isFilePanel: Bool,
+                                        targetPID: pid_t, focusedPID: pid_t?) throws {
+        // Foreground panels retain the proven PID-targeted path. Unknown focus
+        // also keeps it unless the selected window/path identifies a file panel.
+        if isFrontmost { return }
+        let alternatives = "Use indexed set_value or exposed AX actions on the panel controls, or explicitly use activate_app before keyboard input."
+        if isFilePanel || focusedPID.map({ $0 != targetPID }) == true {
+            throw OpenCUError("BACKGROUND_REMOTE_FOCUS", "Background keyboard input to system Open/Save panels or remote-process focused controls is not supported. " + alternatives)
+        }
+    }
+
+    private func prepareFocus(_ snapshot: WindowSnapshot) async throws {
+        if backgroundFocus?.pid != snapshot.app.pid || backgroundFocus?.windowID != snapshot.windowID {
+            releaseFocus()
+            backgroundFocus = try BackgroundFocus(snapshot: snapshot)
+        }
+        if backgroundFocus?.refresh() == true { try await pause(0.025) }
+        try validate(snapshot)
     }
 
     private func indexedElement(_ args: Arguments, _ snapshot: WindowSnapshot) throws -> AXUIElement {
         let number = try finiteNumber(args, "element_index")
         guard number.rounded(.towardZero) == number, number >= 0, number < Double(Int.max),
-              let element = snapshot.elements[Int(number)] else {
+              let element = snapshot.elements[Int(number)], let path = snapshot.elementPaths[Int(number)],
+              let last = path.last, CFEqual(last, element) else {
             throw OpenCUError("UNKNOWN_ELEMENT", "element_index must identify an element in the latest app state")
         }
-        try validateElement(element, pid: snapshot.app.pid)
+        let application = AXUIElementCreateApplication(snapshot.app.pid)
+        let roots = [snapshot.window, axElement(application, kAXMenuBarAttribute)].compactMap { $0 }
+        guard attachedPath(path, to: roots, equal: { CFEqual($0, $1) }, children: axChildren) else {
+            throw OpenCUError("STALE_ELEMENT", "The observed element is no longer attached to the target window or menu bar; get a new app state")
+        }
+        try validateLiveElement(element)
         return element
     }
 
@@ -134,7 +199,7 @@ final class InputController {
         guard let width = snapshot.screenshotWidth, let height = snapshot.screenshotHeight, width > 0, height > 0 else {
             throw OpenCUError("SCREENSHOT_REQUIRED", "Coordinate input requires a screenshot from the latest app state")
         }
-        guard let current = axRect(snapshot.window), sameBounds(current, snapshot.bounds) else {
+        guard let targetWindow = snapshot.window, let current = axRect(targetWindow), sameBounds(current, snapshot.bounds) else {
             throw OpenCUError("STALE_SCREENSHOT", "The observed window moved or resized; get a new screenshot before coordinate input")
         }
         let pixelX = try finiteNumber(args, x), pixelY = try finiteNumber(args, y)
@@ -190,18 +255,38 @@ final class InputController {
         let chord = try args["key"].map { _ in try OpenCUKeyChord.parse(requiredString(args, "key")) }
         if let element, button == .left, count == 1, chord == nil, args["duration"] == nil,
            try actionNames(element).contains(kAXPressAction) {
+            // AX actions need no WindowServer ID. For a real background window,
+            // retain key-window activation so AppKit validates window commands.
+            if snapshot.windowID != nil { try await prepareFocus(snapshot) }
+            _ = try indexedElement(args, snapshot)
             return try await perform(kAXPressAction, on: element)
         }
         if let element, button == .left,
            [kAXTextFieldRole, kAXTextAreaRole, kAXComboBoxRole].contains(axString(element, kAXRoleAttribute) ?? "") {
+            if snapshot.windowID != nil { try await prepareFocus(snapshot) }
+            _ = try indexedElement(args, snapshot)
             var focusSettable = DarwinBoolean(false)
             if AXUIElementIsAttributeSettable(element, kAXFocusedAttribute as CFString, &focusSettable) == .success,
                focusSettable.boolValue {
                 try check(AXUIElementSetAttributeValue(element, kAXFocusedAttribute as CFString, kCFBooleanTrue), operation: "focus text control")
+                var owner: pid_t = 0
+                if AXUIElementGetPid(element, &owner) == .success, owner != snapshot.app.pid,
+                   count == 1, chord == nil, args["duration"] == nil {
+                    // Remote panel text controls accept AX focus. Never send a
+                    // pointer event to the host window at a remote control's point.
+                    return .none
+                }
+            }
+        }
+        if let element {
+            var owner: pid_t = 0
+            guard AXUIElementGetPid(element, &owner) == .success, owner == snapshot.app.pid else {
+                throw OpenCUError("TARGETED_MOUSE_UNAVAILABLE", "This remote control requires an exposed accessibility action or set_value; no pointer input was sent")
             }
         }
         let location = try coordinate ?? elementPoint(element!)
         let window = try mouseWindow(snapshot)
+        try await prepareFocus(snapshot)
         let source = try eventSource()
         let held = try holdChord(chord, source: source, pid: snapshot.app.pid)
         defer { held.release() }
@@ -263,6 +348,7 @@ final class InputController {
         let start = try point(args, snapshot, x: "from_x", y: "from_y")
         let end = try point(args, snapshot, x: "to_x", y: "to_y")
         let window = try mouseWindow(snapshot)
+        try await prepareFocus(snapshot)
         let source = try eventSource()
         let down = try mouseEvent(.leftMouseDown, at: start, button: .left, source: source, window: window)
         var up = try mouseEvent(.leftMouseUp, at: start, button: .left, source: source, window: window)
@@ -285,8 +371,14 @@ final class InputController {
         }
     }
 
-    private func scroll(_ args: Arguments, _ snapshot: WindowSnapshot) throws {
+    private func scroll(_ args: Arguments, _ snapshot: WindowSnapshot) async throws {
         let (element, coordinate) = try target(args, snapshot)
+        if let element {
+            var owner: pid_t = 0
+            guard AXUIElementGetPid(element, &owner) == .success, owner == snapshot.app.pid else {
+                throw OpenCUError("TARGETED_MOUSE_UNAVAILABLE", "This remote control requires an exposed accessibility action or set_value; no pointer input was sent")
+            }
+        }
         let location = try coordinate ?? elementPoint(element!)
         let direction = try requiredString(args, "direction").lowercased()
         guard ["up", "down", "left", "right", "u", "d", "l", "r"].contains(direction) else {
@@ -303,6 +395,7 @@ final class InputController {
         let positive = ["up", "left", "u", "l"].contains(direction)
         let delta = Int32(max(1, distance.rounded())) * (positive ? 1 : -1)
         let window = try mouseWindow(snapshot)
+        try await prepareFocus(snapshot)
         let source = try eventSource()
         guard let wheel = CGEvent(scrollWheelEvent2Source: source, units: .pixel, wheelCount: 2,
                                   wheel1: horizontal ? 0 : delta, wheel2: horizontal ? delta : 0, wheel3: 0) else {
@@ -450,6 +543,7 @@ final class InputController {
             throw OpenCUError("CLIPBOARD_CHANGED", "The clipboard changed while it was being preserved; paste was not sent")
         }
         try Task.checkCancellation()
+        try validateKeyboardDelivery(snapshot)
         clipboard.clearContents()
         var ownedChangeCount = clipboard.changeCount
         defer {
@@ -469,7 +563,7 @@ final class InputController {
         let written = clipboard.writeObjects([item])
         ownedChangeCount = clipboard.changeCount
         guard written else { throw OpenCUError("CLIPBOARD_WRITE_FAILED", "Could not write the paste text") }
-        try validateKeyboardWindow(snapshot)
+        try validate(snapshot)
         try await send(pasteChord, duration: 0, snapshot: snapshot)
         // Posting is asynchronous. Allow the application's paste command to consume
         // its data before restoring; the dispatcher observes the actual result.
@@ -544,7 +638,7 @@ final class InputController {
         let source = try eventSource()
         for character in text {
             try Task.checkCancellation()
-            try validateKeyboardWindow(snapshot)
+            try validateKeyboardDelivery(snapshot)
             if character == "\n" || character == "\r" || character == "\r\n" {
                 try await send(OpenCUKeyChord.parse("Return"), duration: 0, snapshot: snapshot)
             } else if character == "\t" {
@@ -559,6 +653,7 @@ final class InputController {
     }
 
     private func send(_ chord: OpenCUKeyChord, duration: Double, snapshot: WindowSnapshot) async throws {
+        try validateKeyboardDelivery(snapshot)
         let source = try eventSource()
         let held = try holdChord(chord, source: source, pid: snapshot.app.pid)
         defer { held.release() }
@@ -618,7 +713,7 @@ final class InputController {
         guard let id = snapshot.windowID, id != kCGNullWindowID else {
             throw OpenCUError("WINDOW_ID_UNAVAILABLE", "Mouse input requires a uniquely identified target window. Read the app state again or use an exposed accessibility action. No input was sent.")
         }
-        guard let current = axRect(snapshot.window),
+        guard let targetWindow = snapshot.window, let current = axRect(targetWindow),
               current.width > 0, current.height > 0,
               let windows = CGWindowListCopyWindowInfo(.optionIncludingWindow, id) as? [[String: Any]],
               let record = windows.first(where: { ($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value == id }),
