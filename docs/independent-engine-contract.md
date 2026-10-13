@@ -82,13 +82,27 @@ Indexed AXPress, set_value and select_text use the authorized AX element directl
 A simple indexed click on an editable remote control uses its settable AXFocused
 attribute. This focus operation alone does not establish background keyboard
 delivery. Before `press_key`, `type_text` or `paste` sends any events, the engine
-reads the live `AXFocusedUIElement` owner. If that PID differs from the target's
-PID and the target is not the system's frontmost application, it refuses with
-`BACKGROUND_REMOTE_FOCUS`. The message directs callers to indexed `set_value`,
-exposed AX actions, or explicit `activate_app` for keyboard input. When the focused
-owner cannot be read (some apps report no focused element in the background, and
-windowless apps have none), input keeps the existing PID-targeted path, so
-application shortcuts still work. The frontmost remote-panel path retains its existing PID-targeted input.
+reads the live focused-element owner and the selected window's role/AXIdentifier.
+In the background it refuses with `BACKGROUND_REMOTE_FOCUS` if either:
+
+- The focused owner is positively a different PID; or
+- The selected AXWindow/AXSheet has identifier `save-panel` or `open-panel`, or a
+  window/sheet with one of those identifiers occurs on the focused element's
+  recorded `AXChildren` path, revalidated against the currently selected window.
+
+The second rule is deliberately about system file-panel identity, not a claim
+that AX exposes the actual hosting process. On macOS 26 the proxy can report the
+host PID. It also works without a readable focused element when the selected
+root itself identifies the panel. Identifiers on unrelated windows, stale paths,
+ordinary text controls or running service processes do not qualify. This is only
+a keyboard refusal rule; it never authorizes an indexed action. A local custom
+window/sheet using these system panel identifiers will also be refused in the
+background. Ordinary local text controls/sheets without them keep their existing
+background input behavior, including when their focused owner is unreadable.
+
+The message directs callers to indexed `set_value`, exposed AX actions, or
+explicit `activate_app` for keyboard input. Foreground keyboard input retains the
+existing PID-targeted path even with these panel identifiers or a different PID.
 Synthetic AppKit activation is not foreground status. The guard runs before
 synthetic focus, again before each character/chord, and before paste changes the
 clipboard. If focus changes during a multi-character operation, input already
@@ -118,7 +132,7 @@ inside a temporary directory, refusal of all three background remote keyboard
 methods (plus a keyboard batch), unchanged filename and clipboard change count,
 completion through `set_value` and AXPress, dismissal,
 window/app isolation, all windows closed, File > New / Open, Cmd+N / Cmd+O, and
-NSOpenPanel cancellation. Windowless shortcuts are checked by command counters,
+NSOpenPanel keyboard refusal and cancellation. Windowless shortcuts are checked by command counters,
 visible windows and observed controls, not just successful replies. The suite
 also checks the foreground sentinel and removes the
 temporary saved files. The attachment logic has non-GUI checks for foreign and
@@ -138,3 +152,25 @@ forwarding is not supported. The new refusal and the remainder of the panel and
 windowless GUI suite still require reviewer desktop acceptance; non-GUI tests do
 not verify delivery. Foreground support here is based on the VM evidence, not a
 new foreground run on the owner's Mac.
+
+Reviewer follow-up on macOS 26.6.2 (2026-10-14 00:45): three further runs again
+passed the ten old checks, but the PID-only refusal failed. Instrumentation found
+the filename AXTextField reporting the target PID. The saved fixture state shows
+an AXSheet with `AXIdentifier="save-panel"`. The macOS 15.6 VM traces also show
+that identifier on Save sheets, and `open-panel` on Open windows, despite panel
+controls reporting a separate PID there. These observed, nonlocalized panel
+identifiers now provide the second pre-send signal; no speculative remote-view
+attribute or service-name lookup is used. The suite asserts the panel identities,
+background refusal and unchanged field/clipboard, then saves via AX operations.
+Future OS versions exposing neither a remote PID nor these identifiers are outside
+this detection rule; no general post-input effect detector is claimed. Unknown
+focus in ordinary apps keeps the previous PID-targeted behavior so that input
+which worked before this change is not newly refused.
+
+Reviewer GUI run on macOS 26.6.2 (2026-10-14 00:55, owner away, foreground sentinel
+in front): after the suite waits for asynchronously opened windows in a fresh
+observation instead of the action's immediate reply, 10 consecutive runs passed all
+18 checks (about 40 s each), including the Open panel's `open-panel` identity and the
+windowless File > New / Open, Cmd+N / Cmd+O flows. One earlier run timed out waiting
+for the save to complete after AXPress on Save; it did not recur in the next 10
+runs, and the suite now prints the fixture state and tree if it does.

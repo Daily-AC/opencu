@@ -118,26 +118,48 @@ final class InputController {
     private func validateKeyboardDelivery(_ snapshot: WindowSnapshot) throws {
         try validate(snapshot)
         let application = AXUIElementCreateApplication(snapshot.app.pid)
+        let focused = axElement(application, kAXFocusedUIElementAttribute)
         var focusedPID: pid_t?
-        if let focused = axElement(application, kAXFocusedUIElementAttribute) {
+        if let focused {
             var owner: pid_t = 0
             if AXUIElementGetPid(focused, &owner) == .success, owner > 0 { focusedPID = owner }
         }
         try Self.requireKeyboardDelivery(isFrontmost: snapshot.app.isFrontmost,
-                                         hasWindow: snapshot.window != nil,
+                                         isFilePanel: isFilePanelFocus(focused, snapshot),
                                          targetPID: snapshot.app.pid, focusedPID: focusedPID)
     }
 
-    static func requireKeyboardDelivery(isFrontmost: Bool, hasWindow: Bool,
+    // On macOS 26 a remote file panel's AX proxy can report the host PID. The
+    // panel identifiers are present in both the macOS 15 VM and macOS 26 traces.
+    // This is a refusal boundary, never a grant of access to another AX tree.
+    static func isFilePanel(role: String?, identifier: String?) -> Bool {
+        axIsWindowRole(role) && (identifier == "save-panel" || identifier == "open-panel")
+    }
+
+    private func isFilePanelFocus(_ focused: AXUIElement?, _ snapshot: WindowSnapshot) -> Bool {
+        func panel(_ element: AXUIElement) -> Bool {
+            Self.isFilePanel(role: axString(element, kAXRoleAttribute),
+                             identifier: axString(element, kAXIdentifierAttribute))
+        }
+        guard let window = snapshot.window else { return false }
+        if panel(window) { return true }
+        // Some apps select their document window rather than the attached sheet.
+        // Only consider the focused control's recorded, still-live window path;
+        // a stale panel elsewhere in the snapshot must not block local typing.
+        guard let focused, let path = snapshot.elementPaths.values.first(where: {
+            $0.last.map { CFEqual($0, focused) } == true
+        }), attachedPath(path, to: [window], equal: { CFEqual($0, $1) }, children: axChildren) else { return false }
+        return path.contains(where: panel)
+    }
+
+    static func requireKeyboardDelivery(isFrontmost: Bool, isFilePanel: Bool,
                                         targetPID: pid_t, focusedPID: pid_t?) throws {
-        // Foreground remote panels have working keyboard delivery. Windowless
-        // app shortcuts do not require a focused control at all.
+        // Foreground panels retain the proven PID-targeted path. Unknown focus
+        // also keeps it unless the selected window/path identifies a file panel.
         if isFrontmost { return }
         let alternatives = "Use indexed set_value or exposed AX actions on the panel controls, or explicitly use activate_app before keyboard input."
-        // Only a positively remote focus is refused. Some apps report no focused
-        // element in the background, and their PID-targeted input still works.
-        if let focusedPID, focusedPID != targetPID {
-            throw OpenCUError("BACKGROUND_REMOTE_FOCUS", "Keyboard input cannot reach a remote-process focused control while the target app is in the background. " + alternatives)
+        if isFilePanel || focusedPID.map({ $0 != targetPID }) == true {
+            throw OpenCUError("BACKGROUND_REMOTE_FOCUS", "Background keyboard input to system Open/Save panels or remote-process focused controls is not supported. " + alternatives)
         }
     }
 
