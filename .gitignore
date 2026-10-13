@@ -7,3 +7,5 @@ dist/
 __pycache__/
 *.pyc
 evidence/*-private.*
+
+native-win/target/
