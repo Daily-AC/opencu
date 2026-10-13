@@ -378,7 +378,7 @@ impl Guard<'_> {
         desktop()?;
         if let Some(w) = &self.target {
             w.validate()?;
-            if GetForegroundWindow() != w.hwnd {
+            if !w.contains(GetForegroundWindow()) {
                 return Err(Error::new(
                     "WINDOW_FOCUS_CHANGED",
                     "Foreground window changed; remaining input stopped",
@@ -396,18 +396,18 @@ impl Guard<'_> {
         if IsIconic(w.hwnd).as_bool() {
             let _ = ShowWindowAsync(w.hwnd, SW_RESTORE);
         }
-        if GetForegroundWindow() != w.hwnd {
+        if !w.contains(GetForegroundWindow()) {
             let _ = SetForegroundWindow(w.hwnd);
             // Wait only for this one activation; never attach input queues or
             // synthesize Alt to defeat the foreground lock.
             let deadline = Instant::now() + Duration::from_millis(500);
-            while GetForegroundWindow() != w.hwnd && Instant::now() < deadline {
+            while !w.contains(GetForegroundWindow()) && Instant::now() < deadline {
                 self.check()?;
                 thread::sleep(Duration::from_millis(10));
             }
         }
         self.check()?;
-        if GetForegroundWindow() != w.hwnd {
+        if !w.contains(GetForegroundWindow()) {
             return Err(Error::new("ACTIVATION_FAILED","Windows refused foreground activation. No input was sent; bring the target forward and read state again."));
         }
         self.target = Some(w.clone());

@@ -29,6 +29,12 @@ pub struct Window {
     pub area: i64,
 }
 impl Window {
+    /// A child, owner or owned top-level window is part of the target only when
+    /// its process and live root owner match. Same PID alone is insufficient.
+    pub unsafe fn contains(&self, hwnd: HWND) -> bool {
+        let owner = ownership_root(self.hwnd, self.pid);
+        owner.is_some() && ownership_root(hwnd, self.pid) == owner
+    }
     pub unsafe fn capture_rect(&self) -> Result<Rect> {
         self.validate()?;
         let mut r = RECT::default();
@@ -62,6 +68,28 @@ impl Window {
         }
         Ok(())
     }
+}
+unsafe fn ownership_root(mut hwnd: HWND, target_pid: u32) -> Option<HWND> {
+    // GA_ROOTOWNER follows GetParent and misses owners of non-WS_POPUP
+    // top-level windows. Walk the actual GW_OWNER chain instead, normalizing
+    // children with GA_ROOT and rejecting any foreign-process link.
+    for _ in 0..64 {
+        let mut pid = 0;
+        GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        if !IsWindow(Some(hwnd)).as_bool() || pid != target_pid {
+            return None;
+        }
+        let root = GetAncestor(hwnd, GA_ROOT);
+        if root != hwnd {
+            hwnd = root;
+            continue;
+        }
+        match GetWindow(hwnd, GW_OWNER) {
+            Ok(owner) => hwnd = owner,
+            Err(_) => return Some(hwnd),
+        }
+    }
+    None
 }
 #[derive(Clone)]
 pub struct App {
