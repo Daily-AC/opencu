@@ -26,6 +26,22 @@ struct OpenCUInputLogicChecks {
             catch let error as OpenCUError { expect(error.code == code, "\(error.code) != \(code)") }
             catch { expect(false, "Unexpected error: \(error)") }
         }
+        // The same remote focus works in the foreground and must be refused in
+        // the background. Missing focus remains valid for windowless shortcuts.
+        for frontmost in [false, true] {
+            for hasWindow in [false, true] {
+                for owner: pid_t? in [nil, 10, 20] {
+                    let code = !frontmost && owner == 20 ? "BACKGROUND_REMOTE_FOCUS" :
+                        !frontmost && hasWindow && owner == nil ? "KEYBOARD_FOCUS_UNAVAILABLE" : nil
+                    let checkDelivery = {
+                        try InputController.requireKeyboardDelivery(isFrontmost: frontmost, hasWindow: hasWindow,
+                                                                    targetPID: 10, focusedPID: owner)
+                    }
+                    if let code { fails(code, checkDelivery) }
+                    else { try checkDelivery(); expect(true, "Keyboard delivery policy") }
+                }
+            }
+        }
         // Roles seen in the paired benchmark: Safari selected its save sheet,
         // while Finder selected a desktop scroll area rather than a window.
         expect(axIsWindowRole(kAXSheetRole), "Selected save sheet remains a window root")

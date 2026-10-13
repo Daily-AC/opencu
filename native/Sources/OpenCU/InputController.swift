@@ -54,18 +54,18 @@ final class InputController {
         case "click": return try await click(args, snapshot)
         case "drag": try await drag(args, snapshot)
         case "press_key":
-            try validate(snapshot)
+            try validateKeyboardDelivery(snapshot)
             try await prepareFocus(snapshot)
             let chord = try OpenCUKeyChord.parse(requiredString(args, "key", allowEmpty: true))
             try await send(chord, duration: duration(args), snapshot: snapshot)
         case "type_text":
             try requireTextWindow(snapshot)
-            try validate(snapshot)
+            try validateKeyboardDelivery(snapshot)
             try await prepareFocus(snapshot)
             try await typeText(requiredString(args, "text", allowEmpty: true), snapshot)
         case "paste":
             try requireTextWindow(snapshot)
-            try validate(snapshot)
+            try validateKeyboardDelivery(snapshot)
             try await prepareFocus(snapshot)
             try await paste(args, snapshot)
         case "scroll": try await scroll(args, snapshot)
@@ -109,6 +109,36 @@ final class InputController {
     private func requireTextWindow(_ snapshot: WindowSnapshot) throws {
         guard snapshot.window != nil else {
             throw OpenCUError("NO_ACCESSIBLE_WINDOW", "Typing and paste require a window; use a menu command or press_key shortcut to open one")
+        }
+    }
+
+    /// AX attachment authorizes indexed actions, but does not make AppKit's
+    /// background keyboard delivery work across a remote-view process boundary.
+    /// Use WindowServer foreground state, never synthetic NSRunningApplication.isActive.
+    private func validateKeyboardDelivery(_ snapshot: WindowSnapshot) throws {
+        try validate(snapshot)
+        let application = AXUIElementCreateApplication(snapshot.app.pid)
+        var focusedPID: pid_t?
+        if let focused = axElement(application, kAXFocusedUIElementAttribute) {
+            var owner: pid_t = 0
+            if AXUIElementGetPid(focused, &owner) == .success, owner > 0 { focusedPID = owner }
+        }
+        try Self.requireKeyboardDelivery(isFrontmost: snapshot.app.isFrontmost,
+                                         hasWindow: snapshot.window != nil,
+                                         targetPID: snapshot.app.pid, focusedPID: focusedPID)
+    }
+
+    static func requireKeyboardDelivery(isFrontmost: Bool, hasWindow: Bool,
+                                        targetPID: pid_t, focusedPID: pid_t?) throws {
+        // Foreground remote panels have working keyboard delivery. Windowless
+        // app shortcuts do not require a focused control at all.
+        if isFrontmost { return }
+        let alternatives = "Use indexed set_value or exposed AX actions on the panel controls, or explicitly use activate_app before keyboard input."
+        if let focusedPID, focusedPID != targetPID {
+            throw OpenCUError("BACKGROUND_REMOTE_FOCUS", "Keyboard input cannot reach a remote-process focused control while the target app is in the background. " + alternatives)
+        }
+        if hasWindow && focusedPID == nil {
+            throw OpenCUError("KEYBOARD_FOCUS_UNAVAILABLE", "The background window's focused control owner could not be verified. Read its state again. " + alternatives)
         }
     }
 
@@ -492,6 +522,7 @@ final class InputController {
             throw OpenCUError("CLIPBOARD_CHANGED", "The clipboard changed while it was being preserved; paste was not sent")
         }
         try Task.checkCancellation()
+        try validateKeyboardDelivery(snapshot)
         clipboard.clearContents()
         var ownedChangeCount = clipboard.changeCount
         defer {
@@ -586,7 +617,7 @@ final class InputController {
         let source = try eventSource()
         for character in text {
             try Task.checkCancellation()
-            try validate(snapshot)
+            try validateKeyboardDelivery(snapshot)
             if character == "\n" || character == "\r" || character == "\r\n" {
                 try await send(OpenCUKeyChord.parse("Return"), duration: 0, snapshot: snapshot)
             } else if character == "\t" {
@@ -601,6 +632,7 @@ final class InputController {
     }
 
     private func send(_ chord: OpenCUKeyChord, duration: Double, snapshot: WindowSnapshot) async throws {
+        try validateKeyboardDelivery(snapshot)
         let source = try eventSource()
         let held = try holdChord(chord, source: source, pid: snapshot.app.pid)
         defer { held.release() }
