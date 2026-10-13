@@ -4,7 +4,7 @@
 import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, writeFile, copyFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, readFile, writeFile, copyFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as pause } from 'node:timers/promises';
@@ -14,6 +14,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const area = path.join(root, '.cache/opencu-gui-acceptance');
 await mkdir(area, { recursive: true });
+const fixtureArea = await mkdtemp(path.join(area, 'run-'));
 const owned = [];
 const checks = [];
 let client;
@@ -63,8 +64,8 @@ try {
     '-target', 'arm64-apple-macosx14.0', '-framework', 'AppKit', '-o', executable], { stdio: 'pipe' });
   const app = await buildFixture('OpenCU Test Target', 'dev.opencu.test.target', executable);
   const sentinelApp = await buildFixture('OpenCU Foreground Sentinel', 'dev.opencu.test.sentinel', executable);
-  const targetFile = path.join(area, 'target.json');
-  const sentinelFile = path.join(area, 'sentinel.json');
+  const targetFile = path.join(fixtureArea, 'target.json');
+  const sentinelFile = path.join(fixtureArea, 'sentinel.json');
   const target = spawn(path.join(app, 'Contents/MacOS/OpenCUFixture'), ['--output', targetFile], { stdio: 'ignore' });
   owned.push(target);
   await waitUntil(async () => (await readState(targetFile)).frontmostPID === target.pid, 'target launch');
@@ -91,6 +92,9 @@ try {
     assert.ok(state.activations.slice(activationBaseline).every(a => a.pid !== target.pid), 'target took foreground focus during the operation');
     assert.equal(front.text, sentinelBaseline.text, 'keyboard input reached the foreground app');
     assert.equal(front.notes, sentinelBaseline.notes);
+    assert.equal(front.clicks, sentinelBaseline.clicks);
+    assert.equal(front.newCommands, sentinelBaseline.newCommands);
+    assert.equal(front.openCommands, sentinelBaseline.openCommands);
     assert.equal(front.probe.eventCount, sentinelBaseline.probe.eventCount, 'pointer input reached the foreground app');
     return state;
   }
@@ -195,6 +199,93 @@ try {
   assert.equal((await readState(targetFile)).clicks, 3);
   assert.equal((await readState(targetFile)).menuTracking.length, 0, 'a background menu was displayed');
   checks.push('menus are listed without being displayed: validated, nested and delegate-filled items run; disabled items refused');
+  async function refused(name, args, codes) {
+    const result = await client.callTool({ name, arguments: { app, ...args } }, undefined, { timeout: 90000 });
+    sequence++;
+    await writeFile(path.join(area, `call-${sequence}.json`), JSON.stringify({ name, args, result }));
+    assert.ok(result.isError, 'Unsafe action unexpectedly succeeded');
+    assert.ok(codes.includes(result._meta?.['opencu/error']), JSON.stringify(result));
+    await intactForeground();
+  }
+  async function fileCommand(title) {
+    await call('click', { element_index: menuItem('Menu Bar Item title="File"') });
+    await call('click', { element_index: menuItem(`Menu Item title="${title}"`) });
+  }
+  const matchingIndex = expression => {
+    const lines = tree.split('\n').filter(line => expression.test(line));
+    assert.equal(lines.length, 1, `Expected one matching element: ${expression}\n${tree}`);
+    return Number(lines[0].match(/^\s*\[(\d+)\]/)[1]);
+  };
+
+  // Real system panel: do not substitute a custom in-process dialog.
+  await fileCommand('Save Fixture…');
+  assert.equal((await readState(targetFile)).savePanelVisible, true);
+  let filename = matchingIndex(/Text Field.*value="fixture-default.txt"/);
+  await call('set_value', { element_index: filename, value: 'fixture-edited.txt' });
+  filename = matchingIndex(/Text Field.*value="fixture-edited.txt"/);
+  await call('click', { element_index: filename });
+  await call('run_actions', { actions: [{ method: 'press_key', key: 'super+a' },
+    { method: 'type_text', text: 'fixture-saved.txt' }] });
+  assert.match(tree, /Text Field.*value="fixture-saved.txt"/);
+  await call('click', { element_index: matchingIndex(/Button.*(?:title|description)="Save"(?: |$)/) });
+  const saved = path.join(fixtureArea, 'saved/fixture-saved.txt');
+  await waitUntil(async () => (await readState(targetFile)).savedPath === saved, 'save panel completion');
+  assert.equal(await readFile(saved, 'utf8'), 'OpenCU save-panel fixture\n');
+  assert.equal((await readState(targetFile)).panelError, '');
+  checks.push('NSSavePanel sheet: indexed value, focus, keyboard filename and Save produce the exact temporary file');
+
+  await fileCommand('Save Fixture…');
+  filename = matchingIndex(/Text Field.*value="fixture-default.txt"/);
+  await writeFile(targetFile + '.command', 'dismiss-panel');
+  await waitUntil(async () => !(await readState(targetFile)).savePanelVisible, 'panel dismissed outside the engine');
+  await refused('set_value', { element_index: filename, value: 'must-not-save.txt' },
+    ['STALE_ELEMENT', 'WINDOW_FOCUS_CHANGED', 'ACCESSIBILITY_ERROR']);
+  await call('get_app_state', { disableDiff: true });
+  checks.push('dismissed panel elements refused without a new observation');
+
+  const previousField = index('textField');
+  await writeFile(targetFile + '.command', 'other-window');
+  await waitUntil(async () => (await readState(targetFile)).visibleWindows === 2, 'other window opened outside the engine');
+  await refused('set_value', { element_index: previousField, value: 'must-not-reach-old-window' }, ['WINDOW_FOCUS_CHANGED']);
+  await call('get_app_state', { disableDiff: true });
+  assert.match(tree, /Other Fixture Window/);
+  assert.ok(!tree.includes('ID="textField"'), 'another window leaked into the state');
+  await refused('set_value', { app: sentinelApp, element_index: previousField, value: 'must-not-reach-sentinel' }, ['OBSERVATION_REQUIRED']);
+  checks.push('cross-app input and old-window input refused');
+
+  await fileCommand('Close All Windows');
+  async function windowless() {
+    await call('get_app_state', { includeScreenshot: true, disableDiff: true });
+    assert.match(tree, /No accessible window is open/);
+    assert.match(tree, /Menu Bar Item title="File"/);
+    assert.doesNotMatch(tree, /Screenshot:|ID="textField"|ID="otherWindowButton"/);
+    assert.equal((await readState(targetFile)).visibleWindows, 0);
+  }
+  await windowless();
+  await refused('type_text', { text: 'must-not-type' }, ['NO_ACCESSIBLE_WINDOW']);
+  await refused('click', { x: 10, y: 10 }, ['RUNTIME_ERROR', 'SCREENSHOT_REQUIRED']);
+  await fileCommand('New');
+  assert.equal((await readState(targetFile)).newCommands, 1);
+  assert.ok(tree.includes('ID="textField"'));
+  await fileCommand('Close All Windows');
+  await windowless();
+  await call('press_key', { key: 'super+n' });
+  assert.equal((await readState(targetFile)).newCommands, 2);
+  assert.ok(tree.includes('ID="textField"'));
+  checks.push('windowless state exposes menus without a screenshot; indexed File > New and Cmd+N reopen a window');
+
+  for (const viaMenu of [true, false]) {
+    await fileCommand('Close All Windows');
+    await windowless();
+    if (viaMenu) await fileCommand('Open…');
+    else await call('press_key', { key: 'super+o' });
+    assert.equal((await readState(targetFile)).openCommands, viaMenu ? 1 : 2);
+    await call('click', { element_index: matchingIndex(/Button.*(?:title|description)="Cancel"(?: |$)/) });
+    await windowless();
+    await call('press_key', { key: 'super+n' });
+  }
+  checks.push('windowless File > Open and Cmd+O present NSOpenPanel; indexed Cancel returns to a windowless state');
+
   await intactForeground();
   checks.push('target never became foreground; no input delivered to foreground sentinel');
   await client.close();
@@ -209,6 +300,7 @@ try {
 } finally {
   await client?.close();
   for (const child of owned.reverse()) await stop(child);
+  await rm(fixtureArea, { recursive: true, force: true });
   await writeFile(path.join(area, 'report.json'), JSON.stringify(report, null, 2) + '\n');
   console.log(JSON.stringify(report, null, 2));
 }
