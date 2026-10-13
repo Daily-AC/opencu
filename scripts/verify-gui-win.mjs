@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Run manually on an idle, unlocked Windows desktop. This takes the foreground.
 // All desktop reads/actions go through MCP. The fixture's private command file
-// only moves its own window (to simulate external geometry changes), hashes the
+// moves its own windows, holds a fixture-only foreground lock, hashes the
 // clipboard without changing it, and closes that fixture.
 import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
@@ -28,6 +28,7 @@ const commandFile = path.join(temp, 'command.txt');
 const checks = [];
 const report = { test: 'windows-foreground-fixtures', timestamp: new Date().toISOString(), checks, ok: false };
 const owned = [];
+const connections = [];
 let client, http;
 let tree = '', sequence = 0;
 await mkdir(area, { recursive: true });
@@ -100,6 +101,7 @@ try {
   }, 'fixture start', 30000);
   report.fixtureWindow = JSON.parse(powershell(`Get-Process -Id ${fixture.pid} | Select-Object Id,MainWindowTitle,@{n='hwnd';e={$_.MainWindowHandle.ToInt64()}} | ConvertTo-Json -Compress`));
   client = new Client({ name: 'opencu-windows-fixture-client', version: '1.0' });
+  connections.push(client);
   const transport = new StdioClientTransport({ command: process.execPath, args: [path.join(root, 'src/server.mjs')], stderr: 'pipe' });
   transport.stderr?.resume(); await client.connect(transport);
   const size = await imageState(title);
@@ -184,6 +186,90 @@ try {
   await call('drag', title, { from_x: 1, from_y: 1, to_x: 2, to_y: 2 }, 'UNSUPPORTED_ON_WINDOWS');
   checks.push('unsupported operation refused');
 
+  await fixtureCommand('owned');
+  const family = await fixtureState();
+  assert.equal(family.foregroundPid, fixture.pid);
+  assert.notEqual(family.foregroundHwnd, family.mainHwnd);
+  assert.equal(family.foregroundRootOwner, family.mainRootOwner);
+  report.ownedForeground = { sameProcess: true, sameRootOwner: true, distinctHwnd: true };
+  await call('get_app_state', title, { disableDiff: true });
+  await call('click', title, { element_index: index('Fixture counter') });
+  assert.equal((await fixtureState()).clicks, 3);
+  await call('activate_app', title);
+  assert.equal((await fixtureState()).foregroundHwnd, family.foregroundHwnd);
+  checks.push('owned foreground overlay permits main-window indexed click and activation without stealing focus');
+  await call('press_key', title, { key: 'Shift', duration: 0.1 });
+  await call('type_text', title, { text: 'Overlay 中文 😀' });
+  assert.equal((await fixtureState()).overlayNotes, 'Overlay 中文 😀');
+  assert.equal((await fixtureState()).notes, pasteText);
+  checks.push('keyboard and literal Unicode input use the foreground family focus');
+  await imageState(title);
+  const overlayPoint = await fixtureState();
+  await call('click', title, { x: overlayPoint.x, y: overlayPoint.y });
+  assert.equal((await fixtureState()).overlayClicks, 1);
+  assert.equal((await fixtureState()).clicks, 3);
+  checks.push('coordinate hit testing accepts the owned overlay at the main-window point');
+
+  const otherTitle = `OpenCU Other Fixture ${token}`;
+  const otherOutput = path.join(temp, 'other.json');
+  const otherCommand = path.join(temp, 'other-command.txt');
+  const other = spawn('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-STA', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'tests/fixtures/OpenCUFixture.ps1'), '-Output', otherOutput, '-CommandFile', otherCommand, '-Title', otherTitle, '-Background'], { windowsHide: true, stdio: 'ignore' });
+  owned.push({ child: other, marker: otherCommand });
+  await waitFor(async () => {
+    if (other.exitCode !== null) throw new Error('Background fixture exited');
+    try { return JSON.parse(await readFile(otherOutput, 'utf8')).pid === other.pid; } catch { return false; }
+  }, 'background fixture start', 30000);
+  assert.equal((await fixtureState()).foregroundHwnd, family.foregroundHwnd);
+  // The main connection received Windows foreground rights from its preceding
+  // SendInput. A cold connection has no last-input grant; it must respect the
+  // other fixture process holding foreground. Neither connection is stopped or
+  // interrupted by human input, and they never act on one app concurrently.
+  const primaryClient = client;
+  client = new Client({ name: 'opencu-windows-foreign-fixture-client', version: '1.0' });
+  connections.push(client);
+  const coldTransport = new StdioClientTransport({ command: process.execPath, args: [path.join(root, 'src/server.mjs')], stderr: 'pipe' });
+  coldTransport.stderr?.resume(); await client.connect(coldTransport);
+  await call('get_app_state', otherTitle, { disableDiff: true });
+  await call('click', otherTitle, { element_index: index('Fixture counter') }, 'ACTIVATION_FAILED');
+  await call('activate_app', otherTitle, {}, 'ACTIVATION_FAILED');
+  assert.equal(JSON.parse(await readFile(otherOutput, 'utf8')).clicks, 0);
+  assert.equal((await fixtureState()).foregroundHwnd, family.foregroundHwnd);
+  checks.push('cold connection refuses different-process background input and activation without input');
+  await client.close(); client = primaryClient;
+  await writeFile(otherCommand, 'close');
+  await waitFor(() => other.exitCode !== null, 'background fixture closed');
+
+  await fixtureCommand('overlay-close');
+  await call('get_app_state', title, { disableDiff: true });
+  const interrupted = call('press_key', title, { key: 'Shift', duration: 3 }, 'WINDOW_FOCUS_CHANGED')
+    .then(value => ({ value }), error => ({ error }));
+  await pause(700);
+  await fixtureCommand('unowned');
+  const stopped = await interrupted; if (stopped.error) throw stopped.error;
+  checks.push('unrelated foreground transition stops in-flight input and releases held keys');
+  const unrelated = await fixtureState();
+  assert.equal(unrelated.foregroundPid, fixture.pid);
+  assert.notEqual(unrelated.foregroundRootOwner, unrelated.mainRootOwner);
+  await call('get_app_state', title, { disableDiff: true });
+  await call('click', title, { element_index: index('Fixture counter') }, 'ACTIVATION_FAILED');
+  await call('activate_app', title, {}, 'ACTIVATION_FAILED');
+  assert.equal((await fixtureState()).clicks, 3);
+  checks.push('same-process unrelated foreground window is refused');
+  await fixtureCommand('overlay-close');
+
+  await fixtureCommand('owned-overlapped');
+  const overlapped = await fixtureState();
+  assert.equal(overlapped.foregroundPid, fixture.pid);
+  assert.equal(overlapped.foregroundOwner, overlapped.mainHwnd);
+  assert.notEqual(overlapped.foregroundRootOwner, overlapped.mainRootOwner);
+  await call('get_app_state', title, { disableDiff: true });
+  await call('click', title, { element_index: index('Fixture counter') });
+  await call('activate_app', title);
+  assert.equal((await fixtureState()).clicks, 4);
+  assert.equal((await fixtureState()).foregroundHwnd, overlapped.foregroundHwnd);
+  checks.push('owned non-popup window is accepted through the actual owner chain');
+  await fixtureCommand('overlay-close');
+
   await fixtureCommand('close');
   await waitFor(() => fixture.exitCode !== null, 'fixture closed');
 
@@ -223,7 +309,9 @@ try {
 } catch (error) {
   report.error = error.stack ?? String(error); process.exitCode = 1;
 } finally {
-  try { await client?.close(); } catch (e) { report.closeError = String(e); report.ok = false; }
+  for (const connection of connections) {
+    try { await connection.close(); } catch (e) { report.closeError = String(e); report.ok = false; }
+  }
   if (http) await new Promise(resolve => http.close(resolve));
   const cleanupErrors = [];
   for (const { child, marker } of owned.reverse()) {
