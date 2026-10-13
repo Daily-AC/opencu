@@ -26,6 +26,69 @@ struct OpenCUInputLogicChecks {
             catch let error as OpenCUError { expect(error.code == code, "\(error.code) != \(code)") }
             catch { expect(false, "Unexpected error: \(error)") }
         }
+        // The same remote focus works in the foreground and must be refused in
+        // the background. A host-PID panel proxy must also be refused; unknown
+        // focus in ordinary apps keeps the existing PID-targeted path.
+        for frontmost in [false, true] {
+            for isFilePanel in [false, true] {
+                for owner: pid_t? in [nil, 10, 20] {
+                    let code = !frontmost && (isFilePanel || owner == 20) ? "BACKGROUND_REMOTE_FOCUS" : nil
+                    let checkDelivery = {
+                        try InputController.requireKeyboardDelivery(isFrontmost: frontmost, isFilePanel: isFilePanel,
+                                                                    targetPID: 10, focusedPID: owner)
+                    }
+                    if let code { fails(code, checkDelivery) }
+                    else { try checkDelivery(); expect(true, "Keyboard delivery policy") }
+                }
+            }
+        }
+        // Observed identifiers, not localized titles or process names. A sheet
+        // without a file-panel identifier is still an ordinary local input target.
+        for role in [kAXWindowRole, kAXSheetRole] {
+            for identifier in ["save-panel", "open-panel"] {
+                expect(InputController.isFilePanel(role: role, identifier: identifier), "File-panel proxy recognized without its PID")
+            }
+            expect(!InputController.isFilePanel(role: role, identifier: "acceptanceWindow"), "Ordinary window/sheet still allows background typing")
+            expect(!InputController.isFilePanel(role: role, identifier: nil), "Unknown identifier is not proof of a file panel")
+        }
+        expect(!InputController.isFilePanel(role: kAXTextFieldRole, identifier: "save-panel"), "Only a window/sheet root identifies a panel")
+        expect(!InputController.isFilePanel(role: nil, identifier: "open-panel"), "Missing role is not proof of a file panel")
+        // Roles seen in the paired benchmark: Safari selected its save sheet,
+        // while Finder selected a desktop scroll area rather than a window.
+        expect(axIsWindowRole(kAXSheetRole), "Selected save sheet remains a window root")
+        expect(axIsWindowRole(kAXWindowRole), "Document window remains a window root")
+        expect(!axIsWindowRole(kAXScrollAreaRole), "Finder desktop is windowless")
+        expect(!axIsWindowRole(nil), "Missing role cannot grant window input")
+        // Model the live AX attachment graph. Remote service nodes deliberately
+        // share neither PID nor window identity with their presenting app.
+        struct Node: Equatable { let pid: Int; let id: String }
+        let window = Node(pid: 10, id: "document")
+        let sibling = Node(pid: 10, id: "other-document")
+        let menu = Node(pid: 10, id: "menu")
+        let item = Node(pid: 10, id: "new")
+        let sheet = Node(pid: 20, id: "remote-sheet")
+        let field = Node(pid: 20, id: "filename")
+        let unrelated = Node(pid: 30, id: "unrelated-window")
+        let otherPanel = Node(pid: 20, id: "same-service-other-panel")
+        var edges = ["document": [sheet], "remote-sheet": [field], "menu": [item],
+                     "other-document": [otherPanel], "same-service-other-panel": [field]]
+        func attached(_ path: [Node], roots: [Node] = []) -> Bool {
+            attachedPath(path, to: roots.isEmpty ? [window, menu] : roots, equal: ==,
+                         children: { edges[$0.id] ?? [] })
+        }
+        expect(attached([window, sheet, field]), "Attached remote field accepted")
+        expect(attached([menu, item], roots: [menu]), "Windowless menu accepted")
+        expect(!attached([sibling, otherPanel, field]), "Same-PID sibling window refused")
+        expect(!attached([unrelated, field]), "Unrelated app refused")
+        expect(!attached([window, otherPanel, field]), "Same remote service is not proof of attachment")
+        expect(!attached([window, field]), "Missing attachment edge refused")
+        expect(!attached([]), "Empty path refused")
+        edges["document"] = []
+        expect(!attached([window, sheet, field]), "Dismissed sheet refused even with live remote descendants")
+        edges["document"] = [sheet]
+        edges["remote-sheet"] = []
+        expect(!attached([window, sheet, field]), "Detached control refused")
+        expect(!attached([window, sheet], roots: [menu]), "Old window path refused in windowless state")
         let emoji = try InputController.textRange(in: "a🧑🏽‍💻b", text: "🧑🏽‍💻", prefix: nil, suffix: nil)
         expect(emoji.location == 1 && emoji.length == 7, "UTF-16 emoji range")
         let context = try InputController.textRange(in: "one target; two target", text: "target", prefix: "two ", suffix: nil)
@@ -68,6 +131,13 @@ struct OpenCUInputLogicChecks {
         fails("INVALID_ARGUMENT") { _ = try InputController.typedValue("true", current: NSNumber(value: 0), role: kAXSliderRole) }
         fails("INVALID_ARGUMENT") { _ = try InputController.typedValue("2", current: kCFBooleanTrue, role: kAXCheckBoxRole) }
         fails("UNSUPPORTED_VALUE_TYPE") { _ = try InputController.typedValue("x", current: [] as CFArray, role: nil) }
+        let copy = "Name:拷贝\nTarget:0x0\nSelector:(null)"
+        expect(axActionLabel(copy) == "拷贝", "Custom action shows its label")
+        expect(axActionLabel("AXPress") == "AXPress", "Standard action name unchanged")
+        expect(axResolveAction("拷贝", in: ["AXPress", copy]) == copy, "Label resolves to the custom action")
+        expect(axResolveAction(copy, in: ["AXPress", copy]) == copy, "Exact custom action name still accepted")
+        expect(axResolveAction("拷贝", in: [copy, "Name:拷贝\nTarget:0x1\nSelector:copy:"]) == nil, "Ambiguous label refused")
+        expect(axResolveAction("粘贴", in: [copy]) == nil, "Unknown label refused")
         let markdown = try InputController.markdownRepresentation("# Heading\n\n**Bold** and *italic* and `code`\n\n- one\n- two\n\n[x](https://example.com)")
         expect(markdown.plain == "Heading\nBold and italic and code\n•\tone\n•\ttwo\nx", "Markdown plain text preserves blocks")
         let decoded = try NSAttributedString(data: markdown.rtf, options: [.documentType: NSAttributedString.DocumentType.rtf], documentAttributes: nil)
@@ -80,6 +150,6 @@ struct OpenCUInputLogicChecks {
         expect(NSFontManager.shared.traits(of: boldFont).contains(.boldFontMask), "Markdown RTF bold survives decode")
         expect(NSFontManager.shared.traits(of: italicFont).contains(.italicFontMask), "Markdown RTF italic survives decode")
         expect(String(data: markdown.html, encoding: .utf8)?.contains("https://example.com") == true, "Markdown HTML link")
-        print("\(checked) input parsing, UTF-16, AX type, and rich Markdown checks passed; no input or clipboard writes")
+        print("\(checked) attachment identity, input parsing, UTF-16, AX type, and rich Markdown checks passed; no input or clipboard writes")
     }
 }

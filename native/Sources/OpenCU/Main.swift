@@ -49,7 +49,7 @@ final class Engine {
         }
         // An action may change geometry even when it ultimately reports failure.
         snapshot = WindowSnapshot(app: current.app, window: current.window, bounds: current.bounds,
-                                  windowID: current.windowID, elements: current.elements,
+                                  windowID: current.windowID, elements: current.elements, elementPaths: current.elementPaths,
                                   screenshotWidth: nil, screenshotHeight: nil)
         focusGuard.protect(target: app.pid)
         observer.record(try await input.perform(method: method, args: args, snapshot: current), pid: app.pid)

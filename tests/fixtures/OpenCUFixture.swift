@@ -141,6 +141,13 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegat
     private var menuUpdates = 0
     private var validations = 0
     private var gatedActions = 0
+    private var savePanel: NSSavePanel?
+    private var savedPath = ""
+    private var panelError = ""
+    private var newCommands = 0
+    private var openCommands = 0
+    private var auxiliaryWindow: NSWindow?
+    private var saveDirectory: URL { output.deletingLastPathComponent().appendingPathComponent("saved") }
 
     init(output: URL) { self.output = output }
 
@@ -149,6 +156,7 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegat
         window = NSWindow(contentRect: NSRect(x: 160, y: 80, width: 700, height: 750),
                           styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
         window.title = "OpenCU Acceptance Fixture"
+        window.isReleasedWhenClosed = false
         // Keep this disposable fixture in the ordinary window compositor so the
         // same test covers obscured background windows even with Stage Manager
         // enabled. --stage-managed separately reproduces transformed thumbnails.
@@ -298,6 +306,18 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegat
         appMenu.addItem(withTitle: "Quit OpenCU Fixture", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         appItem.submenu = appMenu
         menu.addItem(appItem)
+        let fileItem = NSMenuItem()
+        let fileMenu = NSMenu(title: "File")
+        for (title, action, key) in [("New", #selector(newWindow), "n"),
+                                     ("Open…", #selector(openDocument), "o"),
+                                     ("Save Fixture…", #selector(saveDocument), "s"),
+                                     ("Close All Windows", #selector(closeAllWindows), "w")] {
+            let item = NSMenuItem(title: title, action: action, keyEquivalent: key)
+            item.target = self
+            fileMenu.addItem(item)
+        }
+        fileItem.submenu = fileMenu
+        menu.addItem(fileItem)
         let editItem = NSMenuItem()
         let editMenu = NSMenu(title: "Edit")
         editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
@@ -342,14 +362,93 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegat
 
     @objc private func incrementCounter() { clicks += 1; counterValue.stringValue = "Clicks: \(clicks)"; writeState() }
 
+    @objc private func newWindow() {
+        newCommands += 1
+        window.makeKeyAndOrderFront(nil)
+        writeState()
+    }
+
+    @objc private func closeAllWindows() {
+        for candidate in NSApp.windows { candidate.close() }
+        writeState()
+    }
+
+    @objc private func otherWindow() {
+        let other = NSWindow(contentRect: NSRect(x: 180, y: 120, width: 320, height: 160),
+                             styleMask: [.titled, .closable], backing: .buffered, defer: false)
+        other.isReleasedWhenClosed = false
+        other.title = "Other Fixture Window"
+        other.collectionBehavior = window.collectionBehavior
+        let button = NSButton(title: "Other window button", target: self, action: #selector(incrementCounter))
+        button.frame = NSRect(x: 20, y: 40, width: 260, height: 40)
+        button.setAccessibilityIdentifier("otherWindowButton")
+        other.contentView?.addSubview(button)
+        auxiliaryWindow = other
+        other.makeKeyAndOrderFront(nil)
+        writeState()
+    }
+
+    @objc private func saveDocument() {
+        guard window.isVisible, savePanel == nil else { return }
+        do { try FileManager.default.createDirectory(at: saveDirectory, withIntermediateDirectories: true) }
+        catch { panelError = error.localizedDescription; writeState(); return }
+        let panel = NSSavePanel()
+        panel.directoryURL = saveDirectory
+        panel.nameFieldStringValue = "fixture-default.txt"
+        // Independent of the owner's "show all filename extensions" setting.
+        panel.isExtensionHidden = false
+        panel.canCreateDirectories = false
+        savePanel = panel
+        panel.beginSheetModal(for: window) { [weak self] response in
+            guard let self else { return }
+            defer { self.savePanel = nil; self.writeState() }
+            guard response == .OK, let url = panel.url else { return }
+            // This disposable fixture never writes outside its temporary folder.
+            guard url.deletingLastPathComponent().standardizedFileURL == self.saveDirectory.standardizedFileURL else {
+                self.panelError = "Save escaped the fixture directory"; return
+            }
+            do {
+                try Data("OpenCU save-panel fixture\n".utf8).write(to: url, options: .atomic)
+                self.savedPath = url.path
+            } catch { self.panelError = error.localizedDescription }
+        }
+        writeState()
+    }
+
+    @objc private func openDocument() {
+        openCommands += 1
+        let panel = NSOpenPanel()
+        panel.directoryURL = saveDirectory
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.begin { [weak self] response in
+            guard let self else { return }
+            if response == .OK { self.newWindow() }
+            self.writeState()
+        }
+        writeState()
+    }
+
     private func rangeJSON(_ range: NSRange) -> [String: Int] {
         ["location": range.location == NSNotFound ? -1 : range.location, "length": range.length]
     }
 
     @objc private func writeState() {
+        // A fixture-only control file makes stale-observation tests deterministic:
+        // change the UI externally, wait for completion, then use the old index.
+        let commandURL = output.appendingPathExtension("command")
+        if let command = try? String(contentsOf: commandURL, encoding: .utf8) {
+            try? FileManager.default.removeItem(at: commandURL)
+            if command == "dismiss-panel" { savePanel?.cancel(nil) }
+            if command == "other-window" { otherWindow() }
+        }
         if let editor = textField.currentEditor() as? NSTextView { lastTextSelection = editor.selectedRange() }
         sliderValue.stringValue = String(format: "%.1f", slider.doubleValue)
-        let state: [String: Any] = ["clicks": clicks, "text": textField.currentEditor()?.string ?? textField.stringValue, "notes": notes.string,
+        let state: [String: Any] = ["visibleWindows": NSApp.windows.filter { $0.isVisible }.count,
+                                   "savePanelVisible": savePanel?.isVisible ?? false,
+                                   "savedPath": savedPath, "panelError": panelError,
+                                   "newCommands": newCommands, "openCommands": openCommands,
+                                   "clicks": clicks, "text": textField.currentEditor()?.string ?? textField.stringValue, "notes": notes.string,
                                    "appActive": NSApp.isActive, "windowKey": window.isKeyWindow,
                                    "appKeyWindow": NSApp.keyWindow?.windowNumber ?? 0,
                                    "appMainWindow": NSApp.mainWindow?.windowNumber ?? 0,
@@ -376,11 +475,11 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegat
     }
 
     func applicationWillTerminate(_ notification: Notification) { writeState(); timer?.invalidate() }
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 }
 
 let arguments = Array(CommandLine.arguments.dropFirst())
-if arguments == ["--clipboard-digest"] {
+if arguments == ["--clipboard-digest"] || arguments == ["--clipboard-state"] {
     var digest = SHA256()
     for (index, item) in (NSPasteboard.general.pasteboardItems ?? []).enumerated() {
         digest.update(data: Data("item:\(index)\n".utf8))
@@ -390,7 +489,12 @@ if arguments == ["--clipboard-digest"] {
             digest.update(data: data)
         }
     }
-    print(digest.finalize().map { String(format: "%02x", $0) }.joined())
+    let checksum = digest.finalize().map { String(format: "%02x", $0) }.joined()
+    if arguments == ["--clipboard-state"] {
+        let state: [String: Any] = ["digest": checksum, "changeCount": NSPasteboard.general.changeCount]
+        let data = try JSONSerialization.data(withJSONObject: state, options: [.sortedKeys])
+        print(String(decoding: data, as: UTF8.self))
+    } else { print(checksum) }
     exit(0)
 }
 guard (arguments.count == 2 || arguments.count == 3 && arguments[2] == "--stage-managed"), arguments[0] == "--output", arguments[1].hasPrefix("/") else {
