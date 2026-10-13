@@ -208,18 +208,22 @@ unsafe fn hold(keys: &[u16], hwnd: HWND, g: &Guard<'_>) -> Result<Held> {
 /// Deliver literal UTF-16 characters to the foreground thread's focused HWND.
 /// VK_PACKET can enter IME composition and consume spaces; WM_CHAR is already
 /// translated text, so it preserves the caller's string without changing IME mode.
-unsafe fn unicode(text: &str, window: HWND, g: &Guard<'_>) -> Result<()> {
-    let thread = GetWindowThreadProcessId(window, None);
+unsafe fn unicode(text: &str, window: &super::apps::Window, g: &Guard<'_>) -> Result<()> {
     let focused = || -> Result<HWND> {
         let mut gui = GUITHREADINFO {
             cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
             ..Default::default()
         };
-        GetGUIThreadInfo(thread, &mut gui)?;
-        if gui.hwndFocus.is_invalid() || GetAncestor(gui.hwndFocus, GA_ROOT) != window {
+        // Query the actual foreground thread: an owned overlay can have its
+        // own UI thread. Never send WM_CHAR to a background thread's old focus.
+        GetGUIThreadInfo(
+            GetWindowThreadProcessId(GetForegroundWindow(), None),
+            &mut gui,
+        )?;
+        if !window.contains(gui.hwndFocus) {
             return Err(Error::new(
                 "WINDOW_FOCUS_CHANGED",
-                "No focused control in the observed foreground window; no further text was sent",
+                "No focused control in the target foreground family; no further text was sent",
             ));
         }
         Ok(gui.hwndFocus)
@@ -253,10 +257,17 @@ unsafe fn unicode(text: &str, window: HWND, g: &Guard<'_>) -> Result<()> {
     }
     g.check()
 }
-unsafe fn press(chord: Chord, hwnd: HWND, seconds: f64, g: &Guard<'_>) -> Result<()> {
+unsafe fn press(
+    chord: Chord,
+    window: &super::apps::Window,
+    seconds: f64,
+    g: &Guard<'_>,
+) -> Result<()> {
+    g.check()?;
+    let hwnd = GetForegroundWindow();
     let (keys, c) = chord_keys(chord, hwnd)?;
     if let Some(c) = c {
-        return unicode(&c.to_string(), hwnd, g);
+        return unicode(&c.to_string(), window, g);
     }
     let mut held = hold(&keys, hwnd, g)?;
     g.pause(seconds)?;
@@ -273,7 +284,7 @@ unsafe fn pointer(point: (i32, i32), window: &super::apps::Window, g: &Guard<'_>
     };
     let (dx, dy) = absolute_point(screen, x, y)?;
     g.check()?;
-    if GetAncestor(WindowFromPoint(POINT { x, y }), GA_ROOT) != window.hwnd {
+    if !window.contains(WindowFromPoint(POINT { x, y })) {
         return Err(Error::new(
             "TARGET_OCCLUDED",
             "Another window covers the input point; no pointer input was sent",
@@ -417,7 +428,7 @@ pub unsafe fn perform(
             }
             let mut modifiers = hold(
                 &chord.map(|c| c.modifiers).unwrap_or_default(),
-                window.hwnd,
+                GetForegroundWindow(),
                 g,
             )?;
             for i in 0..count {
@@ -438,13 +449,13 @@ pub unsafe fn perform(
             }
             modifiers.release()?;
         }
-        "press_key" => press(chord.unwrap(), window.hwnd, seconds, g)?,
-        "type_text" => unicode(string(args, "text")?, window.hwnd, g)?,
+        "press_key" => press(chord.unwrap(), window, seconds, g)?,
+        "type_text" => unicode(string(args, "text")?, window, g)?,
         "paste" => {
             g.check()?;
             let mut clipboard = Clipboard::replace(string(args, "text")?)?;
             let outcome = (|| {
-                press(parse_key("ctrl+v")?, window.hwnd, 0.04, g)?;
+                press(parse_key("ctrl+v")?, window, 0.04, g)?;
                 g.pause(0.2)
             })();
             let restore = clipboard.restore();
