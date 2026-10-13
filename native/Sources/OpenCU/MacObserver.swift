@@ -462,7 +462,7 @@ final class MacObserver {
         if node.enabled == false { parts.append("disabled") }
         if let focused, AXIdentity(element) == focused { parts.append("focused") }
         // Context-menu and scroll-into-view actions are on nearly every element.
-        let actions = node.actions.filter { !AXNode.passiveActions.contains($0) }
+        let actions = node.actions.filter { !AXNode.passiveActions.contains($0) }.map(axActionLabel)
         if !actions.isEmpty { parts.append("Secondary Actions: \(actions.joined(separator: ", "))") }
         return parts.joined(separator: " ")
     }
