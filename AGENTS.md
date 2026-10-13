@@ -6,7 +6,8 @@ targeted input, exact window identity, background operation and permission
 attribution may use necessary OS-exported SPI, resolved and checked at runtime.
 Keep those compatibility boundaries explicit and verify behavior on real windows.
 It must not call or distribute a proprietary computer-use runtime, account files
-or a hosted service. Windows support comes later.
+or a hosted service. The Rust Windows engine uses UI Automation, Windows Graphics
+Capture and guarded foreground input; it intentionally has different focus semantics.
 
 - Do not add an agent-brand or signing-team allowlist. The engine uses an
   inherited stdio transport; macOS Accessibility/Screen Recording permissions
@@ -46,3 +47,11 @@ Map: `native/Sources/OpenCU` is the engine (`MacObserver` reads, `InputControlle
 acts, `BackgroundFocus` holds background focus and the focus guard); `src/` is the
 MCP server; `docs/independent-engine-contract.md` is the internal contract;
 `docs/opencu-independent-2026-10-12.md` records measured behavior and limits.
+
+Windows: `native-win/` owns the standalone JSON-lines engine. Build with
+`npm run build:win`; run host logic with `cargo test --manifest-path native-win/Cargo.toml`.
+Windows GUI acceptance is `scripts/verify-gui-win.mjs`; direct stdio acceptance is
+`scripts/verify-engine-win.ps1`. These require an authorized idle Windows desktop
+and operate disposable fixtures only. Keep real-app observations in ignored caches;
+publish fixture evidence only. Physical Escape disables further input on that
+engine connection. Never reconnect automatically to defeat a person's stop.
