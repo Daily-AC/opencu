@@ -168,16 +168,22 @@ Control models sourced from the existing WinForms fixture and local Chrome HTML
 measure 390 → 468 bytes and 270 → 356 bytes respectively (element lines only).
 Small fixtures grow because focus/state/range and coordinate information is now
 preserved; the large savings come from excluding unrelated trees. These models do
-not include live provider wrappers or browser chrome. Device fixture before/after
-sizes and actual Qt/Chromium ownership, framework metadata, viewport clipping,
-index actions, screenshot choice and speech-session context/latency must still be
-verified with `scripts/verify-gui-win.mjs` and the real-app session. No Windows
-device was operated for this change. The earlier acceptance evidence above
-predates this observation policy. The tool-overlay selection and de-duplication
-follow-up also requires fresh device acceptance: verify home and player content
-screenshots, unique indexes and owned control actions, state size, and the spoken
-command rounds. Host tests cannot establish a provider’s runtime identity behavior
-or end-to-end voice reliability.
+not include live provider wrappers or browser chrome.
+
+Device acceptance (Windows 11, 2026-10-14, overnight on an idle desktop): with
+the overlay rule and de-duplication, `scripts/verify-gui-win.mjs` passed 26/26
+(33 s). On a Qt desktop video client with embedded Chromium, one read of the
+player scene measured 73.5 KB / 640 lines / 1.17 s before and 8.9 KB / 102 lines
+/ 0.21 s after the first compact build; the home screen now selects the content
+window, exposes the embedded page and its search field, and omits 359
+off-viewport elements (19.7 KB). In a five-command spoken session repeated three
+times with the same agent, model and prompt, the original engine succeeded 11/15
+with five 300 s timeouts and grew the session context to 474k tokens in one
+round; this policy succeeded 12/15 with four timeouts and ended the round at 43k
+tokens. The first compact build, which chose a transparent foreground overlay
+tool window as the target, succeeded only 6/15. Per-turn model latency, not the
+observation, now dominates these sessions. Single runs per command; this does
+not establish a general success rate.
 
 ## Input and engine-side safety
 
