@@ -80,8 +80,21 @@ state after a panel opens or closes before continuing.
 
 Indexed AXPress, set_value and select_text use the authorized AX element directly.
 A simple indexed click on an editable remote control uses its settable AXFocused
-attribute; subsequent keyboard events still go only to the target application's
-PID, whose remote view forwards input. Remote pointer fallbacks (including held,
+attribute. This focus operation alone does not establish background keyboard
+delivery. Before `press_key`, `type_text` or `paste` sends any events, the engine
+reads the live `AXFocusedUIElement` owner. If that PID differs from the target's
+PID and the target is not the system's frontmost application, it refuses with
+`BACKGROUND_REMOTE_FOCUS`. The message directs callers to indexed `set_value`,
+exposed AX actions, or explicit `activate_app` for keyboard input. A background
+window whose focused owner cannot be read fails with `KEYBOARD_FOCUS_UNAVAILABLE`;
+a truly windowless app can still receive application shortcuts without a focused
+control. The frontmost remote-panel path retains its existing PID-targeted input.
+Synthetic AppKit activation is not foreground status. The guard runs before
+synthetic focus, again before each character/chord, and before paste changes the
+clipboard. If focus changes during a multi-character operation, input already
+sent is not replayed. The engine never automatically activates the app.
+
+Remote pointer fallbacks (including held,
 modified or multiple clicks and scrolling) are refused rather than guessing a
 WindowServer ID or sending the event to the host window. Coordinates retain the
 existing exact window ID and screenshot requirements.
@@ -101,11 +114,27 @@ paste, physical pointer input and screenshots do not gain a windowless fallback.
 Synthetic application focus is released on target changes and disconnect as before.
 
 `scripts/verify-gui.mjs` covers a real NSSavePanel sheet saving exact fixture bytes
-inside a temporary directory, filename focus/typing and AX value edits, dismissal,
+inside a temporary directory, refusal of all three background remote keyboard
+methods (plus a keyboard batch), unchanged filename and clipboard change count,
+completion through `set_value` and AXPress, dismissal,
 window/app isolation, all windows closed, File > New / Open, Cmd+N / Cmd+O, and
-NSOpenPanel cancellation. It also checks the foreground sentinel and removes the
+NSOpenPanel cancellation. Windowless shortcuts are checked by command counters,
+visible windows and observed controls, not just successful replies. The suite
+also checks the foreground sentinel and removes the
 temporary saved files. The attachment logic has non-GUI checks for foreign and
 same-process windows, detached edges, and shared remote-service PIDs. Compilation
 and these logic checks do not establish remote-view forwarding or windowless
 AppKit event delivery: those require the GUI acceptance run on an authorized idle
 desktop. Do not run that suite on an occupied Mac without the owner's approval.
+
+Measured on the owner's idle Mac on 2026-10-14: three GUI runs passed the ten
+pre-existing background checks and the remote filename `set_value` step. Clicking
+the filename then sending Cmd+A and `type_text` returned success but left its
+value unchanged. No later new checks ran. In the paired MacArena VM benchmark,
+with the target frontmost in the guest, remote-panel keyboard input did work
+(including Cmd+Shift+G, path paste and path typing). Thus live AX attachment is
+sufficient for the tested indexed value edit, but background remote keyboard
+forwarding is not supported. The new refusal and the remainder of the panel and
+windowless GUI suite still require reviewer desktop acceptance; non-GUI tests do
+not verify delivery. Foreground support here is based on the VM evidence, not a
+new foreground run on the owner's Mac.
