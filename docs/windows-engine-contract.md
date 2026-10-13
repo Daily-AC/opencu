@@ -48,14 +48,17 @@ App selection accepts case-insensitive executable path, process name with or
 without `.exe`, `pid:<pid>`, exact title or unique title fragment, and exact
 Start-menu shortcut name/path. Matches across different processes or duplicate
 shortcuts are rejected. Same-process title matches form one window set, not an
-ambiguity. For observation, choose the foreground HWND if it is a candidate and
-is visible and not minimized. Otherwise choose the first visible, non-minimized,
+ambiguity. For observation, choose the foreground HWND only if it is a non-tool candidate and
+is visible and not minimized. A tool window never wins while a visible,
+non-minimized non-tool window of the app exists. Otherwise choose the first visible, non-minimized,
 non-tool candidate in desktop Z order (not by area); fall back to the first
 visible non-minimized tool window, then a visible minimized window. A tool window
 includes `WS_EX_TOOLWINDOW`, `WS_EX_NOACTIVATE` and the existing Qt ToolSaveBits
 classification. The selected HWND and class are shown in the observation.
 Process/path selection considers the process's windows; an explicit title limits
-capture candidates to its matches. The returned canonical `app.id` is
+capture candidates to its matches when those include usable non-tool content.
+If the title matches only tools or otherwise has no usable non-tool candidate,
+selection expands to the same process and creation time before applying the rule. The returned canonical `app.id` is
 `pid:<pid>`, so isolated Chrome profiles do not share an ambiguous executable ID.
 Process creation time and HWND ownership are revalidated before input.
 
@@ -71,11 +74,27 @@ is `{data:<base64>, mimeType:"image/png", width, height}`. The raw UIA tree list
 non-minimized owned descendants (transitive `GW_OWNER`, same PID and process
 creation time, at most 64 links). An owner or sibling of the capture target is
 not a descendant. Enumerate the target first, then owned windows in Z order.
-All other enumerated top-level windows of the process get one `Window summary:`
-line with JSON-escaped title/class, hexadecimal HWND and `visible`, `covered`,
-`hidden` (including cloaked), or `minimized`. Message-only HWNDs are not top-level
+Other visible or minimized top-level windows of the process get one `Window
+summary:` line with JSON-escaped title/class, hexadecimal HWND and `visible`,
+`covered`, or `minimized`. Hidden windows (including cloaked windows) are collapsed
+into one `Hidden windows: N (summaries omitted).` line, absent when N is zero. Message-only HWNDs are not top-level
 windows and are not enumerated. Title selection still discovers owned popups,
 menus and dialogs, even when their titles differ. Summaries have no element index.
+
+An owned tool overlay still contributes its unique controls; an unrelated tool
+window remains a summary. A covering tool never suppresses the content tree or
+replaces its capture. Even a `covered` target is traversed and captured by its own
+HWND. This avoids treating a same-size transparent Qt ToolSaveBits foreground
+layer as the application's content. Input focus and safety checks are unchanged.
+
+Across all traversed roots, UIA runtime IDs identify already-listed elements.
+Only their first occurrence gets an index and retains its original UIA reference,
+actions and top-level window. If a runtime ID cannot be read, UIA CompareElements
+checks identity against prior elements; comparison failure does not merge them.
+Names, classes, bounds and formatted text are never identity keys. Duplicate
+parents do not prune traversal: later paths may still contain unique descendants.
+The identity map is discarded on every new observation.
+
 
 `covered` means that higher visible, non-minimized, non-layered/non-transparent
 desktop window rectangles completely cover the rectangle, possibly as a union.
@@ -136,7 +155,8 @@ Chrome/Edge are traversed through native UIA without changing browser flags.
 ### Compact-format host validation
 
 `cargo test --manifest-path native-win/Cargo.toml -- --nocapture` includes window
-selection, directional ownership, coverage unions, Chromium clipping and state
+selection (including a foreground same-title tool overlay), cross-root runtime-ID
+de-duplication, hidden-summary aggregation, directional ownership, coverage unions, Chromium clipping and state
 formatting checks. Its synthetic player model has 43 target controls, an additional
 37 owned controls, and a separate 930-element page plus two small unrelated
 windows. It uses invented fixture content only. The pre-change formatter emits
@@ -153,7 +173,11 @@ sizes and actual Qt/Chromium ownership, framework metadata, viewport clipping,
 index actions, screenshot choice and speech-session context/latency must still be
 verified with `scripts/verify-gui-win.mjs` and the real-app session. No Windows
 device was operated for this change. The earlier acceptance evidence above
-predates this observation policy.
+predates this observation policy. The tool-overlay selection and de-duplication
+follow-up also requires fresh device acceptance: verify home and player content
+screenshots, unique indexes and owned control actions, state size, and the spoken
+command rounds. Host tests cannot establish a provider’s runtime identity behavior
+or end-to-end voice reliability.
 
 ## Input and engine-side safety
 

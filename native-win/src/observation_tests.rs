@@ -35,7 +35,7 @@ fn foreground_then_z_order_never_area() {
     ws[0].tool = true;
     ws[1].bounds = rect(0, 0, 300, 200);
     assert_eq!(capture_target(&ws, 3), Some(2));
-    assert_eq!(capture_target(&ws, 1), Some(0)); // active popup is meaningful
+    assert_eq!(capture_target(&ws, 1), Some(1)); // foreground tool cannot displace content
     assert_eq!(capture_target(&ws, 999), Some(1)); // small topmost content beats area
     ws[1].minimized = true;
     assert_eq!(capture_target(&ws, 2), Some(2));
@@ -280,4 +280,46 @@ fn equivalent_player_scene_under_eight_kb() {
     assert_eq!(indexes.len(), 80);
     assert_eq!(indexes[43], (2, 0)); // dense indices retain the correct owning window
     assert_eq!(new.matches("Window summary:").count(), 3);
+}
+
+#[test]
+fn foreground_same_title_overlay_keeps_content_and_owned_controls() {
+    let mut overlay = window(1, Some(2));
+    overlay.tool = true;
+    overlay.class_name = "Qt5QWindowToolSaveBits".into();
+    overlay.title = "Fixture app".into();
+    let mut content = window(2, None);
+    content.title = overlay.title.clone();
+    content.class_name = "Qt5QWindowIcon".into();
+    let ws = vec![overlay, content];
+    assert_eq!(capture_target(&ws, 1), Some(1));
+    assert!(owned_by(&ws, 1, 2));
+    assert!(covered(ws[1].bounds, &ws[..1])); // coverage does not remove its tree
+}
+#[test]
+fn runtime_identity_reuses_first_index_across_window_roots() {
+    let mut ids = ElementIdentities::default();
+    let mut retained = vec![];
+    for (window, id) in [
+        (1, vec![42, 1]),
+        (1, vec![42, 2]),
+        (2, vec![42, 1]),
+        (2, vec![42, 2]),
+        (2, vec![42, 3]),
+    ] {
+        if ids.index(&id).is_none() {
+            retained.push(window);
+            ids.remember(id, retained.len());
+        }
+    }
+    assert_eq!(retained, vec![1, 1, 2]);
+    assert_eq!(ids.index(&[42, 1]), Some(1));
+    ids.remember(vec![42, 1], 99);
+    assert_eq!(ids.index(&[42, 1]), Some(1));
+    assert_eq!(ids.index(&[43, 1]), None); // same label/geometry is not identity
+    ids.remember(vec![], 4);
+    assert_eq!(ids.index(&[]), None);
+    assert!(hidden_windows_line(0).is_empty());
+    assert_eq!(hidden_windows_line(17).lines().count(), 1);
+    assert!(hidden_windows_line(17).contains("17"));
 }

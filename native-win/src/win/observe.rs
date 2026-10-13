@@ -258,13 +258,40 @@ unsafe fn node(el: &IUIAutomationElement, children: bool) -> Result<Node> {
     }
     Ok(node)
 }
+// UIA owns the identity semantics; never merge controls by title, role or bounds.
+unsafe fn runtime_id(el: &IUIAutomationElement) -> Option<Vec<i32>> {
+    use windows::Win32::System::Ole::*;
+    let array = el.GetRuntimeId().ok()?;
+    if array.is_null() {
+        return None;
+    }
+    let result = (|| {
+        if SafeArrayGetDim(array) != 1 || SafeArrayGetElemsize(array) != 4 {
+            return None;
+        }
+        let low = SafeArrayGetLBound(array, 1).ok()?;
+        let high = SafeArrayGetUBound(array, 1).ok()?;
+        if !(1..=256).contains(&(high as i64 - low as i64 + 1)) {
+            return None;
+        }
+        let mut id = vec![];
+        for i in low..=high {
+            let mut value = 0i32;
+            SafeArrayGetElement(array, &i, &mut value as *mut _ as _).ok()?;
+            id.push(value);
+        }
+        Some(id)
+    })();
+    let _ = SafeArrayDestroy(array);
+    result
+}
 pub unsafe fn observe(uia: &IUIAutomation, app: App, include: bool) -> Result<(Value, Snapshot)> {
     safety::desktop()?;
-    // Select only among the resolver's candidates (a title remains an explicit
-    // window restriction), but discover owned windows and summaries across the PID.
+    // Start with the resolver's candidates; tool-only title matches may expand
+    // to content below. Discover owned windows and summaries across the PID.
     let desktop = apps::observation_windows()?;
     let desktop_info: Vec<_> = desktop.iter().map(|w| apps::observation_info(w)).collect();
-    let candidates: Vec<_> = desktop_info
+    let mut candidates: Vec<_> = desktop_info
         .iter()
         .filter(|info| {
             desktop
@@ -278,6 +305,25 @@ pub unsafe fn observe(uia: &IUIAutomation, app: App, include: bool) -> Result<(V
         })
         .cloned()
         .collect();
+    // An explicit tool title must not force a transparent capture when this
+    // process has usable content. Preserve title restriction for content matches.
+    if !candidates
+        .iter()
+        .any(|w| w.visible && !w.minimized && !w.tool)
+    {
+        candidates = desktop_info
+            .iter()
+            .zip(&desktop)
+            .filter(|(_, w)| {
+                w.pid == app.pid
+                    && app
+                        .windows
+                        .iter()
+                        .any(|c| c.pid == w.pid && c.created == w.created)
+            })
+            .map(|(info, _)| info.clone())
+            .collect();
+    }
     let selected = capture_target(&candidates, GetForegroundWindow().0 as usize)
         .ok_or_else(|| Error::new("NO_ACCESSIBLE_WINDOW", "No visible top-level window"))?;
     let primary = desktop
@@ -301,7 +347,7 @@ pub unsafe fn observe(uia: &IUIAutomation, app: App, include: bool) -> Result<(V
         app.id,
         json!(primary.title)
     );
-    text += &format!("Capture target: hwnd={:x} class={} (foreground candidate, otherwise topmost visible non-tool window).\n", primary.hwnd.0 as usize, json!(primary.class_name));
+    text += &format!("Capture target: hwnd={:x} class={} (foreground non-tool, otherwise topmost visible non-tool window).\n", primary.hwnd.0 as usize, json!(primary.class_name));
     let mut snapshot = Snapshot {
         app: app.clone(),
         keyboard_window: primary.clone(),
@@ -313,6 +359,9 @@ pub unsafe fn observe(uia: &IUIAutomation, app: App, include: bool) -> Result<(V
     let started = Instant::now();
     let mut inspected = 0;
     let mut truncated = false;
+    let mut identities = ElementIdentities::default();
+    let mut identity_missing = Vec::<usize>::new();
+    let mut hidden = 0;
     // Target first, then its owned descendants; all unrelated windows are summaries.
     let mut order: Vec<_> = desktop
         .iter()
@@ -322,6 +371,10 @@ pub unsafe fn observe(uia: &IUIAutomation, app: App, include: bool) -> Result<(V
     order.sort_by_key(|(_, w)| w.hwnd != primary.hwnd);
     for (desktop_index, window) in order {
         let info = &desktop_info[desktop_index];
+        if !info.visible {
+            hidden += 1;
+            continue;
+        }
         let tree = info.visible
             && !info.minimized
             && owned_by(&family, info.hwnd, primary.hwnd.0 as usize);
@@ -400,9 +453,31 @@ pub unsafe fn observe(uia: &IUIAutomation, app: App, include: bool) -> Result<(V
             if outside {
                 omitted += 1;
             }
-            let visible = !outside && node.visible_in_tree();
+            let eligible = !outside && node.visible_in_tree();
+            let id = if eligible { runtime_id(&el) } else { None };
+            let duplicate = eligible
+                && (id.as_ref().and_then(|id| identities.index(id)).is_some()
+                    || if id.is_none() {
+                        snapshot.elements.iter().any(|previous| {
+                            uia.CompareElements(&previous.element, &el)
+                                .is_ok_and(|v| v.as_bool())
+                        })
+                    } else {
+                        identity_missing.iter().any(|&i| {
+                            uia.CompareElements(&snapshot.elements[i].element, &el)
+                                .is_ok_and(|v| v.as_bool())
+                        })
+                    });
+            // Do not prune descendants: a provider can expose new children via
+            // another root. Only the first occurrence receives an action index.
+            let visible = eligible && !duplicate;
             if visible {
                 let index = snapshot.elements.len() + 1;
+                if let Some(id) = id {
+                    identities.remember(id, index);
+                } else {
+                    identity_missing.push(snapshot.elements.len());
+                }
                 text += &(node.line(index, visual_depth) + "\n");
                 snapshot.elements.push(Element {
                     element: el.clone(),
@@ -422,6 +497,7 @@ pub unsafe fn observe(uia: &IUIAutomation, app: App, include: bool) -> Result<(V
         text += &omitted_line(omitted);
         // Continue summaries even if a tree exhausts its traversal budget.
     }
+    text += &hidden_windows_line(hidden);
     if truncated {
         text+="Tree truncated: limit 1200 listed / 8000 inspected nodes, depth 120, 180000 bytes, or 8 seconds.\n";
     }
