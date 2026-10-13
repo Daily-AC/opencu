@@ -51,6 +51,20 @@ Configure a stdio MCP server in your agent:
 No network service is exposed. The engine communicates through inherited
 stdin/stdout and exits when its client disconnects.
 
+## pi
+
+The pi coding agent can use OpenCU through a single-file extension (tested with pi 0.83):
+
+```sh
+pi -e ./adapters/pi/opencu.ts
+```
+
+It discovers all OpenCU tools, preserves text and images, and appends OpenCU's
+instructions to your existing prompt. One connection lasts for the whole session;
+it never reconnects automatically after a disconnect or a person's Escape stop.
+Print and RPC modes are supported. See the [pi adapter guide](adapters/pi/README.md)
+for persistent loading, Windows use and command overrides.
+
 ## Tools
 
 OpenCU exposes `list_apps`, `get_app_state`, `activate_app`, `click`, `drag`,
