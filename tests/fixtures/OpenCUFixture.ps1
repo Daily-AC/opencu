@@ -14,6 +14,9 @@ public class OpenCUFixture : Form {
     [DllImport("user32.dll")] static extern bool SetProcessDpiAwarenessContext(IntPtr ctx);
     [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr hwnd,int command);
     [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hwnd);
+    [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern IntPtr FindWindow(string cls,string title);
+    [DllImport("user32.dll")] static extern bool GetWindowDisplayAffinity(IntPtr hwnd,out uint affinity);
+    [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr hwnd,out RECT bounds);
     [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr w, int a, out RECT r, int size);
     [DllImport("user32.dll")] static extern bool OpenClipboard(IntPtr w);
     [DllImport("user32.dll")] static extern bool CloseClipboard();
@@ -33,7 +36,8 @@ public class OpenCUFixture : Form {
     readonly TrackBar slider = new TrackBar();
     readonly Panel scrolling = new Panel();
     readonly Timer timer = new Timer();
-    bool ready;
+    readonly StringBuilder received = new StringBuilder();
+    bool ready, indicatorVisible, indicatorReadable; uint indicatorAffinity;
     int clicks, moves, wheel; string digest = "", error = "";
     public OpenCUFixture(string o, string c, string title) {
         output=o; command=c; Text=title; Name="OpenCUFixture";
@@ -41,7 +45,7 @@ public class OpenCUFixture : Form {
         AutoScaleMode=AutoScaleMode.Dpi;
         counter.Name="counterButton"; counter.AccessibleName="Fixture counter"; counter.Text="Fixture counter";
         counter.SetBounds(20,20,220,45); counter.Click += delegate { clicks++; Save(); };
-        notes.Name="notes"; notes.AccessibleName="Fixture notes"; notes.Multiline=true; notes.SetBounds(20,90,620,100); notes.TextChanged += delegate { Save(); };
+        notes.Name="notes"; notes.AccessibleName="Fixture notes"; notes.Multiline=true; notes.SetBounds(20,90,620,100); notes.TextChanged += delegate { Save(); };notes.KeyPress += delegate(object sender,KeyPressEventArgs e) {received.Append(((int)e.KeyChar).ToString("x4")+",");};
         password.Name="password";password.AccessibleName="Fixture password";password.UseSystemPasswordChar=true;password.Text="OpenCU-Fixture-Secret-7391";password.SetBounds(320,215,250,30);
         marker.BackColor=Color.Magenta;marker.SetBounds(590,20,50,45);
         check.Name="checkbox"; check.AccessibleName="Fixture checkbox"; check.Text="Fixture checkbox";check.SetBounds(20,215,260,40);check.CheckedChanged += delegate { Save(); };
@@ -54,6 +58,8 @@ public class OpenCUFixture : Form {
             if(File.Exists(command)) { var cmd=File.ReadAllText(command).Trim();File.Delete(command);
                 if(cmd=="move") { Location=new Point(Location.X+40,Location.Y+30);moves++; }
                 else if(cmd=="digest") { try{digest=ClipboardDigest();}catch(Exception e){error=e.Message;} }
+                else if(cmd=="indicator") { var h=FindWindow("OpenCUOperationIndicator",null);indicatorVisible=IsWindowVisible(h);indicatorReadable=GetWindowDisplayAffinity(h,out indicatorAffinity); }
+                else if(cmd=="indicator-cover") { var h=FindWindow("OpenCUOperationIndicator",null);RECT r;GetWindowRect(h,out r);Location=new Point(r.Left-140,0);var p=PointToClient(new Point((r.Left+r.Right)/2,r.Bottom-4));marker.SetBounds(p.X-5,p.Y-5,10,10); }
                 else if(cmd=="cover") { cover=new Form();cover.Text=Text+" Cover";cover.FormBorderStyle=FormBorderStyle.None;cover.StartPosition=FormStartPosition.Manual;cover.Bounds=Bounds;cover.BackColor=Color.Lime;cover.Show(this); }
                 else if(cmd=="uncover") { if(cover!=null){cover.Close();cover.Dispose();cover=null;} }
                 else if(cmd=="close") { Close();return; }
@@ -66,7 +72,7 @@ public class OpenCUFixture : Form {
     void Save() {
         if(!ready || !IsHandleCreated || !IsWindowVisible(Handle))return;
         RECT r;DwmGetWindowAttribute(Handle,9,out r,16);Point p=counter.PointToScreen(new Point(counter.Width/2,counter.Height/2));Point m=marker.PointToScreen(new Point(marker.Width/2,marker.Height/2));
-        var json="{\"pid\":"+System.Diagnostics.Process.GetCurrentProcess().Id+",\"clicks\":"+clicks+",\"notes\":"+Q(notes.Text)+",\"checked\":"+(check.Checked?"true":"false")+",\"slider\":"+slider.Value+",\"scroll\":"+(-scrolling.AutoScrollPosition.Y)+",\"wheel\":"+wheel+",\"moves\":"+moves+",\"x\":"+(p.X-r.Left)+",\"y\":"+(p.Y-r.Top)+",\"markerX\":"+(m.X-r.Left)+",\"markerY\":"+(m.Y-r.Top)+",\"width\":"+(r.Right-r.Left)+",\"height\":"+(r.Bottom-r.Top)+",\"clipboardDigest\":"+Q(digest)+",\"error\":"+Q(error)+"}";
+        var json="{\"pid\":"+System.Diagnostics.Process.GetCurrentProcess().Id+",\"clicks\":"+clicks+",\"notes\":"+Q(notes.Text)+",\"checked\":"+(check.Checked?"true":"false")+",\"slider\":"+slider.Value+",\"scroll\":"+(-scrolling.AutoScrollPosition.Y)+",\"wheel\":"+wheel+",\"moves\":"+moves+",\"x\":"+(p.X-r.Left)+",\"y\":"+(p.Y-r.Top)+",\"markerX\":"+(m.X-r.Left)+",\"markerY\":"+(m.Y-r.Top)+",\"width\":"+(r.Right-r.Left)+",\"height\":"+(r.Bottom-r.Top)+",\"indicatorVisible\":"+(indicatorVisible?"true":"false")+",\"indicatorReadable\":"+(indicatorReadable?"true":"false")+",\"indicatorAffinity\":"+indicatorAffinity+",\"keyChars\":"+Q(received.ToString())+",\"inputLanguage\":"+Q(InputLanguage.CurrentInputLanguage.LayoutName)+",\"clipboardDigest\":"+Q(digest)+",\"error\":"+Q(error)+"}";
         try{File.WriteAllText(output,json,new UTF8Encoding(false));}catch(IOException){}
     }
     static string ClipboardDigest(){
