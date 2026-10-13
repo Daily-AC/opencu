@@ -137,6 +137,14 @@ impl Clipboard {
             .collect();
         let data = alloc(&bytes)?;
         this.payload = bytes;
+        let excluded = RegisterClipboardFormatW(w!("ExcludeClipboardContentFromMonitorProcessing"));
+        if excluded == 0 {
+            return Err(Error::new(
+                "CLIPBOARD_UNAVAILABLE",
+                "Cannot exclude temporary paste content from clipboard history and cloud sync",
+            ));
+        }
+        let exclusion = alloc(&[0])?;
         if GetClipboardSequenceNumber() != before {
             return Err(Error::new(
                 "CLIPBOARD_CHANGED",
@@ -146,7 +154,7 @@ impl Clipboard {
         EmptyClipboard()?;
         this.changed = true;
         this.sequence = GetClipboardSequenceNumber();
-        let result = put(13, data);
+        let result = put(excluded, exclusion).and_then(|_| put(13, data));
         drop(opened);
         this.sequence = GetClipboardSequenceNumber();
         if let Err(e) = result {
