@@ -31,6 +31,7 @@ public class OpenCUFixture : Form {
     readonly TrackBar slider = new TrackBar();
     readonly Panel scrolling = new Panel();
     readonly Timer timer = new Timer();
+    bool ready;
     int clicks, moves, wheel; string digest = "", error = "";
     public OpenCUFixture(string o, string c, string title) {
         output=o; command=c; Text=title; Name="OpenCUFixture";
@@ -57,11 +58,11 @@ public class OpenCUFixture : Form {
             }
             Save();
         };
-        Shown += delegate {timer.Start();Save();};FormClosed += delegate{timer.Stop();};
+        Shown += delegate {ready=true;timer.Start();Save();};FormClosed += delegate{timer.Stop();};
     }
     static string Q(string s) {var b=new StringBuilder("\"");foreach(char c in s){if(c=='"'||c=='\\'){b.Append('\\');b.Append(c);}else if(c<32){b.Append("\\u");b.Append(((int)c).ToString("x4"));}else b.Append(c);}return b.Append('"').ToString();}
     void Save() {
-        if(!IsHandleCreated)return;
+        if(!ready || !IsHandleCreated || !Visible)return;
         RECT r;DwmGetWindowAttribute(Handle,9,out r,16);Point p=counter.PointToScreen(new Point(counter.Width/2,counter.Height/2));Point m=marker.PointToScreen(new Point(marker.Width/2,marker.Height/2));
         var json="{\"pid\":"+System.Diagnostics.Process.GetCurrentProcess().Id+",\"clicks\":"+clicks+",\"notes\":"+Q(notes.Text)+",\"checked\":"+(check.Checked?"true":"false")+",\"slider\":"+slider.Value+",\"scroll\":"+(-scrolling.AutoScrollPosition.Y)+",\"wheel\":"+wheel+",\"moves\":"+moves+",\"x\":"+(p.X-r.Left)+",\"y\":"+(p.Y-r.Top)+",\"markerX\":"+(m.X-r.Left)+",\"markerY\":"+(m.Y-r.Top)+",\"width\":"+(r.Right-r.Left)+",\"height\":"+(r.Bottom-r.Top)+",\"clipboardDigest\":"+Q(digest)+",\"error\":"+Q(error)+"}";
         try{File.WriteAllText(output,json,new UTF8Encoding(false));}catch(IOException){}
