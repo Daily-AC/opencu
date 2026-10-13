@@ -147,7 +147,9 @@ means Windows, `ctrl` means Control; modifiers use the target keyboard layout.
 detents (user wheel settings still apply), limited to 100 pages per request.
 `drag`, `select_text`, HTML and Markdown paste return UNSUPPORTED_ON_WINDOWS.
 
-Paste snapshots every copyable HGLOBAL clipboard format before mutation, then
+Paste snapshots every copyable HGLOBAL clipboard format before mutation. Temporary
+paste content is marked ExcludeClipboardContentFromMonitorProcessing so Windows
+clipboard history and cloud sync do not retain it. The engine then
 restores it after Ctrl+V and a short settling wait. Windows can synthesize legacy
 text formats and advance the sequence while consuming the paste; unchanged owner
 and Unicode payload still identify the engine's clipboard. A changed owner or
