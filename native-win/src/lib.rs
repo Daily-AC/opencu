@@ -303,12 +303,15 @@ pub struct Node {
     pub settable: bool,
     pub actions: Vec<String>,
     pub has_children: bool,
+    pub focusable: bool,
 }
 impl Node {
     pub fn visible_in_tree(&self) -> bool {
         // Only omit empty structural containers. Never omit unnamed leaf controls.
         !(self.has_children
-            && ["Pane", "Group", "Custom"].contains(&self.role.as_str())
+            && ["Pane", "Group"].contains(&self.role.as_str())
+            && ["", "Pane", "Group", "QWidget", "QFrame"].contains(&self.class_name.as_str())
+            && !self.focusable
             && self.name.is_empty()
             && self.automation_id.is_empty()
             && self.value.is_none()
@@ -432,7 +435,15 @@ mod tests {
         );
         n.role = "Pane".into();
         n.has_children = true;
+        assert!(
+            n.visible_in_tree(),
+            "An unnamed IconButton must survive even if its provider calls it a Pane"
+        );
+        n.class_name = "QWidget".into();
         assert!(!n.visible_in_tree());
+        n.focusable = true;
+        assert!(n.visible_in_tree(), "Focusable containers are controls");
+        n.focusable = false;
         n.has_children = false;
         assert!(n.visible_in_tree());
         n.name = "Chrome Legacy Window".into();
