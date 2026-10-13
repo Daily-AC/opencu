@@ -212,7 +212,7 @@ for both pipe directions; default console code pages can corrupt app names.
 
 Separate manual acceptance remains required for real human interruption, held-key
 cleanup, elevated targets, locked/secure desktops, multiple monitors/DPI changes,
-Start-menu launch variants, and Mango TV's Qt/CEF/video surfaces. The automatic
+Start-menu launch variants, and Qt/CEF desktop clients and protected video surfaces. The automatic
 script does not synthesize “human” input or attempt to lock/elevate the desktop.
 
 API references: [UIA raw tree](https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-treeoverview),
