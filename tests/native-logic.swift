@@ -27,13 +27,14 @@ struct OpenCUInputLogicChecks {
             catch { expect(false, "Unexpected error: \(error)") }
         }
         // The same remote focus works in the foreground and must be refused in
-        // the background. Unknown focus keeps the existing PID-targeted path.
+        // the background. A host-PID panel proxy must also be refused; unknown
+        // focus in ordinary apps keeps the existing PID-targeted path.
         for frontmost in [false, true] {
-            for hasWindow in [false, true] {
+            for isFilePanel in [false, true] {
                 for owner: pid_t? in [nil, 10, 20] {
-                    let code = !frontmost && owner == 20 ? "BACKGROUND_REMOTE_FOCUS" : nil
+                    let code = !frontmost && (isFilePanel || owner == 20) ? "BACKGROUND_REMOTE_FOCUS" : nil
                     let checkDelivery = {
-                        try InputController.requireKeyboardDelivery(isFrontmost: frontmost, hasWindow: hasWindow,
+                        try InputController.requireKeyboardDelivery(isFrontmost: frontmost, isFilePanel: isFilePanel,
                                                                     targetPID: 10, focusedPID: owner)
                     }
                     if let code { fails(code, checkDelivery) }
@@ -41,6 +42,17 @@ struct OpenCUInputLogicChecks {
                 }
             }
         }
+        // Observed identifiers, not localized titles or process names. A sheet
+        // without a file-panel identifier is still an ordinary local input target.
+        for role in [kAXWindowRole, kAXSheetRole] {
+            for identifier in ["save-panel", "open-panel"] {
+                expect(InputController.isFilePanel(role: role, identifier: identifier), "File-panel proxy recognized without its PID")
+            }
+            expect(!InputController.isFilePanel(role: role, identifier: "acceptanceWindow"), "Ordinary window/sheet still allows background typing")
+            expect(!InputController.isFilePanel(role: role, identifier: nil), "Unknown identifier is not proof of a file panel")
+        }
+        expect(!InputController.isFilePanel(role: kAXTextFieldRole, identifier: "save-panel"), "Only a window/sheet root identifies a panel")
+        expect(!InputController.isFilePanel(role: nil, identifier: "open-panel"), "Missing role is not proof of a file panel")
         // Roles seen in the paired benchmark: Safari selected its save sheet,
         // while Finder selected a desktop scroll area rather than a window.
         expect(axIsWindowRole(kAXSheetRole), "Selected save sheet remains a window root")
