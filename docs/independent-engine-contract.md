@@ -1,10 +1,11 @@
 # Independent engine implementation contract
 
-The active goal is an original OpenCU engine using macOS frameworks. No OpenAI
-SDK, executable, account, signature allowlist, turn metadata or daemon is part
-of the runtime. Windows is outside this implementation step.
+OpenCU provides original native engines using macOS frameworks and Windows APIs.
+No OpenAI SDK, executable, account, signature allowlist, turn metadata or daemon is part
+of the runtime. The [Windows contract](windows-engine-contract.md) records phase-1
+behavior and its pending real-desktop acceptance.
 
-The Swift executable speaks JSON lines on inherited stdin/stdout. Requests are
+Each native executable speaks JSON lines on inherited stdin/stdout. Requests are
 `{id, method, params}`; responses are `{id, result}` or
 `{id, error: {code, message}}`. Diagnostics go to stderr. One request runs at a
 time. There is no network listener and no caller-brand identity check.
@@ -33,3 +34,26 @@ public NSEvent/CGEvent creation. Actual received events showed that public
 creation alone left the window-relative point at an invalid sentinel. Resolve
 the system symbol locally, fail clearly if unavailable, and retain target-PID
 routing and all normal OS permissions. Do not add a global input fallback.
+
+## Direct-host safety contract
+
+An engine can be spawned by any host over inherited stdio; the MCP server is an
+optional adapter. The engine must enforce observation/window identity, finite
+in-image coordinates, and latest screenshot geometry without relying on Node.
+A state/action attempt consumes the prior coordinate grant, even on failure;
+only successful capture renews it. Inventory/doctor calls do not consume it.
+Text-only observations cannot renew screenshot coordinates. Hosts must never
+retry input automatically and must inspect state after a partial failure.
+
+Windows phase 1 enforces this in the engine, plus PERSON_ACTIVE interruption,
+foreground checks, token-integrity checks, and interactive-session/secure-desktop
+refusals. Error code names are stable and documented in the Windows note.
+
+macOS already checks captured dimensions, exact window identity/current bounds,
+lock state and AX permissions in its engine, and consumes screenshots before
+input execution. Known parity gaps remain: app resolution/permission failures
+can precede native screenshot invalidation, and real human activity does not yet
+abort every input method with PERSON_ACTIVE (the focus guard only stops its own
+foreground restoration). Node already invalidates its coordinate state earlier.
+The macOS engine is unchanged in this phase; direct hosts must not interpret this
+note as evidence that those parity gaps have been fixed or accepted.
