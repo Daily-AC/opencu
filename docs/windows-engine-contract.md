@@ -1,8 +1,9 @@
-# Windows engine, phase 1
+# Windows engine contract
 
-Status: implemented and cross-compiled on macOS; host logic tests pass. No Windows
-executable or GUI acceptance has been run yet. This note specifies intended
-behavior, not desktop acceptance evidence.
+Status: cross-compiled on macOS and accepted on disposable Windows 11 native and
+Chrome fixtures in three consecutive runs. Direct UTF-8 stdio was also exercised
+from PowerShell without Node. See the [fixture evidence](../evidence/opencu-windows-gui-2026-10-13.json).
+Physical takeover and privileged/locked-desktop cases remain manual follow-ups.
 
 ## Standalone transport and embedding
 
@@ -205,6 +206,9 @@ It never opens a normal browser profile, remote site or user document. It hashes
 the existing clipboard for restoration verification and does not replace it with
 a fixture baseline. Unsupported clipboard contents cause an explicit failure.
 `OPENCU_TEST_CHROME` can select a Chrome executable.
+`scripts/verify-engine-win.ps1` tests the native protocol without Node, including
+engine-side coordinate refusals. PowerShell clients must explicitly use UTF-8
+for both pipe directions; default console code pages can corrupt app names.
 
 Separate manual acceptance remains required for real human interruption, held-key
 cleanup, elevated targets, locked/secure desktops, multiple monitors/DPI changes,

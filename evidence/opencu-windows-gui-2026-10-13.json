@@ -1,0 +1,214 @@
+{
+  "test": "windows-foreground-and-direct-stdio",
+  "source_commit": "2b972f5d29330e64501c88f83ff55b26ce8656cc",
+  "engine_sha256": "a2323e40bf498ab4329eb2d2f7230e866a3bb05bc3f351a378c9fd5c6d6a73fd",
+  "consecutive_runs": 3,
+  "runs": [
+    {
+      "test": "windows-foreground-fixtures",
+      "timestamp": "2026-10-13T03:55:25.040Z",
+      "checks": [
+        "tree read and physical-size window PNG",
+        "native password text is redacted",
+        "covered-window capture preserves target pixels",
+        "indexed click",
+        "key chord and Unicode typing",
+        "visible operation indicator is excluded from capture",
+        "target pixels remain intact beneath the visible indicator",
+        "engine-injected Escape does not trigger the physical stop latch",
+        "plain-text paste and original clipboard digest restored",
+        "RangeValue and exposed secondary action",
+        "scroll",
+        "fresh screenshot coordinate click",
+        "engine refuses moved-window coordinates before input",
+        "unsupported operation refused",
+        "web password value is redacted",
+        "Chrome native UIA reaches local page text and links without accessibility flags",
+        "Chrome indexed link action",
+        "Chrome literal Unicode typing preserves spaces and dispatches input",
+        "all temporary fixture and browser processes closed"
+      ],
+      "ok": true,
+      "engine_sha256": "a2323e40bf498ab4329eb2d2f7230e866a3bb05bc3f351a378c9fd5c6d6a73fd",
+      "fixtureWindow": {
+        "Id": 24112,
+        "MainWindowTitle": "OpenCU Fixture 4352fcbb-3711-44b5-b8e3-8abce2106d1e",
+        "hwnd": 113970514
+      },
+      "lastFixtureImage": "screenshot-19.png",
+      "unicode": {
+        "pid": 24112,
+        "clicks": 1,
+        "notes": "Windows 中文 😀",
+        "checked": false,
+        "slider": 0,
+        "scroll": 0,
+        "wheel": 0,
+        "moves": 0,
+        "x": 131,
+        "y": 80,
+        "markerX": 616,
+        "markerY": 80,
+        "width": 682,
+        "height": 599,
+        "indicatorVisible": false,
+        "indicatorReadable": false,
+        "indicatorAffinity": 0,
+        "keyChars": "0001,0057,0069,006e,0064,006f,0077,0073,0020,4e2d,6587,0020,d83d,de00,",
+        "error": ""
+      },
+      "indicator": {
+        "visible": true,
+        "affinity": 17,
+        "readable": true
+      }
+    },
+    {
+      "test": "windows-foreground-fixtures",
+      "timestamp": "2026-10-13T03:55:46.836Z",
+      "checks": [
+        "tree read and physical-size window PNG",
+        "native password text is redacted",
+        "covered-window capture preserves target pixels",
+        "indexed click",
+        "key chord and Unicode typing",
+        "visible operation indicator is excluded from capture",
+        "target pixels remain intact beneath the visible indicator",
+        "engine-injected Escape does not trigger the physical stop latch",
+        "plain-text paste and original clipboard digest restored",
+        "RangeValue and exposed secondary action",
+        "scroll",
+        "fresh screenshot coordinate click",
+        "engine refuses moved-window coordinates before input",
+        "unsupported operation refused",
+        "web password value is redacted",
+        "Chrome native UIA reaches local page text and links without accessibility flags",
+        "Chrome indexed link action",
+        "Chrome literal Unicode typing preserves spaces and dispatches input",
+        "all temporary fixture and browser processes closed"
+      ],
+      "ok": true,
+      "engine_sha256": "a2323e40bf498ab4329eb2d2f7230e866a3bb05bc3f351a378c9fd5c6d6a73fd",
+      "fixtureWindow": {
+        "Id": 31396,
+        "MainWindowTitle": "OpenCU Fixture 7fef55b0-de2a-40a9-9f7c-5b158f6bc295",
+        "hwnd": 5114444
+      },
+      "lastFixtureImage": "screenshot-19.png",
+      "unicode": {
+        "pid": 31396,
+        "clicks": 1,
+        "notes": "Windows 中文 😀",
+        "checked": false,
+        "slider": 0,
+        "scroll": 0,
+        "wheel": 0,
+        "moves": 0,
+        "x": 131,
+        "y": 80,
+        "markerX": 616,
+        "markerY": 80,
+        "width": 682,
+        "height": 599,
+        "indicatorVisible": false,
+        "indicatorReadable": false,
+        "indicatorAffinity": 0,
+        "keyChars": "0001,0057,0069,006e,0064,006f,0077,0073,0020,4e2d,6587,0020,d83d,de00,",
+        "error": ""
+      },
+      "indicator": {
+        "visible": true,
+        "affinity": 17,
+        "readable": true
+      }
+    },
+    {
+      "test": "windows-foreground-fixtures",
+      "timestamp": "2026-10-13T03:56:08.439Z",
+      "checks": [
+        "tree read and physical-size window PNG",
+        "native password text is redacted",
+        "covered-window capture preserves target pixels",
+        "indexed click",
+        "key chord and Unicode typing",
+        "visible operation indicator is excluded from capture",
+        "target pixels remain intact beneath the visible indicator",
+        "engine-injected Escape does not trigger the physical stop latch",
+        "plain-text paste and original clipboard digest restored",
+        "RangeValue and exposed secondary action",
+        "scroll",
+        "fresh screenshot coordinate click",
+        "engine refuses moved-window coordinates before input",
+        "unsupported operation refused",
+        "web password value is redacted",
+        "Chrome native UIA reaches local page text and links without accessibility flags",
+        "Chrome indexed link action",
+        "Chrome literal Unicode typing preserves spaces and dispatches input",
+        "all temporary fixture and browser processes closed"
+      ],
+      "ok": true,
+      "engine_sha256": "a2323e40bf498ab4329eb2d2f7230e866a3bb05bc3f351a378c9fd5c6d6a73fd",
+      "fixtureWindow": {
+        "Id": 37768,
+        "MainWindowTitle": "OpenCU Fixture 629a6209-14bc-41c7-8800-1d9fe5cea9f5",
+        "hwnd": 33817672
+      },
+      "lastFixtureImage": "screenshot-19.png",
+      "unicode": {
+        "pid": 37768,
+        "clicks": 1,
+        "notes": "Windows 中文 😀",
+        "checked": false,
+        "slider": 0,
+        "scroll": 0,
+        "wheel": 0,
+        "moves": 0,
+        "x": 131,
+        "y": 80,
+        "markerX": 616,
+        "markerY": 80,
+        "width": 682,
+        "height": 599,
+        "indicatorVisible": false,
+        "indicatorReadable": false,
+        "indicatorAffinity": 0,
+        "keyChars": "0001,0057,0069,006e,0064,006f,0077,0073,0020,4e2d,6587,0020,d83d,de00,",
+        "error": ""
+      },
+      "indicator": {
+        "visible": true,
+        "affinity": 17,
+        "readable": true
+      }
+    }
+  ],
+  "standalone": {
+    "test": "windows-direct-stdio",
+    "engine_sha256": "a2323e40bf498ab4329eb2d2f7230e866a3bb05bc3f351a378c9fd5c6d6a73fd",
+    "ok": true,
+    "checks": [
+      "observe, indexed click, observe via direct stdio",
+      "engine rejects out-of-bounds screenshot coordinates",
+      "engine rejects moved-window and consumed screenshots",
+      "text-only observation grants no coordinates"
+    ],
+    "client": "PowerShell with explicit UTF-8 pipes; no Node"
+  },
+  "clipboard_history": {
+    "final_run_paste_texts_retained": 0
+  },
+  "not_exercised": [
+    "physical human Escape and real human interruption",
+    "locked or secure desktop transitions and elevated targets",
+    "multiple monitors and forced WARP fallback"
+  ],
+  "redactions": [
+    "machine paths",
+    "keyboard layout metadata",
+    "clipboard digests"
+  ],
+  "cleanup": {
+    "remaining_owned_processes": 0,
+    "remaining_temporary_profiles": 0
+  }
+}

@@ -3,8 +3,8 @@
 OpenCU is an independent local computer-use engine with an MCP interface. Its
 macOS Swift engine uses Accessibility, CoreGraphics and ScreenCaptureKit directly
 and operates apps in the background without taking over your keyboard or cursor.
-A Windows Rust engine is implemented for foreground operation; its real-desktop
-acceptance is pending.
+The Windows Rust engine operates in the foreground and passes disposable
+WinForms/Chrome acceptance on Windows 11.
 It needs no account, model credentials or proprietary runtime. Any compatible MCP
 client can call it; the calling agent supplies the model and decides what to do.
 
@@ -13,8 +13,8 @@ AppKit fixtures and isolated release verification, and completed a real web task
 in Chrome in the background. Safari/WebKit, Qt and Java apps are not yet accepted.
 See the [current evidence and limits](docs/opencu-independent-2026-10-12.md).
 
-The accepted target is **macOS 14 or later on Apple silicon**. Windows phase 1
-is cross-compiled for **Windows 11 x64**; see the Windows section below.
+The accepted target is **macOS 14 or later on Apple silicon**. The Windows engine
+has fixture acceptance on **Windows 11 x64**; see the Windows section below.
 
 ## Quick start
 
@@ -114,7 +114,7 @@ State options include `disableDiff`, `includeScreenshot`, `waitForText` and
 an error with the last observed state. The tree reports its node/depth/time limits
 when truncated. Image coordinates never silently fall back to another window.
 
-## Windows (phase 1)
+## Windows
 
 The Rust engine implements UI Automation trees (including unnamed controls),
 window PNGs, indexed/coordinate click, Unicode typing, plain-text paste, keys,
@@ -122,7 +122,9 @@ scroll, writable values and exposed secondary actions. Input brings the target
 window to the foreground; Windows can refuse activation. Human keyboard/mouse
 activity stops the current call. A capture-excluded banner shows that OpenCU is
 operating; physical Esc disables further input on that connection. Drag and text selection are not supported yet.
-These paths are implemented, **not yet accepted on a Windows desktop**.
+The [Windows acceptance evidence](evidence/opencu-windows-gui-2026-10-13.json)
+records three consecutive fixture runs and a direct PowerShell client. Physical
+human interruption, secure desktops and elevated targets still need manual checks.
 
 Cross-compile on a Mac with Rust's `x86_64-pc-windows-gnu` target and MinGW-w64
 (`x86_64-w64-mingw32-gcc` on PATH):
