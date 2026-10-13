@@ -23,10 +23,11 @@ struct TargetApp {
 
 struct WindowSnapshot {
     let app: TargetApp
-    let window: AXUIElement
+    let window: AXUIElement?
     let bounds: CGRect
     let windowID: CGWindowID?
     let elements: [Int: AXUIElement]
+    let elementPaths: [Int: [AXUIElement]]
     let screenshotWidth: Int?
     let screenshotHeight: Int?
 }
@@ -93,4 +94,46 @@ func requireAccessibility() throws {
 func desktopLocked() -> Bool {
     let session = CGSessionCopyCurrentDictionary() as? [String: Any]
     return session?["CGSSessionScreenIsLocked"] as? Bool ?? false
+}
+
+func axElement(_ element: AXUIElement, _ name: String) -> AXUIElement? {
+    guard let value = axValue(element, name), CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+    return (value as! AXUIElement)
+}
+
+/// Safari exposes its Save panel itself as AXFocusedWindow with role AXSheet.
+/// Finder exposes a desktop AXScrollArea there, which is not an input window.
+func axIsWindowRole(_ role: String?) -> Bool {
+    role == kAXWindowRole || role == kAXSheetRole
+}
+
+func axWindows(_ application: AXUIElement) -> [AXUIElement] {
+    (axValue(application, kAXWindowsAttribute) as? [AXUIElement] ?? []).filter {
+        axIsWindowRole(axString($0, kAXRoleAttribute))
+    }
+}
+
+func axSelectedWindow(_ application: AXUIElement) -> AXUIElement? {
+    for attribute in [kAXFocusedWindowAttribute, kAXMainWindowAttribute] {
+        if let window = axElement(application, attribute), axIsWindowRole(axString(window, kAXRoleAttribute)) { return window }
+    }
+    let windows = axWindows(application)
+    return windows.count == 1 ? windows[0] : nil
+}
+
+/// Recheck the exact observed edges, not a PID, title, geometry or cached
+/// membership. Remote AX children are allowed only while still attached.
+func attachedPath<Node>(_ path: [Node], to roots: [Node], equal: (Node, Node) -> Bool,
+                        children: (Node) -> [Node]) -> Bool {
+    guard let root = path.first, roots.contains(where: { equal($0, root) }) else { return false }
+    return zip(path, path.dropFirst()).allSatisfy { parent, child in
+        children(parent).contains { equal($0, child) }
+    }
+}
+
+func axChildren(_ element: AXUIElement) -> [AXUIElement] {
+    var values: CFArray?
+    // Same bound as observation. An oversized or unavailable branch fails closed.
+    guard AXUIElementCopyAttributeValues(element, kAXChildrenAttribute as CFString, 0, 8_000, &values) == .success else { return [] }
+    return values as? [AXUIElement] ?? []
 }

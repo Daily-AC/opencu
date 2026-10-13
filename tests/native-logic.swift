@@ -26,6 +26,42 @@ struct OpenCUInputLogicChecks {
             catch let error as OpenCUError { expect(error.code == code, "\(error.code) != \(code)") }
             catch { expect(false, "Unexpected error: \(error)") }
         }
+        // Roles seen in the paired benchmark: Safari selected its save sheet,
+        // while Finder selected a desktop scroll area rather than a window.
+        expect(axIsWindowRole(kAXSheetRole), "Selected save sheet remains a window root")
+        expect(axIsWindowRole(kAXWindowRole), "Document window remains a window root")
+        expect(!axIsWindowRole(kAXScrollAreaRole), "Finder desktop is windowless")
+        expect(!axIsWindowRole(nil), "Missing role cannot grant window input")
+        // Model the live AX attachment graph. Remote service nodes deliberately
+        // share neither PID nor window identity with their presenting app.
+        struct Node: Equatable { let pid: Int; let id: String }
+        let window = Node(pid: 10, id: "document")
+        let sibling = Node(pid: 10, id: "other-document")
+        let menu = Node(pid: 10, id: "menu")
+        let item = Node(pid: 10, id: "new")
+        let sheet = Node(pid: 20, id: "remote-sheet")
+        let field = Node(pid: 20, id: "filename")
+        let unrelated = Node(pid: 30, id: "unrelated-window")
+        let otherPanel = Node(pid: 20, id: "same-service-other-panel")
+        var edges = ["document": [sheet], "remote-sheet": [field], "menu": [item],
+                     "other-document": [otherPanel], "same-service-other-panel": [field]]
+        func attached(_ path: [Node], roots: [Node] = []) -> Bool {
+            attachedPath(path, to: roots.isEmpty ? [window, menu] : roots, equal: ==,
+                         children: { edges[$0.id] ?? [] })
+        }
+        expect(attached([window, sheet, field]), "Attached remote field accepted")
+        expect(attached([menu, item], roots: [menu]), "Windowless menu accepted")
+        expect(!attached([sibling, otherPanel, field]), "Same-PID sibling window refused")
+        expect(!attached([unrelated, field]), "Unrelated app refused")
+        expect(!attached([window, otherPanel, field]), "Same remote service is not proof of attachment")
+        expect(!attached([window, field]), "Missing attachment edge refused")
+        expect(!attached([]), "Empty path refused")
+        edges["document"] = []
+        expect(!attached([window, sheet, field]), "Dismissed sheet refused even with live remote descendants")
+        edges["document"] = [sheet]
+        edges["remote-sheet"] = []
+        expect(!attached([window, sheet, field]), "Detached control refused")
+        expect(!attached([window, sheet], roots: [menu]), "Old window path refused in windowless state")
         let emoji = try InputController.textRange(in: "a🧑🏽‍💻b", text: "🧑🏽‍💻", prefix: nil, suffix: nil)
         expect(emoji.location == 1 && emoji.length == 7, "UTF-16 emoji range")
         let context = try InputController.textRange(in: "one target; two target", text: "target", prefix: "two ", suffix: nil)
@@ -80,6 +116,6 @@ struct OpenCUInputLogicChecks {
         expect(NSFontManager.shared.traits(of: boldFont).contains(.boldFontMask), "Markdown RTF bold survives decode")
         expect(NSFontManager.shared.traits(of: italicFont).contains(.italicFontMask), "Markdown RTF italic survives decode")
         expect(String(data: markdown.html, encoding: .utf8)?.contains("https://example.com") == true, "Markdown HTML link")
-        print("\(checked) input parsing, UTF-16, AX type, and rich Markdown checks passed; no input or clipboard writes")
+        print("\(checked) attachment identity, input parsing, UTF-16, AX type, and rich Markdown checks passed; no input or clipboard writes")
     }
 }
