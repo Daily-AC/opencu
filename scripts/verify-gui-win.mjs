@@ -33,7 +33,7 @@ let tree = '', sequence = 0;
 await mkdir(area, { recursive: true });
 
 function powershell(script) {
-  return execFileSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { windowsHide: true, encoding: 'utf8', timeout: 15000 }).trim();
+  return execFileSync('powershell.exe', ['-NoLogo', '-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from("$ProgressPreference='SilentlyContinue'; " + script, 'utf16le').toString('base64')], { windowsHide: true, encoding: 'utf8', timeout: 15000 }).trim();
 }
 const quote = s => `'${s.replaceAll("'", "''")}'`;
 // Exact private marker, not executable name alone: never kill the user's browser.
@@ -67,7 +67,7 @@ function index(label) {
 async function call(name, app, args = {}, errorCode) {
   const result = await client.callTool({ name, arguments: { app, ...args } }, undefined, { timeout: 90000 });
   const text = result.content.filter(c => c.type === 'text').map(c => c.text).join('\n');
-  await writeFile(path.join(area, `call-${++sequence}.json`), JSON.stringify({ name, args, result }, null, 2));
+  await writeFile(path.join(area, `call-${++sequence}.json`), JSON.stringify({ name, app, args, result }, null, 2));
   if (errorCode) {
     assert.equal(result.isError, true, 'Expected refusal');
     assert.equal(result._meta?.['opencu/error'], errorCode, text);
@@ -98,6 +98,7 @@ try {
     if (fixture.exitCode !== null) throw new Error(`Fixture exited: ${fixtureError}`);
     try { return (await fixtureState()).pid === fixture.pid; } catch { return false; }
   }, 'fixture start', 30000);
+  report.fixtureWindow = JSON.parse(powershell(`Get-Process -Id ${fixture.pid} | Select-Object Id,MainWindowTitle,@{n='hwnd';e={$_.MainWindowHandle.ToInt64()}} | ConvertTo-Json -Compress`));
   client = new Client({ name: 'opencu-windows-fixture-client', version: '1.0' });
   const transport = new StdioClientTransport({ command: process.execPath, args: [path.join(root, 'src/server.mjs')], stderr: 'pipe' });
   transport.stderr?.resume(); await client.connect(transport);

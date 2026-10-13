@@ -12,6 +12,8 @@ using System.Security.Cryptography;
 using System.Text;
 public class OpenCUFixture : Form {
     [DllImport("user32.dll")] static extern bool SetProcessDpiAwarenessContext(IntPtr ctx);
+    [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr hwnd,int command);
+    [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hwnd);
     [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr w, int a, out RECT r, int size);
     [DllImport("user32.dll")] static extern bool OpenClipboard(IntPtr w);
     [DllImport("user32.dll")] static extern bool CloseClipboard();
@@ -58,11 +60,11 @@ public class OpenCUFixture : Form {
             }
             Save();
         };
-        Shown += delegate {ready=true;timer.Start();Save();};FormClosed += delegate{timer.Stop();};
+        Shown += delegate {ShowWindow(Handle,1);ready=true;timer.Start();Save();};FormClosed += delegate{timer.Stop();};
     }
     static string Q(string s) {var b=new StringBuilder("\"");foreach(char c in s){if(c=='"'||c=='\\'){b.Append('\\');b.Append(c);}else if(c<32){b.Append("\\u");b.Append(((int)c).ToString("x4"));}else b.Append(c);}return b.Append('"').ToString();}
     void Save() {
-        if(!ready || !IsHandleCreated || !Visible)return;
+        if(!ready || !IsHandleCreated || !IsWindowVisible(Handle))return;
         RECT r;DwmGetWindowAttribute(Handle,9,out r,16);Point p=counter.PointToScreen(new Point(counter.Width/2,counter.Height/2));Point m=marker.PointToScreen(new Point(marker.Width/2,marker.Height/2));
         var json="{\"pid\":"+System.Diagnostics.Process.GetCurrentProcess().Id+",\"clicks\":"+clicks+",\"notes\":"+Q(notes.Text)+",\"checked\":"+(check.Checked?"true":"false")+",\"slider\":"+slider.Value+",\"scroll\":"+(-scrolling.AutoScrollPosition.Y)+",\"wheel\":"+wheel+",\"moves\":"+moves+",\"x\":"+(p.X-r.Left)+",\"y\":"+(p.Y-r.Top)+",\"markerX\":"+(m.X-r.Left)+",\"markerY\":"+(m.Y-r.Top)+",\"width\":"+(r.Right-r.Left)+",\"height\":"+(r.Bottom-r.Top)+",\"clipboardDigest\":"+Q(digest)+",\"error\":"+Q(error)+"}";
         try{File.WriteAllText(output,json,new UTF8Encoding(false));}catch(IOException){}
