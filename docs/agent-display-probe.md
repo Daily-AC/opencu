@@ -99,9 +99,15 @@ node scripts/probe-agent-display.mjs
 
 The script uses `bin/opencu engine` for the experimental API and a separate normal
 `bin/opencu` MCP connection for observation/input. It compiles a disposable AppKit
-fixture, launches it with `--stage-managed --background` (no Stage Manager bypass,
-no activation request), and operates only that fixture. It never activates a
+fixture, launches it through `open -g -n -a` with `--stage-managed --background`
+and no redirected LaunchServices streams (no Stage Manager bypass or activation
+request), and operates only that fixture. Its unique per-run bundle ID resolves
+the app PID for cleanup; the `open` process is not the fixture. It never activates a
 sentinel or target, switches Spaces, or changes Stage Manager settings.
+Before the first check, it waits for one second of stable foreground samples and
+records that baseline separately from startup transitions. A baseline owned by
+UserNotificationCenter or SecurityAgent stops the probe before launching the
+fixture or creating a display, with an explicit system-dialog message.
 
 | Check | Evidence / meaning |
 | --- | --- |
