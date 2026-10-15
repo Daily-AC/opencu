@@ -101,7 +101,8 @@ final class FocusGuard {
     }
 
     func protect(target pid: pid_t, seconds: Double = 2) {
-        guard let front = NSWorkspace.shared.frontmostApplication, front.processIdentifier != pid else {
+        guard let front = NSWorkspace.shared.frontmostApplication, front.processIdentifier != pid,
+              !Self.isPresenceProcess(pid: front.processIdentifier, bundleID: front.bundleIdentifier) else {
             cancel()
             return
         }
@@ -112,7 +113,12 @@ final class FocusGuard {
 
     func cancel() { previous = nil }
 
+    static func isPresenceProcess(pid: pid_t, bundleID: String?) -> Bool {
+        pid == getpid() || bundleID == "dev.opencu.engine"
+    }
+
     private func activated(_ app: NSRunningApplication?) {
+        if let app, Self.isPresenceProcess(pid: app.processIdentifier, bundleID: app.bundleIdentifier) { cancel(); return }
         guard let app, app.processIdentifier == target, Date() < until,
               let previous, !previous.isTerminated else { return }
         let click = [CGEventType.leftMouseDown, .rightMouseDown, .otherMouseDown]

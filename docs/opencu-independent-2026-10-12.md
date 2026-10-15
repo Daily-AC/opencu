@@ -154,6 +154,23 @@ control) that the window-location fix resolved.
 
 ## Limits
 
+- macOS presence includes the V cursor, menu Stop, localized setup and an action
+  badge in the target title bar. On 2026-10-15 the owner reported two 18/18 GUI
+  runs, a smooth visible cursor, working menu Stop, and a post-click engine
+  screenshot without the cursor. The newly added badge is checked only through
+  pure logic and offscreen fixture rendering: its live stacking, capture exclusion,
+  AX title-bar placement, secure-focus metadata and focus behavior still need
+  reviewer acceptance. See the [badge contract](independent-engine-contract.md#macos-title-bar-badge).
+- Custom title bars without usable AX toolbar/title geometry use a 28 pt title
+  region. Badge text is capped to 45% width, with glyph-only display below 260 pt.
+  Unverified text focus is masked; the badge never reads the existing clipboard.
+- Cursor display requires an exact visible window and usable element centre;
+  windowless menu actions and hidden/Stage Manager thumbnails have no indicator
+  over the target. Stop cannot undo input already delivered or prevent a client
+  from deliberately starting a new engine; hosts must respect the person's stop.
+- Screen Recording setup conservatively requests reconnection after a new grant
+  or request in the current process, even on OS versions that may apply it sooner.
+
 - Stage Manager and hidden windows limit background use as described above;
   the remedy is foreground use through `activate_app`, or turning Stage Manager off.
 - A locked Mac returns `SCREEN_LOCKED`. The proprietary locked-use mechanism is

@@ -4,6 +4,9 @@ import Darwin
 
 @MainActor
 final class InputController {
+    // Presence hooks stay independent of the input routing/focus implementation.
+    var pointerDelivered: ((CGPoint, WindowSnapshot, Bool) -> Void)?
+    var requireInputAllowed: (() throws -> Void)?
     private var backgroundFocus: BackgroundFocus?
 
     func releaseFocus(unlessTarget pid: pid_t? = nil) {
@@ -84,6 +87,8 @@ final class InputController {
     }
 
     private func validate(_ snapshot: WindowSnapshot) throws {
+        try requireInputAllowed?()
+        try Task.checkCancellation()
         guard !snapshot.app.application.isTerminated,
               let running = NSRunningApplication(processIdentifier: snapshot.app.pid), !running.isTerminated,
               running.launchDate == snapshot.app.application.launchDate else {
@@ -296,8 +301,8 @@ final class InputController {
         guard pixelX >= 0, pixelY >= 0, pixelX < Double(width), pixelY < Double(height) else {
             throw OpenCUError("INVALID_COORDINATE", "Coordinates must be inside the \(width)×\(height) screenshot")
         }
-        return CGPoint(x: snapshot.bounds.minX + pixelX * snapshot.bounds.width / Double(width),
-                       y: snapshot.bounds.minY + pixelY * snapshot.bounds.height / Double(height))
+        return CursorMotion.screenPoint(pixel: CGPoint(x: pixelX, y: pixelY),
+                                        pixels: CGSize(width: width, height: height), bounds: snapshot.bounds)
     }
 
     private func sameBounds(_ first: CGRect, _ second: CGRect) -> Bool {
@@ -349,7 +354,10 @@ final class InputController {
             // retain key-window activation so AppKit validates window commands.
             try await prepareAXFocus(snapshot)
             _ = try indexedElement(args, snapshot)
-            return try await perform(kAXPressAction, on: element)
+            let location = try? elementPoint(element)
+            let effect = try await perform(kAXPressAction, on: element)
+            if let location { pointerDelivered?(location, snapshot, true) }
+            return effect
         }
         if let element, button == .left,
            [kAXTextFieldRole, kAXTextAreaRole, kAXComboBoxRole].contains(axString(element, kAXRoleAttribute) ?? "") {
@@ -364,6 +372,7 @@ final class InputController {
                    count == 1, chord == nil, args["duration"] == nil {
                     // Remote panel text controls accept AX focus. Never send a
                     // pointer event to the host window at a remote control's point.
+                    if let location = try? elementPoint(element) { pointerDelivered?(location, snapshot, true) }
                     return .none
                 }
             }
@@ -392,6 +401,7 @@ final class InputController {
             down.setIntegerValueField(.mouseEventClickState, value: Int64(number))
             up.setIntegerValueField(.mouseEventClickState, value: Int64(number))
             down.postToPid(snapshot.app.pid)
+            pointerDelivered?(location, snapshot, true)
             do {
                 defer {
                     up.timestamp = DispatchTime.now().uptimeNanoseconds
@@ -446,6 +456,7 @@ final class InputController {
         var up = try mouseEvent(.leftMouseUp, at: start, button: .left, source: source, window: window)
         try Task.checkCancellation()
         down.postToPid(snapshot.app.pid)
+        pointerDelivered?(start, snapshot, true)
         defer {
             up.timestamp = DispatchTime.now().uptimeNanoseconds
             up.postToPid(snapshot.app.pid)
@@ -459,6 +470,7 @@ final class InputController {
             let move = try mouseEvent(.leftMouseDragged, at: location, button: .left, source: source, window: window)
             up = try mouseEvent(.leftMouseUp, at: location, button: .left, source: source, window: window)
             move.postToPid(snapshot.app.pid)
+            pointerDelivered?(location, snapshot, false)
             try await pause(0.015)
         }
     }
@@ -507,6 +519,7 @@ final class InputController {
         try Task.checkCancellation()
         hover.postToPid(snapshot.app.pid)
         event.postToPid(snapshot.app.pid)
+        pointerDelivered?(location, snapshot, false)
     }
 
     private func setValue(_ args: Arguments, _ snapshot: WindowSnapshot) throws {
@@ -855,6 +868,7 @@ final class InputController {
     }
 
     private func pause(_ seconds: Double) async throws {
+        try requireInputAllowed?()
         try Task.checkCancellation()
         if seconds > 0 { try await Task.sleep(nanoseconds: UInt64(seconds * 1_000_000_000)) }
     }

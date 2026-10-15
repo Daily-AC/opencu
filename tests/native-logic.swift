@@ -138,6 +138,150 @@ struct OpenCUInputLogicChecks {
         fails("ATTRIBUTE_NOT_SETTABLE") { try InputController.checkSettable(.success, settable: false, attribute: kAXValueAttribute) }
         fails("ACCESSIBILITY_ERROR") { try InputController.checkSettable(.cannotComplete, settable: false, attribute: kAXSelectedTextRangeAttribute) }
         fails("ACCESSIBILITY_PERMISSION_REQUIRED") { try InputController.checkSettable(.apiDisabled, settable: false, attribute: kAXSelectedTextRangeAttribute) }
+        let resources = Bundle(path: CommandLine.arguments[1])!
+        func badgeText(_ action: BadgeAction, _ language: String) -> String {
+            let localized = Bundle(path: resources.path(forResource: language, ofType: "lproj")!)!
+            return action.localized { localized.localizedString(forKey: $0, value: $0, table: "Presence") }
+        }
+        let wording: [(BadgeAction, String, String)] = [
+            (BadgeAction(method: "get_app_state"), "Reading", "读取界面"),
+            (BadgeAction(method: "click"), "Click", "点击"),
+            (BadgeAction(method: "click", label: "Save"), "Click \"Save\"", "点击「Save」"),
+            (BadgeAction(method: "click", doubleClick: true), "Double-click", "双击"),
+            (BadgeAction(method: "click", label: "Save", doubleClick: true), "Double-click \"Save\"", "双击「Save」"),
+            (BadgeAction(method: "click", rightClick: true), "Right-click", "右键点击"),
+            (BadgeAction(method: "click", label: "Save", rightClick: true), "Right-click \"Save\"", "右键点击「Save」"),
+            (BadgeAction(method: "click", menuPath: ["File", "Save"]), "Choose \"File › Save\"", "选择菜单「File › Save」"),
+            (BadgeAction(method: "type_text", text: "hello", secure: false), "Type \"hello\"", "输入「hello」"),
+            (BadgeAction(method: "paste", text: "hello", secure: false), "Type \"hello\"", "输入「hello」"),
+            (BadgeAction(method: "press_key", key: "super+a"), "Press ⌘A", "按下 ⌘A"),
+            (BadgeAction(method: "scroll"), "Scroll", "滚动"),
+            (BadgeAction(method: "drag"), "Drag", "拖动"),
+            (BadgeAction(method: "set_value", label: "Filename"), "Set \"Filename\"", "设置「Filename」"),
+            (BadgeAction(method: "select_text", text: "never display selection"), "Select text", "选中文字"),
+            (BadgeAction(method: "perform_secondary_action", label: "Show Menu"), "Perform \"Show Menu\"", "执行「Show Menu」"),
+            (BadgeAction(method: "activate_app"), "Bring to front", "切到前台"),
+            (BadgeAction(method: "stopped"), "Stopped by you", "已被你停止")]
+        for (action, english, chinese) in wording {
+            expect(badgeText(action, "en") == english, "English badge wording: \(english)")
+            expect(badgeText(action, "zh-Hans") == chinese, "Chinese badge wording: \(chinese)")
+        }
+        for method in ["type_text", "paste"] {
+            for secure: Bool? in [true, nil] {
+                let action = BadgeAction(method: method, text: "secret👨‍👩‍👧‍👦", secure: secure)
+                expect(action.argument == "7", "Secure or unknown focus stores count only, counted as composed characters")
+                expect(badgeText(action, "en") == "Type 7 characters", "Secure text never reaches English display")
+                expect(badgeText(action, "zh-Hans") == "输入 7 个字符", "Secure text never reaches Chinese display")
+            }
+            let sixteen = String(repeating: "👨‍👩‍👧‍👦", count: 16)
+            expect(BadgeAction(method: method, text: sixteen, secure: false).argument == sixteen, "16 characters have no ellipsis")
+            expect(BadgeAction(method: method, text: sixteen + "secret", secure: false).argument == sixteen + "…", "Long input retains only first 16 composed characters")
+        }
+        expect(BadgeAction.isSecure(role: "AXSecureTextField", subrole: nil), "Secure role recognized")
+        expect(BadgeAction.isSecure(role: "AXTextField", subrole: "AXSecureTextField"), "Secure subrole recognized")
+        expect(!BadgeAction.isSecure(role: "AXTextField", subrole: "AXSearchField"), "Search field is not secure")
+        expect(BadgeAction(method: "set_value", text: "secret", secure: true).argument == nil, "Set value never previews its value")
+        expect(BadgeAction.singleLine("line1\nline2\tend") == "line1 line2 end", "Badge is always single line")
+        for (key, symbol) in [("shift+super+s", "⇧⌘S"), ("Cmd+Shift+s", "⇧⌘S"), ("Return", "↩︎"),
+                              ("Tab", "⇥"), ("Escape", "⎋"), ("ctrl+alt+delete", "⌃⌥⌦"),
+                              ("super++", "⌘+"), ("ISO_Left_Tab", "⇧⇥"), ("super+super+a", "⌘A")] {
+            expect(BadgeAction.keySymbols(key) == symbol, "Mac key notation: \(key)")
+        }
+        let badgeWindow = CGRect(x: -500, y: -300, width: 720, height: 500)
+        let badge = BadgeLayout(window: badgeWindow, titleBarHeight: nil, textWidth: 60)
+        expect(badge.frame.height == 22 && badge.frame.width == 95, "Badge height and exact padding/gap/glyph budget")
+        expect(badge.frame.maxX == badgeWindow.maxX - 10 && badge.frame.minY == badgeWindow.minY + 3, "Fallback 28pt title bar; 10pt right inset")
+        expect(BadgeLayout(window: badgeWindow, titleBarHeight: 52, textWidth: 60).frame.minY == badgeWindow.minY + 15, "AX toolbar vertical centering")
+        expect(BadgeLayout(window: badgeWindow, titleBarHeight: nil, textWidth: 1000).frame.width == 324, "Long label capped to 45 percent")
+        for width: CGFloat in [259, 260] {
+            let layout = BadgeLayout(window: CGRect(x: 0, y: 0, width: width, height: 200), titleBarHeight: nil, textWidth: 100)
+            expect(layout.glyphOnly == (width < 260), "Glyph-only threshold is strictly below 260pt")
+            if width < 260 { expect(layout.frame.width == 29, "Glyph only keeps 8pt left and 10pt right padding") }
+        }
+        expect(BadgeLayout.titleHeight(window: badgeWindow, toolbar: CGRect(x: -500, y: -300, width: 720, height: 52), title: nil) == 52,
+               "AX toolbar measures title region")
+        expect(BadgeLayout.titleHeight(window: badgeWindow, toolbar: nil, title: CGRect(x: -300, y: -292, width: 100, height: 12)) == 28,
+               "AX title centre measures title region")
+        expect(BadgeLayout.titleHeight(window: badgeWindow, toolbar: CGRect(x: 0, y: 100, width: 100, height: 200), title: nil) == nil,
+               "Content toolbar cannot masquerade as window title bar")
+        var lifetime = BadgeLifetime()
+        expect(lifetime.opacity(at: 0) == 0, "No badge before a window call")
+        lifetime.call(target: "1:2", now: 10)
+        expect(lifetime.opacity(at: 13) == 1, "Badge holds for exactly 3 seconds")
+        expect(abs(lifetime.opacity(at: 13.1) - 0.5) < 0.0001, "Fade halfway at 100ms")
+        expect(lifetime.opacity(at: 13.201) == 0, "Fade completes after 200ms")
+        lifetime.call(target: "1:2", now: 20)
+        expect(lifetime.opacity(at: 22.99) == 1, "Next call renews lifetime")
+        lifetime.hide()
+        expect(lifetime.opacity(at: 21) == 0, "Target change hides without fading")
+        lifetime.call(target: "2:3", now: 30); lifetime.stop(now: 40)
+        expect(lifetime.opacity(at: 42.999) == 1 && lifetime.opacity(at: 43) == 0, "Stop shows for 3 seconds then hides")
+        lifetime.call(target: "2:3", now: 42)
+        expect(lifetime.stopped && lifetime.opacity(at: 43) == 0, "Reads after Stop cannot overwrite or prolong it")
+        lifetime.disconnect()
+        expect(lifetime.opacity(at: 41) == 0, "Disconnect immediately removes stopped badge")
+        lifetime.call(target: "3:4", now: 44)
+        expect(lifetime.opacity(at: 44) == 0, "Disconnected callbacks cannot reshow badge")
+        expect(FocusGuard.isPresenceProcess(pid: getpid(), bundleID: nil), "Own process is never a foreground restoration target")
+        expect(FocusGuard.isPresenceProcess(pid: -1, bundleID: "dev.opencu.engine"), "Separate setup process is a person's focus choice")
+        expect(!FocusGuard.isPresenceProcess(pid: -1, bundleID: "dev.opencu.fixture"), "Ordinary target remains guarded")
+        var presence = PresenceState()
+        expect(!presence.menuVisible(at: 0) && !presence.cursorVisible(at: 0), "No presence before app calls")
+        presence.call(target: "fixture", now: 10)
+        presence.finished(now: 10)
+        presence.pointer(now: 11)
+        expect(presence.menuVisible(at: 24.999), "Menu remains before 15-second deadline")
+        expect(!presence.menuVisible(at: 25), "Menu expires exactly at 15 seconds")
+        expect(presence.cursorVisible(at: 13.999), "Cursor remains before 3-second deadline")
+        expect(!presence.cursorVisible(at: 14), "Cursor expires exactly at 3 seconds")
+        presence.call(target: "fixture", now: 20)
+        presence.finished(now: 20)
+        expect(presence.menuVisible(at: 34.999), "Subsequent calls extend menu visibility")
+        var longCall = PresenceState()
+        longCall.call(target: "fixture", now: 0)
+        expect(longCall.menuVisible(at: 30), "Stop remains accessible throughout a long in-flight operation")
+        longCall.finished(now: 30)
+        expect(longCall.menuVisible(at: 44.999) && !longCall.menuVisible(at: 45), "Idle timeout starts after the operation finishes")
+        presence.pointer(now: 21)
+        presence.call(target: "other", now: 22)
+        expect(!presence.cursorVisible(at: 22), "Changing target hides cursor")
+        presence.pointer(now: 23)
+        presence.stop()
+        expect(!presence.cursorVisible(at: 23), "Stop hides cursor immediately")
+        for method in ["click", "drag", "press_key", "type_text", "paste", "scroll", "set_value", "select_text",
+                       "perform_secondary_action", "activate_app"] {
+            fails("STOPPED_BY_PERSON") { try presence.requireAllowed(method) }
+        }
+        fails("STOPPED_BY_PERSON") { try presence.requireAllowed("get_app_state", screenshot: true) }
+        for method in ["get_app_state", "doctor", "list_apps"] { try presence.requireAllowed(method) }
+        presence.call(target: "other", now: 30); presence.pointer(now: 30)
+        expect(presence.stopped && !presence.cursorVisible(at: 30), "Calls cannot clear the stop latch")
+        presence.disconnect()
+        expect(!presence.menuVisible(at: 30) && !presence.cursorVisible(at: 30), "Disconnect removes both indicators")
+        var disconnected = PresenceState()
+        disconnected.call(target: "fixture", now: 0); disconnected.pointer(now: 0); disconnected.disconnect()
+        disconnected.call(target: "fixture", now: 1); disconnected.pointer(now: 1)
+        expect(!disconnected.menuVisible(at: 1) && !disconnected.cursorVisible(at: 1), "Queued callbacks cannot reshow after EOF")
+        try PresenceState().requireAllowed("click")
+        expect(!PresenceState().stopped, "New connection starts fresh")
+        let motion = CursorMotion(start: CGPoint(x: -200, y: 50), end: CGPoint(x: 100, y: 200), began: 10)
+        expect(motion.point(at: 9) == motion.start && motion.point(at: 10) == motion.start, "Animation starts at previous point")
+        expect(motion.point(at: 10.25) == motion.end && motion.point(at: 11) == motion.end, "Animation clamps to exact endpoint")
+        expect(motion.point(at: 10.125).x == 62.5, "Cubic ease-out midpoint")
+        expect(CursorMotion.press(at: 1, began: 1) == 0 && CursorMotion.press(at: 2, began: 1) == 0, "Press pulse returns to rest")
+        expect(abs(CursorMotion.press(at: 1.15, began: 1) - 1) < 0.0001, "Press pulse peaks halfway")
+        for scale: CGFloat in [1, 2] {
+            let bounds = CGRect(x: -800, y: -300, width: 600, height: 400)
+            let point = CursorMotion.screenPoint(pixel: CGPoint(x: 150 * scale, y: 100 * scale),
+                                                  pixels: CGSize(width: 600 * scale, height: 400 * scale), bounds: bounds)
+            expect(point == CGPoint(x: -650, y: -200), "Screenshot pixels map to screen points at 1x and 2x on secondary display")
+        }
+        expect(CursorMotion.appKitRect(CGRect(x: -650, y: -200, width: 60, height: 60), primaryHeight: 900)
+               == CGRect(x: -650, y: 1040, width: 60, height: 60), "AppKit conversion uses primary-display origin")
+        for ax in [false, true] { for screen in [false, true] { for reconnect in [false, true] {
+            expect(PermissionStatus(accessibility: ax, screenRecording: screen, reconnect: reconnect).ready == (ax && screen && !reconnect),
+                   "Ready requires both grants and no restart")
+        } } }
         // The same remote focus works in the foreground and must be refused in
         // the background. A host-PID panel proxy must also be refused; unknown
         // focus in ordinary apps keeps the existing PID-targeted path.
@@ -262,6 +406,6 @@ struct OpenCUInputLogicChecks {
         expect(NSFontManager.shared.traits(of: boldFont).contains(.boldFontMask), "Markdown RTF bold survives decode")
         expect(NSFontManager.shared.traits(of: italicFont).contains(.italicFontMask), "Markdown RTF italic survives decode")
         expect(String(data: markdown.html, encoding: .utf8)?.contains("https://example.com") == true, "Markdown HTML link")
-        print("\(checked) attachment identity, input parsing, UTF-16, AX type, and rich Markdown checks passed; no input or clipboard writes")
+        print("\(checked) presence, stop policy, geometry, attachment identity, input parsing, UTF-16, AX type, and rich Markdown checks passed; no input or clipboard writes")
     }
 }

@@ -82,7 +82,7 @@ test('a failed action stops the batch and is never replayed', async t => {
     { method: 'press_key', key: 'Tab' }, { method: 'paste', text: 'fixture', format: 'text' }, { method: 'press_key', key: 'Return' },
   ] });
   assert.equal(result.isError, true);
-  assert.match(result.content[0].text, /Action 2 failed.*Earlier actions may have run/);
+  assert.match(result.content[0].text, /^WINDOW_FOCUS_CHANGED: Action 2 failed.*Earlier actions may have run/);
   assert.deepEqual((await f.calls()).map(x => x.method), ['press_key', 'paste']);
 });
 
@@ -129,6 +129,7 @@ test('permission failures are actionable and never retried', async t => {
   const result = await f.call('get_app_state', { app: 'Fixture' });
   assert.equal(result.isError, true);
   assert.equal(result._meta['opencu/error'], 'ACCESSIBILITY_PERMISSION_REQUIRED');
+  assert.match(result.content[0].text, /^ACCESSIBILITY_PERMISSION_REQUIRED: /);
   assert.equal((await f.calls()).length, 1);
 });
 
@@ -136,7 +137,7 @@ test('a failed final observation distinguishes already completed input', async t
   const f = await fixture(t, [{ result: { ok: true } }, { error: { code: 'SCREEN_LOCKED', message: 'macOS is locked' } }]);
   const result = await f.call('run_actions', { app: 'Fixture', actions: [{ method: 'press_key', key: 'Return' }], includeScreenshot: true });
   assert.equal(result.isError, true);
-  assert.match(result.content[0].text, /All 1 actions returned.*Do not repeat/);
+  assert.match(result.content[0].text, /^SCREEN_LOCKED: All 1 actions returned.*Do not repeat/);
   assert.equal((await f.calls()).length, 2);
 });
 
@@ -145,6 +146,8 @@ test('missed expected text returns the observed state without claiming readiness
   const result = await f.call('get_app_state', { app: 'Fixture', waitForText: 'Ready', waitTimeoutMs: 0 });
   assert.equal(result.isError, true);
   assert.ok(result.content.some(item => item.text.includes('Value="initial"')));
+  assert.match(result.content[0].text, /^WAIT_TIMEOUT: /);
+  assert.equal(result._meta['opencu/error'], 'WAIT_TIMEOUT');
   assert.ok(result.content.some(item => item.text.includes('expected text did not appear')));
   assert.equal((await f.calls()).length, 1);
 });
@@ -167,4 +170,41 @@ test('unchanged observations can be expanded again with disableDiff', async t =>
   assert.match(second.content[0].text, /No accessibility changes/);
   const third = await f.call('get_app_state', { app: 'Fixture', disableDiff: true });
   assert.equal(third.content[0].text, state.text);
+});
+
+
+test('person stop preserves its code, halts the batch and never retries a screenshot', async t => {
+  const stop = { error: { code: 'STOPPED_BY_PERSON', message: 'The person stopped OpenCU. Do not reconnect or retry on your own.' } };
+  const f = await fixture(t, [stop, { result: state }]);
+  const result = await f.call('run_actions', { app: 'Fixture', actions: [
+    { method: 'press_key', key: 'Tab' }, { method: 'press_key', key: 'Return' },
+  ] });
+  assert.equal(result._meta['opencu/error'], 'STOPPED_BY_PERSON');
+  assert.match(result.content[0].text, /^STOPPED_BY_PERSON: /);
+  assert.doesNotMatch(result.content[0].text, /Read state before retrying/);
+  const screenshot = await f.call('get_app_state', { app: 'Fixture', includeScreenshot: true });
+  assert.equal(screenshot._meta['opencu/error'], 'STOPPED_BY_PERSON');
+  for (const [method, args] of [
+    ['click', { x: 10, y: 10 }], ['paste', { text: 'fixture', format: 'text' }], ['activate_app', {}],
+  ]) {
+    const refused = await f.call(method, { app: 'Fixture', ...args });
+    assert.equal(refused._meta['opencu/error'], 'STOPPED_BY_PERSON');
+    assert.match(refused.content[0].text, /^STOPPED_BY_PERSON: /);
+  }
+  const text = await f.call('get_app_state', { app: 'Fixture' });
+  assert.equal(text.isError ?? false, false);
+  assert.deepEqual((await f.calls()).map(x => x.method), ['press_key', 'get_app_state']);
+});
+
+
+test('all engine codes are visible in agent text as well as metadata', async t => {
+  const codes = ['SCREEN_RECORDING_PERMISSION_REQUIRED', 'STALE_ELEMENT', 'WINDOW_ID_UNAVAILABLE',
+    'BACKGROUND_REMOTE_FOCUS', 'PERSON_ACTIVE', 'USER_STOPPED', 'FUTURE_ENGINE_CODE'];
+  const f = await fixture(t, codes.map(code => ({ error: { code, message: 'Fixture refusal' } })));
+  for (const code of codes) {
+    const result = await f.call('get_app_state', { app: 'Fixture' });
+    assert.equal(result.content[0].text, `${code}: Fixture refusal`);
+    assert.equal(result._meta['opencu/error'], code);
+  }
+  assert.equal((await f.calls()).length, codes.length);
 });

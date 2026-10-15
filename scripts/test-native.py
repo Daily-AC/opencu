@@ -23,6 +23,8 @@ def main() -> int:
             "xcrun", "swiftc", "-parse-as-library", "-module-name", "OpenCULogicTests",
             "-target", f"{platform.machine()}-apple-macos14.0",
             str(sources / "Types.swift"),
+            str(sources / "PresenceModel.swift"),
+            str(sources / "BadgeModel.swift"),
             str(sources / "Keyboard.swift"),
             str(sources / "BackgroundFocus.swift"),
             str(sources / "InputController.swift"),
@@ -31,7 +33,7 @@ def main() -> int:
         ], cwd=root)
         if compilation.returncode:
             return compilation.returncode if compilation.returncode > 0 else 1
-        result = subprocess.run([str(executable)], cwd=root)
+        result = subprocess.run([str(executable), str(root / "native/Resources")], cwd=root)
         return result.returncode if result.returncode >= 0 else 1
 
 

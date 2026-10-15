@@ -35,6 +35,17 @@ creation alone left the window-relative point at an invalid sentinel. Resolve
 the system symbol locally, fail clearly if unavailable, and retain target-PID
 routing and all normal OS permissions. Do not add a global input fallback.
 
+## MCP error text
+
+Every engine tool error starts its first text block with `<stable code>: `, while
+preserving the same code in `_meta["opencu/error"]`. For example,
+`STOPPED_BY_PERSON: The person stopped OpenCU on this Mac…`. Neither existing codes
+nor the native JSON-lines error schema change. Batch/final-observation context
+follows the prefix. `WAIT_TIMEOUT` uses the same envelope and places the last
+observed state after the error, retaining app metadata and any image. Errors
+without an engine code use the existing `RUNTIME_ERROR` fallback. Hosts can match
+the visible prefix even when they do not expose MCP metadata to the agent.
+
 ## Direct-host safety contract
 
 An engine can be spawned by any host over inherited stdio; the MCP server is an
@@ -288,3 +299,171 @@ attribute is unsupported), `select_text` returns `TEXT_SELECTION_UNSUPPORTED`:
 No selection is written in that case. Other capability-query errors, non-text
 attribute errors and the existing post-write selection verification are retained.
 A fresh screenshot does not override any background input refusal.
+
+
+## macOS presence and person stop
+
+The stdio engine runs an AppKit event loop with accessory activation policy.
+No UI is created for `doctor` or `list_apps`. App-targeting calls show a template
+monochrome V status item, with the last app name, Stop and Permissions. It
+expires 15 seconds after the last app call completes; an in-flight call keeps
+Stop available even during a 30-second hold. An open menu stays until dismissed
+so its Stop item cannot disappear under the person. Timers use monotonic system
+uptime and run during menu tracking. Disconnect removes the item, cursor and setup.
+Each engine process owns one connection and one irreversible stop latch.
+
+`STOPPED_BY_PERSON` is a stable error code. It rejects `click`, `drag`, `scroll`,
+`press_key`, `type_text`, `paste`, `set_value`, `select_text`,
+`perform_secondary_action`, `activate_app`, and `get_app_state` with
+`includeScreenshot: true`, before app resolution or permission checks. Text-only
+`get_app_state`, `doctor` and `list_apps` remain allowed; a stopped text read does
+not launch a missing app. The MCP batch stops on the first error and preserves
+the code. The adapter also latches it before coordinate validation so subsequent
+input cannot obscure Stop with a stale-screenshot error. Hosts must not reconnect or retry automatically, including on another
+engine instance; a new connection is appropriate only after the person explicitly
+allows it. A new connection starts with a fresh latch.
+
+Stop cancels a currently suspended input/capture task. Input's existing defers
+release held buttons/modifiers and restore an unchanged clipboard. Input checks
+the latch again during validation and waits; capture checks it before capture and
+after the async result, and dispatch checks it before returning. A completed input
+or already submitted capture cannot be undone; a capture completing after Stop is
+not returned. Synchronous AX IPC can delay processing a menu event until AppKit
+regains control. This is a person-operated stop, not general human-activity
+interruption or a security boundary against a malicious client.
+
+InputController reports delivered pointer positions through one callback. The
+visual arrow uses the same screenshot-pixel to AX-screen-point conversion as
+input, then converts CG's top-left origin to AppKit's primary-display bottom-left
+origin. Movement is a clamped 250 ms cubic ease-out; clicks pulse for 300 ms.
+Pointer inactivity hides it at 3 seconds. Changing app/window, Stop and EOF hide
+it immediately. The cursor is clipped to the target bounds; windowless/menu-bar
+AX actions or elements without an exact visible window/usable centre cannot show
+a cursor. Hidden, resized or moved targets suppress it until a fresh pointer event.
+
+The transparent borderless nonactivating panel ignores mouse events, cannot be
+key/main, has no window shadow, and never calls activation or real-cursor APIs.
+Its tiny clipped frame avoids an overlay the size of the entire target. Its
+level matches the target, and it is ordered immediately above that window with
+[NSWindow.order(_:relativeTo:)](https://developer.apple.com/documentation/appkit/nswindow/order(_:relativeto:)).
+The relationship is refreshed while visible so covering windows stay above it.
+No child-window relationship is established with the other process.
+
+The overlay has `sharingType = .none`. OpenCU additionally captures only the exact
+foreign target via `SCContentFilter(desktopIndependentWindow:)`, with child windows
+disabled on macOS 14.2+, so exclusion does not rely solely on sharingType. OpenCU
+processes are excluded from its app inventory and cannot be targeted; window
+identity and presentation checks continue to use the target's exact PID/window
+ID, never the overlay. There is no new generic coverage heuristic. Actual capture
+exclusion and cross-process ordering remain live reviewer checks, not established
+by offscreen rendering.
+
+The setup window uses standard AppKit controls and the V app icon generated from
+`native/Artwork/AppIcon-1024.png`. The status item, cursor and title-bar badge share
+`PresenceArtwork.vertices` / `vPath`; these shapes are unchanged by the badge work. English and Simplified Chinese
+resources follow the system language. Both grants refresh once per second while
+open. Each Allow button requests its own OS permission and opens the matching
+Privacy & Security pane. No TCC grant is reset or modified directly. Because
+Screen Recording preflight may remain stale, a grant/request in a process that
+started without it conservatively asks for reconnection instead of claiming ready.
+The Done button appears only when both grants report allowed.
+
+`opencu setup` and Permissions activate the normal-level, centered setup window;
+an automatic permission failure orders it without activating OpenCU. It opens
+automatically at most once per process. Missing Screen Recording is now a tool
+error (rather than text-only degradation); its message, like missing Accessibility,
+says whether the setup window is still open and asks the agent to wait for the
+person. Closing setup hides OpenCU if it is frontmost, without reactivating a
+previously used app. Menu tracking and setup opening cancel the focus guard;
+OpenCU becoming frontmost also cancels it, and the guard never restores OpenCU
+as a foreground destination. Tool calls never activate OpenCU.
+
+Offline review: `python3 scripts/render-presence.py` produces
+`.cache/presence-review/` from the actual setup controls, glyph and cursor drawing
+code, with no ordered windows, status items, capture or permission requests.
+The menu images are layout previews from the actual NSMenu items, not screenshots
+of a tracked system menu. Both languages and appearances include neither grant,
+each individual grant, ready and reconnect states. `npm run build` generates the
+icon before signing; release verification requires icon and both localization
+resources in the extracted bundle.
+
+Reviewer-only live acceptance (not run on an occupied Mac): verify no foreground
+change during background calls; 1x/2x and multi-display cursor alignment, click/
+drag/scroll/indexed centres, clipping, covering windows and the 3-second timeout;
+capture while the cursor is visible and confirm absence; 15-second status timeout,
+menu tracking and language; Stop during a long hold/typing/capture and all subsequent
+methods including batches; EOF cleanup; setup's exact Settings links, live statuses,
+reconnect guidance and closing focus. Use only disposable fixtures and follow the
+project's desktop authorization rules. Offscreen/native logic checks do not prove
+OS compositing, TCC prompting or real input delivery.
+
+
+## macOS title-bar badge
+
+Each window call, including `get_app_state`, updates a small capsule at the right
+of the selected window's title bar. The badge displays the existing white V and
+the localized action only, without the word OpenCU. Reading starts when the exact
+window is resolved, before tree traversal/capture. Input uses the latest observed
+window, rechecking its live selection before showing the badge. No new input hook
+or event-routing change is needed. Windowless calls cannot show a title-bar badge.
+An automatic post-action state read is a new call and changes the badge to Reading.
+
+Geometry: 22 pt high, 11 pt radius, 8 pt left / 10 pt right padding, 11 pt V,
+6 pt glyph/text gap. Text is 12 pt system font, white at 62%, one line with tail
+ellipsis. The capsule uses #1C1C1E at 86%, an inner 0.5 pt white hairline at 18%,
+and a black shadow at 18%, offset 0/2 pt with 8 pt blur. These values do not change
+with appearance. Its right edge is 10 pt inside the window and its width is at
+most 45% of window width; below 260 pt it shows only the V. AX top-toolbar bounds
+or the title/close-button centre determine the title region when available;
+otherwise the title bar is treated as 28 pt tall. Content toolbars far below the
+window top do not qualify. Custom title bars that expose no standard AX geometry
+use this fallback and need live positioning acceptance.
+
+The badge has its own transparent, borderless, nonactivating, click-through panel
+with `sharingType = .none`; it can never be key/main. Like the cursor it is ordered
+relative to the exact target ID at the target's level and is excluded by OpenCU's
+single-window capture filter and self-target refusal. It does not change window
+selection or introduce coverage heuristics. It follows window translation;
+hidden/thumbnail/resized windows suppress it until matching geometry is observed.
+The transparent shadow margin adds 10 pt around the capsule and receives no input.
+
+The badge stays opaque for 3 seconds after the most recent window call, then fades
+linearly for 200 ms. A target change or disconnect hides it immediately. Stop
+replaces the action with `Stopped by you` / `已被你停止`, changes the capsule to
+#78787F at 90%, holds for 3 seconds and hides. Later text reads cannot replace or
+extend this stopped message. No new window call means no badge, even if a status
+item remains. These timers are monotonic, independent of cursor activity.
+
+Localized wording covers Reading, Click (with optional indexed label), Double-click,
+Right-click, Type, Press, Choose (menu path separated by ›), Scroll, Drag, Set,
+Select text, Perform, and Bring to front. Labels use live attached elements' AX
+Title/Description, never AXValue. Menu labels come from the observed and rechecked
+AX path. Key names use Mac symbols such as ⌘A, ⇧⌘S, ↩︎, ⇥ and ⎋.
+
+Typing/paste previews come only from the submitted `text` parameter, capped at 16
+Swift Characters (Unicode grapheme clusters), with an ellipsis only for longer
+text. The badge never reads NSPasteboard or displays an existing clipboard value;
+`set_value` never previews the new value and `select_text` never previews selection.
+Before previewing, live focused-element role/subrole and parent ancestry are
+checked up to the selected window. `AXSecureTextField` as either role or subrole
+masks content, as do unknown focus, unsupported text roles, broken ancestry or
+failed AX reads. Masked input shows only its character count. Only the bounded
+preview/count is stored in the badge. Control characters and bidi overrides are
+removed from visual text, while composed emoji remain intact.
+
+Offline review renders 28 badge cases per language/appearance (112 PNGs): every
+action, labelled/unlabelled click variants, short/long/masked typing and paste,
+shortcut symbols, menu path, truncation, AX-height toolbar, narrow window and Stop.
+They use production BadgeView on synthetic fixture title bars, never real app
+screenshots. Native tests cover wording using the shipped resources, secure
+masking, grapheme truncation, geometry/width thresholds, key notation and timers.
+The existing `render-presence.py` command writes them to `.cache/presence-review/`.
+
+Owner-reported live results before this badge change (2026-10-15): the GUI suite
+passed 18/18 twice, the person saw a smooth agent cursor, menu Stop worked, and an
+engine screenshot immediately after a click did not contain the cursor. This
+follow-up did not rerun live GUI checks. The badge's own capture exclusion,
+cross-process stacking beneath covering windows, real AX title/toolbar placement,
+secure-focus metadata, click-through behavior, fade/Stop timing and no-activation
+behavior still require reviewer checks on disposable fixtures. These new checks
+must not be inferred from the earlier cursor evidence.
