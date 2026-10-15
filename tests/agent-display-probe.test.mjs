@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { applicationSerialNumbers, applicationPID, windowMovementWarnings } from '../scripts/agent-display-probe-support.mjs';
+import { applicationSerialNumbers, applicationPID, windowMovementWarnings, measuredStageSideEffect, possibleStageRelayout } from '../scripts/agent-display-probe-support.mjs';
 
 test('fixture discovery accepts the named ASN returned by live lsappinfo find', () => {
   // Observed during the authorized fixture-only launch on 2026-10-15.
@@ -51,4 +51,15 @@ test('warnings distinguish visible, offscreen, zero-size and unknown visibility'
     assert.equal(warning.beforeOnScreen, onScreen ?? null);
     assert.deepEqual(warning.beforeSize, { width: 0, height: 0 });
   }
+});
+
+test('the measured Chrome contraction is retained separately from current-run stage candidates', () => {
+  assert.equal(measuredStageSideEffect.source, '.cache/agent-display/run-4BTWD7/report.json');
+  assert.equal(measuredStageSideEffect.phase, 'create');
+  assert.deepEqual(measuredStageSideEffect.before, { x: 297, y: 208, width: 952, height: 727 });
+  assert.deepEqual(measuredStageSideEffect.after, { x: 16, y: 646, width: 133, height: 141 });
+  assert.equal(measuredStageSideEffect.beforeOnScreen, null, 'Do not invent an on-screen flag absent from the original report');
+  assert.equal(possibleStageRelayout(measuredStageSideEffect), true);
+  assert.equal(possibleStageRelayout({ before: { width: 952, height: 727 }, after: { width: 952, height: 727 } }), false);
+  assert.equal(possibleStageRelayout({ before: { width: 0, height: 0 }, after: { width: 0, height: 0 } }), false);
 });

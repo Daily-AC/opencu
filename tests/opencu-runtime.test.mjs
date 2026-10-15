@@ -62,6 +62,22 @@ test('an arbitrary MCP client works with no account, turn metadata or official i
   assert.throws(() => process.kill(pid, 0), { code: 'ESRCH' });
 });
 
+test('capture safety refusals preserve diagnostics without retrying or granting coordinates', async t => {
+  const data = { captureContext: { pid: 123, responsiblePID: 123, verifiedSelfResponsible: true,
+    capturePolicy: 'refuse-before-ScreenCaptureKit-private-picker-risk' } };
+  const f = await fixture(t, [{ error: { code: 'CAPTURE_REQUIRES_INTERACTIVE_AUTHORIZATION',
+    message: 'No capture API was called.', data } }]);
+  const result = await f.call('get_app_state', { app: 'Fixture', includeScreenshot: true });
+  assert.equal(result.isError, true);
+  assert.equal(result._meta['opencu/error'], 'CAPTURE_REQUIRES_INTERACTIVE_AUTHORIZATION');
+  assert.deepEqual(result._meta['opencu/errorDetails'], data);
+  assert.equal(result.content.some(item => item.type === 'image'), false);
+  assert.equal((await f.calls()).length, 1);
+  const click = await f.call('click', { app: 'Fixture', x: 5, y: 5 });
+  assert.equal(click.isError, true);
+  assert.equal((await f.calls()).length, 1, 'No coordinate action reaches the engine after refused capture');
+});
+
 test('extended input and Unicode survive both standalone and batch transport', async t => {
   const f = await fixture(t);
   await f.call('click', { app: 'Fixture', element_index: 1, key: 'Shift', duration: 0.35 });

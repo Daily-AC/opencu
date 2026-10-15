@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as pause } from 'node:timers/promises';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { applicationSerialNumbers, applicationPID, windowMovementWarnings } from './agent-display-probe-support.mjs';
+import { applicationSerialNumbers, applicationPID, windowMovementWarnings, measuredStageSideEffect, possibleStageRelayout } from './agent-display-probe-support.mjs';
 
 const exec = promisify(execFile);
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -61,7 +61,7 @@ class DirectEngine {
           this.child.stdin.end();
         }, 30_000); // Includes a 10 s display-removal wait and restoration.
         this.pending.set(id, { resolve, reject, timer });
-        this.child.stdin.write(JSON.stringify({ id, method: prefix + method, params }) + '\n');
+        this.child.stdin.write(JSON.stringify({ id, method: method === 'doctor' ? method : prefix + method, params }) + '\n');
       });
     });
     this.tail = request.catch(() => {});
@@ -84,7 +84,8 @@ const temporary = path.join(run, 'fixture');
 const fixtureBundleID = `dev.opencu.test.agent-display.${path.basename(run).toLowerCase()}`;
 const report = { timestamp: new Date().toISOString(), run, checks: Object.fromEntries(checks.map(c => [c, 'NOT RUN'])),
   baselineSamples: [], frontmost: [], samplingErrors: [], direct: [], fixtureStates: [], fixtureDiscovery: [],
-  windowMovementWarnings: [], pointerSamples: [], cleanupErrors: [], engineStderr: [], mcpStderr: [] };
+  windowMovementWarnings: [], stageSideEffects: { previousMeasurement: measuredStageSideEffect, currentCandidates: [] },
+  pointerSamples: [], cleanupErrors: [], engineStderr: [], mcpStderr: [] };
 let failure, initialFront, timer, sampling, direct, client, transport, fixture, tree = '', sequence = 0;
 let pointerMonitor, pointerMonitorDone, stoppingPointerMonitor = false;
 let candidateFront, stableSince;
@@ -201,8 +202,16 @@ async function check(label, operation) {
 }
 function sameFrame(a, b) { return a && b && ['x', 'y', 'width', 'height'].every(k => Math.abs(a[k] - b[k]) <= 1); }
 function layout(displays) { return displays.map(({ id, frame, main, mirrored }) => ({ id, frame, main, mirrored })).sort((a, b) => a.id - b.id); }
-function recordWindowMovement(first, second, exclude = []) {
-  report.windowMovementWarnings.push(...windowMovementWarnings(first, second, exclude));
+function recordWindowWarnings(warnings, phase) {
+  for (const warning of warnings) {
+    const value = { ...warning, phase };
+    report.windowMovementWarnings.push(value);
+    if (possibleStageRelayout(warning)) report.stageSideEffects.currentCandidates.push({ ...value,
+      interpretation: 'Large window contracted to thumbnail size; possible Stage Manager relayout, not proven by frame geometry alone.' });
+  }
+}
+function recordWindowMovement(first, second, exclude = [], phase) {
+  recordWindowWarnings(windowMovementWarnings(first, second, exclude), phase);
 }
 const index = identifier => entry(line => line.includes('ID=' + JSON.stringify(identifier)), identifier);
 function entry(predicate, label) {
@@ -224,6 +233,9 @@ async function call(name, args = {}) {
   if (image) {
     imagePath = path.join(run, `mcp-${n}.png`);
     await writeFile(imagePath, Buffer.from(image.data, 'base64'));
+  }
+  if (result._meta?.['opencu/errorDetails']?.captureContext) {
+    report.mcpCaptureContext = result._meta['opencu/errorDetails'].captureContext;
   }
   active();
   assert.ok(!result.isError, text);
@@ -281,6 +293,7 @@ try {
     assert.equal(report.stageManager, '1', 'Enable Stage Manager manually before this probe');
   });
   direct = new DirectEngine(report.engineStderr);
+  report.enginePermissions = await experiment('doctor');
   before = await experiment('status');
   report.before = before;
   await mkdir(temporary, { recursive: true });
@@ -324,8 +337,8 @@ try {
     assert.ok(created.agentDisplayID);
     assert.deepEqual(layout(created.displays.filter(d => d.id !== created.agentDisplayID)), layout(before.displays));
     assert.equal(created.displays.find(d => d.id === created.agentDisplayID).main, false);
-    recordWindowMovement(before, created, [fixture.pid]);
-    report.windowMovementWarnings.push(...(created.windowMovementWarnings ?? []).filter(w => w.pid !== fixture.pid));
+    recordWindowMovement(before, created, [fixture.pid], 'before-probe-to-create');
+    recordWindowWarnings((created.windowMovementWarnings ?? []).filter(w => w.pid !== fixture.pid), 'create');
   });
   await check(checks[3], async () => {
     moved = await experiment('move_window', { app });
@@ -414,7 +427,7 @@ try {
         assert.equal(destroyed.ok, true, JSON.stringify(destroyed.cleanupErrors));
         assert.equal(destroyed.agentDisplayID, null);
         assert.deepEqual(layout(destroyed.displays), layout(before.displays));
-        recordWindowMovement(before, destroyed, fixture ? [fixture.pid] : []);
+        recordWindowMovement(before, destroyed, fixture ? [fixture.pid] : [], 'cleanup');
         report.after = destroyed;
       });
       await check(checks[11], async () => {
@@ -451,6 +464,7 @@ try {
   if (failure) console.error(failure.message);
   for (const error of report.cleanupErrors) console.error(error);
   for (const warning of report.windowMovementWarnings) console.warn(`WARN  ${warning.ownerName} (PID ${warning.pid}), window ${warning.windowID} moved; before onscreen=${warning.beforeOnScreen ?? 'unknown'}, size=${warning.beforeSize.width}x${warning.beforeSize.height}; cause unattributed`);
+  if (report.stageSideEffects.currentCandidates.length) console.warn('WARN  Possible Stage Manager relayout detected; preserved display frames do not mean the person’s stage was preserved.');
   console.log(`Evidence: ${path.join(run, 'report.json')}`);
   process.exitCode = report.ok ? 0 : 1;
 }
