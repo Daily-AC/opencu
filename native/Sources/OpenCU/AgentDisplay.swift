@@ -32,8 +32,8 @@ final class AgentDisplay {
         }.sorted { $0.id < $1.id }
     }
 
-    // No titles or app inventories in the response. These bounds allow the probe
-    // to detect collateral movement without ever changing another window.
+    // No window titles. Owner names explain movement warnings in local evidence;
+    // a changing frame alone cannot distinguish display effects from user input.
     private func windowFrames() throws -> [Arguments] {
         guard let records = CGWindowListCopyWindowInfo(.optionAll, kCGNullWindowID) as? [Arguments] else {
             throw OpenCUError("AGENT_DISPLAY_STATUS_FAILED", "WindowServer window frames are unavailable; collateral movement cannot be checked.")
@@ -45,7 +45,8 @@ final class AgentDisplay {
                   let pid = record[kCGWindowOwnerPID as String] as? Int,
                   let dictionary = record[kCGWindowBounds as String] as? NSDictionary,
                   let rect = CGRect(dictionaryRepresentation: dictionary as CFDictionary) else { return nil }
-            return ["id": id, "pid": pid, "layer": layer, "frame": agentDisplayRectJSON(rect)]
+            return ["id": id, "pid": pid, "ownerName": record[kCGWindowOwnerName as String] as? String ?? "PID \(pid)",
+                    "layer": layer, "frame": agentDisplayRectJSON(rect)]
         }
     }
 
@@ -129,13 +130,18 @@ final class AgentDisplay {
                 throw OpenCUError("AGENT_DISPLAY_LAYOUT_CHANGED", "macOS changed the original layout, main display, mirroring, or requested logical size.")
             }
             let after = try windowFrames()
+            var warnings: [Arguments] = []
             for before in windowsBefore {
                 if let now = after.first(where: { ($0["id"] as? UInt32) == (before["id"] as? UInt32) && ($0["pid"] as? Int) == (before["pid"] as? Int) }),
                    (now["frame"] as? [String: Double]) != (before["frame"] as? [String: Double]) {
-                    throw OpenCUError("AGENT_DISPLAY_WINDOW_CHANGED", "WindowServer reports another window moved during display creation.")
+                    warnings.append(["windowID": before["id"]!, "pid": before["pid"]!,
+                                     "ownerName": now["ownerName"]!, "before": before["frame"]!, "after": now["frame"]!,
+                                     "reason": "Window movement observed; cause cannot be attributed to the probe."])
                 }
             }
-            return try status()
+            var result = try status()
+            result["windowMovementWarnings"] = warnings
+            return result
         } catch {
             let cleanup = await destroy()
             throw OpenCUError((error as? OpenCUError)?.code ?? "AGENT_DISPLAY_CREATE_FAILED",

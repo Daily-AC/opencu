@@ -18,8 +18,8 @@ display and one outstanding window restoration. Methods are:
 | `destroy` | `{}` | Attempt restoration, release the display even if restoration fails, wait for removal, return `ok` and `cleanupErrors`. Repeated calls are safe. |
 | `status` | `{}` | Online display IDs, Quartz frames, main/mirror flags and pixel dimensions; requested/actual agent placement; target AX/WindowServer frames, original frame/display, intersecting display IDs, on-screen flag and restoration state. |
 
-Status also returns title-free WindowServer frame records for ordinary windows,
-Dock-level and main-menu-level windows, for collateral-movement checks. These are
+Status also returns title-free WindowServer frame records with owner names for ordinary windows,
+Dock-level and main-menu-level windows, for movement warnings. These are
 private local evidence, not publishable app inventories. Mutation attempts discard
 that engine connection's observation and coordinate grant. Observe again before
 input. Direct display calls and ordinary MCP input must be serialized; they must
@@ -61,8 +61,11 @@ oversized windows are clamped, with their original size preserved for restoratio
 
 Creating a display is equivalent to attaching a monitor: WindowServer may react
 before OpenCU can position or validate it. The engine checks original display
-frames/main identity and surviving window frames after creation, and removes the
-new display on unexpected changes. It never moves other windows back itself.
+frames/main identity after creation, and removes the new display on unexpected
+display-layout changes. Other-app window movement is reported as a warning with
+owner name, PID and before/after frames: it may be caused by the person, app
+animation or display reconfiguration, and the probe cannot establish causality.
+It never moves other windows back itself. Target restoration remains a strict check.
 These checks cannot prevent a transient rearrangement, detect every rebuilt
 system window, or guarantee that the Dock/menu bar never appears on the new
 screen. The live reviewer must assess those effects.
@@ -104,6 +107,11 @@ and no redirected LaunchServices streams (no Stage Manager bypass or activation
 request), and operates only that fixture. Its unique per-run bundle ID resolves
 the app PID for cleanup; the `open` process is not the fixture. It never activates a
 sentinel or target, switches Spaces, or changes Stage Manager settings.
+Discovery accepts `lsappinfo find`'s named ASN form as well as its bare form, and
+records raw discovery/PID responses in the evidence. A fixture-only live diagnosis
+found the state file present after about 1.16 seconds with one visible window and
+no foreground change; the earlier timeout was ASN parsing, not lost launch arguments
+or Stage Manager suppressing the state file.
 Before the first check, it waits for one second of stable foreground samples and
 records that baseline separately from startup transitions. A baseline owned by
 UserNotificationCenter or SecurityAgent stops the probe before launching the
@@ -118,7 +126,7 @@ fixture or creating a display, with an explicit system-dialog message.
 | Coordinate click | Fresh screenshot coordinates, paired mouseDown/mouseUp with matching fixture-local coordinates. |
 | Shortcut / Unicode | Cmd+A produces the exact selected range; typing produces exact Unicode text including emoji and accented text. |
 | Menu | Nested menu action increments the counter; recorded action title and zero menu tracking events. |
-| Restore / destroy | AX frame, fixture frame/display return to baseline; agent ID disappears; original arrangement and surviving other-window frames match; second destroy succeeds. |
+| Restore / destroy | AX frame, fixture frame/display return to baseline; agent ID disappears; original display arrangement matches; second destroy succeeds. Other-app movement is a warning with its owner, not a failed arrangement check. |
 | Foreground / exit | `lsappinfo front` scheduled every 50 ms from before compilation through cleanup; fixture exits. Actual sample times and maximum sampling gap are recorded. |
 
 Any foreground change or sampling failure aborts further probe actions and cancels
