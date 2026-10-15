@@ -157,6 +157,11 @@ def verify(archive, evidence):
                     and embedded["node_modules_integrity"] == evidence["node_modules_integrity"],
                     "Embedded runtime receipt does not match the extracted runtime")
             evidence["embedded_runtime_receipt_status"] = embedded["status"]
+        resources = package / ".build/OpenCU.app/Contents/Resources"
+        for resource in ["AppIcon.icns", "en.lproj/Presence.strings", "zh-Hans.lproj/Presence.strings"]:
+            require((resources / resource).is_file() and (resources / resource).stat().st_size > 0,
+                    "Release is missing presence artwork or localizations")
+        evidence["presence_resources_verified"] = True
         engine = package / ".build/OpenCU.app/Contents/MacOS/opencu-engine"
         node = package / ".dependencies/node/bin/node"
         evidence["engine_sha256"] = sha256(engine)

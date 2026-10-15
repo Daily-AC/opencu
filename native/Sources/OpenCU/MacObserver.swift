@@ -6,13 +6,14 @@ import ScreenCaptureKit
 
 @MainActor
 final class MacObserver {
+    var requireCaptureAllowed: (() throws -> Void)?
     private let workspace = NSWorkspace.shared
     private let maximumElements = 800
     private let maximumInspected = 8_000
     private let maximumNesting = 120
     private let maximumTextCharacters = 180_000
     /// Capture failures that a retry cannot fix; the text state is returned instead.
-    private static let lastingCaptureFailures: Set<String> = ["SCREEN_RECORDING_PERMISSION_REQUIRED", "WINDOW_ID_UNAVAILABLE",
+    private static let lastingCaptureFailures: Set<String> = ["WINDOW_ID_UNAVAILABLE",
                                                               "SCREENSHOT_WINDOW_UNAVAILABLE", "SCREENSHOT_THUMBNAIL", "SCREENSHOT_TOO_LARGE"]
     private var webAccessibilityRequested: Set<pid_t> = []
     private var enhancedInterface: [pid_t: NSRunningApplication] = [:]
@@ -65,10 +66,12 @@ final class MacObserver {
         var records: [String: [String: Any]] = [:]
         for url in installedApplications() {
             let metadata = applicationMetadata(url)
+            if metadata.id == "dev.opencu.engine" { continue }
             records[url.path] = ["id": metadata.id, "displayName": metadata.name,
                                  "path": url.path, "isRunning": false]
         }
         for application in running {
+            if application.processIdentifier == getpid() || application.bundleIdentifier == "dev.opencu.engine" { continue }
             let target = TargetApp(application: application)
             let key = application.bundleURL.map(canonicalURL)?.path ?? "pid:\(target.pid)"
             // Background agents and web content helpers are not apps to operate;
@@ -215,6 +218,9 @@ final class MacObserver {
     }
 
     private func resolveURL(_ url: URL, running: [NSRunningApplication], launch: Bool) async throws -> TargetApp {
+        guard Bundle(url: url)?.bundleIdentifier != "dev.opencu.engine" else {
+            throw OpenCUError("INVALID_TARGET", "OpenCU's own interface is reserved for the person and cannot be targeted.")
+        }
         let existing = running.filter { $0.bundleURL.map(canonicalURL) == url }
         if !existing.isEmpty { return try uniqueRunningApp(existing, query: url.path) }
         guard launch else { throw OpenCUError("APP_NOT_RUNNING", "\(url.lastPathComponent) is not running.") }
@@ -468,6 +474,8 @@ final class MacObserver {
     }
 
     private func capture(app: TargetApp, window: AXUIElement, windowID: CGWindowID?, bounds: CGRect) async throws -> (image: [String: Any], windowID: CGWindowID, width: Int, height: Int) {
+        try requireCaptureAllowed?()
+        try Task.checkCancellation()
         guard CGPreflightScreenCaptureAccess() else {
             throw OpenCUError("SCREEN_RECORDING_PERMISSION_REQUIRED", "Screenshots need macOS Screen Recording permission. Run opencu setup, grant access in System Settings, then reconnect. Text-only observations do not require Screen Recording.")
         }
@@ -508,6 +516,8 @@ final class MacObserver {
         let image: CGImage
         do { image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration) }
         catch { throw OpenCUError("SCREENSHOT_FAILED", "Could not capture the selected window: \(error.localizedDescription)") }
+        try requireCaptureAllowed?()
+        try Task.checkCancellation()
         guard image.width == configuration.width, image.height == configuration.height,
               let currentBounds = axRect(window), sameBounds(currentBounds, bounds) else {
             throw OpenCUError("SCREENSHOT_GEOMETRY_MISMATCH", "The window geometry changed during capture. Read its state again before using coordinates.")

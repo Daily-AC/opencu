@@ -1,0 +1,16 @@
+"Set up OpenCU" = "设置 OpenCU";
+"OpenCU runs locally, needs no account, and uses the same permissions whichever agent starts it." = "OpenCU 在本机运行，无需账号；无论由哪个智能体启动，都使用同一组权限。";
+"Accessibility" = "辅助功能";
+"To read and operate app controls" = "用于读取和操作应用控件";
+"Screen Recording" = "屏幕录制";
+"To see app windows" = "用于查看应用窗口";
+"Allow…" = "允许…";
+"Allowed" = "已允许";
+"Done" = "完成";
+"OpenCU is ready" = "OpenCU 已就绪";
+"Reconnect your agent to finish" = "请重新连接智能体以完成设置";
+"Allow both permissions in System Settings." = "请在“系统设置”中允许这两项权限。";
+"OpenCU is using %@" = "OpenCU 正在使用 %@";
+"OpenCU is stopped" = "OpenCU 已停止";
+"Stop" = "停止";
+"Permissions…" = "权限…";

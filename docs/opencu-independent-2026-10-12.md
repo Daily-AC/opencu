@@ -148,6 +148,19 @@ control) that the window-location fix resolved.
 
 ## Limits
 
+- macOS presence adds a target-relative purple cursor, temporary menu bar item,
+  `STOPPED_BY_PERSON` latch, and localized permission setup. Native policy and
+  offscreen artwork can be tested without taking the desktop. Cross-process
+  stacking, capture exclusion, focus behavior, live Stop delivery and TCC setup
+  still require reviewer acceptance on disposable windows; no new live GUI
+  result is claimed here. See the [presence contract](independent-engine-contract.md#macos-presence-and-person-stop).
+- Cursor display requires an exact visible window and usable element centre;
+  windowless menu actions and hidden/Stage Manager thumbnails have no indicator
+  over the target. Stop cannot undo input already delivered or prevent a client
+  from deliberately starting a new engine; hosts must respect the person's stop.
+- Screen Recording setup conservatively requests reconnection after a new grant
+  or request in the current process, even on OS versions that may apply it sooner.
+
 - Stage Manager and hidden windows limit background use as described above;
   the remedy is foreground use through `activate_app`, or turning Stage Manager off.
 - A locked Mac returns `SCREEN_LOCKED`. The proprietary locked-use mechanism is

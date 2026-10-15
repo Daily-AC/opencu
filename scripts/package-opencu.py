@@ -25,6 +25,7 @@ NODE_BINARY_SHA256 = "e4b5a3af0e05c75de2eae013904145f40fe7fc2a6e6f17510128bf45cc
 NODE = ROOT / ".dependencies/node"
 FORBIDDEN_PARTS = {".runtime", "@oai", "@openai", "openai", "CodexCLI.app", "cua_node", ".git", ".cache"}
 SOURCE_FILES = [
+    "scripts/render-presence.py", "scripts/render-presence.swift", "docs/independent-engine-contract.md",
     "AGENTS.md", "native/Package.swift", "scripts/build-engine.py", "scripts/package-opencu.py",
     "scripts/test-native.py", "scripts/verify-release.py", "scripts/verify-gui.mjs", "tests/native-logic.swift",
     "skills/opencu/SKILL.md", "docs/opencu-independent-2026-10-12.md",
@@ -210,7 +211,8 @@ def main():
     engine = json.loads((ROOT / ".build/engine-manifest.json").read_text())
     if sha256(executable) != engine["executable_sha256"]:
         raise SystemExit("Built engine hash differs from its build manifest; rebuild before packaging.")
-    native_sources = [ROOT / "native/Package.swift", ROOT / "native/Resources/Info.plist",
+    native_sources = [ROOT / "native/Package.swift", *sorted(path for path in (ROOT / "native/Resources").rglob("*") if path.is_file()),
+                      ROOT / "scripts/render-presence.py", ROOT / "scripts/render-presence.swift",
                       *sorted((ROOT / "native/Sources").rglob("*.swift"))]
     source_hashes = {str(path.relative_to(ROOT)): sha256(path) for path in native_sources}
     if source_hashes != engine["source_files"]:

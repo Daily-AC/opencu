@@ -26,6 +26,66 @@ struct OpenCUInputLogicChecks {
             catch let error as OpenCUError { expect(error.code == code, "\(error.code) != \(code)") }
             catch { expect(false, "Unexpected error: \(error)") }
         }
+        expect(FocusGuard.isPresenceProcess(pid: getpid(), bundleID: nil), "Own process is never a foreground restoration target")
+        expect(FocusGuard.isPresenceProcess(pid: -1, bundleID: "dev.opencu.engine"), "Separate setup process is a person's focus choice")
+        expect(!FocusGuard.isPresenceProcess(pid: -1, bundleID: "dev.opencu.fixture"), "Ordinary target remains guarded")
+        var presence = PresenceState()
+        expect(!presence.menuVisible(at: 0) && !presence.cursorVisible(at: 0), "No presence before app calls")
+        presence.call(target: "fixture", now: 10)
+        presence.finished(now: 10)
+        presence.pointer(now: 11)
+        expect(presence.menuVisible(at: 24.999), "Menu remains before 15-second deadline")
+        expect(!presence.menuVisible(at: 25), "Menu expires exactly at 15 seconds")
+        expect(presence.cursorVisible(at: 13.999), "Cursor remains before 3-second deadline")
+        expect(!presence.cursorVisible(at: 14), "Cursor expires exactly at 3 seconds")
+        presence.call(target: "fixture", now: 20)
+        presence.finished(now: 20)
+        expect(presence.menuVisible(at: 34.999), "Subsequent calls extend menu visibility")
+        var longCall = PresenceState()
+        longCall.call(target: "fixture", now: 0)
+        expect(longCall.menuVisible(at: 30), "Stop remains accessible throughout a long in-flight operation")
+        longCall.finished(now: 30)
+        expect(longCall.menuVisible(at: 44.999) && !longCall.menuVisible(at: 45), "Idle timeout starts after the operation finishes")
+        presence.pointer(now: 21)
+        presence.call(target: "other", now: 22)
+        expect(!presence.cursorVisible(at: 22), "Changing target hides cursor")
+        presence.pointer(now: 23)
+        presence.stop()
+        expect(!presence.cursorVisible(at: 23), "Stop hides cursor immediately")
+        for method in ["click", "drag", "press_key", "type_text", "paste", "scroll", "set_value", "select_text",
+                       "perform_secondary_action", "activate_app"] {
+            fails("STOPPED_BY_PERSON") { try presence.requireAllowed(method) }
+        }
+        fails("STOPPED_BY_PERSON") { try presence.requireAllowed("get_app_state", screenshot: true) }
+        for method in ["get_app_state", "doctor", "list_apps"] { try presence.requireAllowed(method) }
+        presence.call(target: "other", now: 30); presence.pointer(now: 30)
+        expect(presence.stopped && !presence.cursorVisible(at: 30), "Calls cannot clear the stop latch")
+        presence.disconnect()
+        expect(!presence.menuVisible(at: 30) && !presence.cursorVisible(at: 30), "Disconnect removes both indicators")
+        var disconnected = PresenceState()
+        disconnected.call(target: "fixture", now: 0); disconnected.pointer(now: 0); disconnected.disconnect()
+        disconnected.call(target: "fixture", now: 1); disconnected.pointer(now: 1)
+        expect(!disconnected.menuVisible(at: 1) && !disconnected.cursorVisible(at: 1), "Queued callbacks cannot reshow after EOF")
+        try PresenceState().requireAllowed("click")
+        expect(!PresenceState().stopped, "New connection starts fresh")
+        let motion = CursorMotion(start: CGPoint(x: -200, y: 50), end: CGPoint(x: 100, y: 200), began: 10)
+        expect(motion.point(at: 9) == motion.start && motion.point(at: 10) == motion.start, "Animation starts at previous point")
+        expect(motion.point(at: 10.25) == motion.end && motion.point(at: 11) == motion.end, "Animation clamps to exact endpoint")
+        expect(motion.point(at: 10.125).x == 62.5, "Cubic ease-out midpoint")
+        expect(CursorMotion.press(at: 1, began: 1) == 0 && CursorMotion.press(at: 2, began: 1) == 0, "Press pulse returns to rest")
+        expect(abs(CursorMotion.press(at: 1.15, began: 1) - 1) < 0.0001, "Press pulse peaks halfway")
+        for scale: CGFloat in [1, 2] {
+            let bounds = CGRect(x: -800, y: -300, width: 600, height: 400)
+            let point = CursorMotion.screenPoint(pixel: CGPoint(x: 150 * scale, y: 100 * scale),
+                                                  pixels: CGSize(width: 600 * scale, height: 400 * scale), bounds: bounds)
+            expect(point == CGPoint(x: -650, y: -200), "Screenshot pixels map to screen points at 1x and 2x on secondary display")
+        }
+        expect(CursorMotion.appKitRect(CGRect(x: -650, y: -200, width: 60, height: 60), primaryHeight: 900)
+               == CGRect(x: -650, y: 1040, width: 60, height: 60), "AppKit conversion uses primary-display origin")
+        for ax in [false, true] { for screen in [false, true] { for reconnect in [false, true] {
+            expect(PermissionStatus(accessibility: ax, screenRecording: screen, reconnect: reconnect).ready == (ax && screen && !reconnect),
+                   "Ready requires both grants and no restart")
+        } } }
         // The same remote focus works in the foreground and must be refused in
         // the background. A host-PID panel proxy must also be refused; unknown
         // focus in ordinary apps keeps the existing PID-targeted path.
@@ -150,6 +210,6 @@ struct OpenCUInputLogicChecks {
         expect(NSFontManager.shared.traits(of: boldFont).contains(.boldFontMask), "Markdown RTF bold survives decode")
         expect(NSFontManager.shared.traits(of: italicFont).contains(.italicFontMask), "Markdown RTF italic survives decode")
         expect(String(data: markdown.html, encoding: .utf8)?.contains("https://example.com") == true, "Markdown HTML link")
-        print("\(checked) attachment identity, input parsing, UTF-16, AX type, and rich Markdown checks passed; no input or clipboard writes")
+        print("\(checked) presence, stop policy, geometry, attachment identity, input parsing, UTF-16, AX type, and rich Markdown checks passed; no input or clipboard writes")
     }
 }
