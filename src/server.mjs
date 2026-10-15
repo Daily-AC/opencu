@@ -10,7 +10,7 @@ import { normalizeArguments } from './tool-arguments.mjs';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const server = new McpServer(
   { name: 'opencu', version: '0.2.0' },
-  { instructions: 'Control desktop applications with the independent OpenCU engine. Read get_app_state before input. Use observed element indexes; request screenshots before coordinate input. Actions return updated state, and run_actions executes a short known sequence before one final read. Use paste for Unicode or multiline text. Verify the actual result before reporting success. Activate an app only when foreground focus is needed. Do not operate the same app concurrently from different sessions. Respect user authorization and your host approval rules. Input is never automatically replayed. On macOS, input normally runs in the background. On Windows, every input requires foreground focus; stop on PERSON_ACTIVE and never retry it. Windows phase 1 supports plain-text paste, but not drag or select_text. OpenCU runs locally, respects OS permissions, and requires no account or particular agent identity.' },
+  { instructions: 'Control desktop applications with the independent OpenCU engine. Read get_app_state before input. Use observed element indexes; request screenshots before coordinate input. Actions normally return updated state, and run_actions executes a short known sequence before one final read. An unconfirmed AX action instead returns an unknown-outcome notice and stops the batch; explicitly read get_app_state before continuing. Use paste for Unicode or multiline text. Verify the actual result before reporting success. Activate an app only when foreground focus is needed. Do not operate the same app concurrently from different sessions. Respect user authorization and your host approval rules. Input is never automatically replayed. On macOS, input normally runs in the background. On Windows, every input requires foreground focus; stop on PERSON_ACTIVE and never retry it. Windows phase 1 supports plain-text paste, but not drag or select_text. OpenCU runs locally, respects OS permissions, and requires no account or particular agent identity.' },
 );
 const runtime = new OpenCURuntime({ root });
 
@@ -72,7 +72,7 @@ const definitions = {
 };
 
 definitions.run_actions = {
-  description: 'Run a short known sequence and return its final state. Single-action tools already return text state; use this for several known actions or an inline final screenshot. Example: focus an observed field, select all, paste, then inspect the result. Stop when new information or approval is needed. Coordinate input must be first and use a fresh screenshot. Stops on error without replay; earlier actions may have run.',
+  description: 'Run a short known sequence and return its final state. Single-action tools already return text state; use this for several known actions or an inline final screenshot. Example: focus an observed field, select all, paste, then inspect the result. Stop when new information or approval is needed. Coordinate input must be first and use a fresh screenshot. Stops on error or an unknown AX action outcome without replay; earlier actions may have run. An unknown outcome requires an explicit get_app_state before continuing.',
   schema: {
     app,
     actions: z.array(z.discriminatedUnion('method', Object.entries(definitions)

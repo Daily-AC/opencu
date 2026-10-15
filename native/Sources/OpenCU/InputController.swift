@@ -127,6 +127,22 @@ final class InputController {
         try Self.requireKeyboardDelivery(isFrontmost: snapshot.app.isFrontmost,
                                          isFilePanel: isFilePanelFocus(focused, snapshot),
                                          targetPID: snapshot.app.pid, focusedPID: focusedPID)
+        try validateBackgroundDelivery(snapshot)
+    }
+
+    static func requireBackgroundDelivery(isFrontmost: Bool, unsupportedWindow: Bool) throws {
+        if !isFrontmost && unsupportedWindow {
+            throw OpenCUError("BACKGROUND_INPUT_UNSUPPORTED", "This window exposes only title-bar decorations. The engine cannot verify where background pointer or keyboard input lands. Use activate_app explicitly, then read the app state before input. No input was sent.")
+        }
+    }
+
+    private func validateBackgroundDelivery(_ snapshot: WindowSnapshot) throws {
+        // Use the same indexed observation that the caller saw, including its
+        // filtered paths and saved traits. Live raw AXChildren/decoration
+        // identities failed to classify the measured Blender window.
+        guard !snapshot.app.isFrontmost, snapshot.window != nil else { return }
+        try Self.requireBackgroundDelivery(isFrontmost: false,
+                                            unsupportedWindow: snapshot.isOpaque)
     }
 
     // On macOS 26 a remote file panel's AX proxy can report the host PID. The
@@ -163,13 +179,87 @@ final class InputController {
         }
     }
 
+    static func requirePointerDelivery(isFrontmost: Bool, isFilePanel: Bool) throws {
+        if !isFrontmost && isFilePanel {
+            throw OpenCUError("BACKGROUND_REMOTE_FOCUS", "This system Open/Save panel needs the app in front for pointer input. Use activate_app explicitly or ask a person to operate the panel. Indexed set_value and exposed AXPress actions remain available. No input was sent.")
+        }
+    }
+
+    /// Include a drag crossing the panel even if both endpoints lie outside it.
+    static func pointerIntersectsPanel(from start: CGPoint, to end: CGPoint, bounds: CGRect) -> Bool {
+        guard !bounds.isEmpty, !bounds.isNull else { return false }
+        var low = 0.0, high = 1.0
+        for (origin, delta, minimum, maximum) in [
+            (start.x, end.x - start.x, bounds.minX, bounds.maxX),
+            (start.y, end.y - start.y, bounds.minY, bounds.maxY),
+        ] {
+            if delta == 0 {
+                if origin < minimum || origin > maximum { return false }
+            } else {
+                let first = (minimum - origin) / delta, last = (maximum - origin) / delta
+                low = max(low, min(first, last))
+                high = min(high, max(first, last))
+                if low > high { return false }
+            }
+        }
+        return true
+    }
+
+    /// Only screenshot-coordinate input is refused on background file panels: it was
+    /// measured to have no effect there (Keynote, 2026-10-15). Indexed input aimed at
+    /// a live panel element was measured to work (GUI fixture) and stays allowed.
+    private func validatePointerDelivery(_ snapshot: WindowSnapshot, from start: CGPoint, to end: CGPoint,
+                                         coordinateInput: Bool) throws {
+        try validate(snapshot)
+        guard coordinateInput, !snapshot.app.isFrontmost, let window = snapshot.window else { return }
+        func panel(_ element: AXUIElement) -> Bool {
+            Self.isFilePanel(role: axString(element, kAXRoleAttribute), identifier: axString(element, kAXIdentifierAttribute))
+        }
+        var isPanel = panel(window)
+        // Some apps keep their document selected while a system sheet is attached.
+        // Check only live paths rooted at that document, not another window's
+        // panel, the menu bar, or a detached sheet from the previous observation.
+        if !isPanel {
+            var inspected = Set<AXIdentity>()
+            for path in snapshot.elementPaths.values {
+                guard let root = path.first, CFEqual(root, window) else { continue }
+                for (index, element) in path.enumerated() {
+                    guard inspected.insert(AXIdentity(element)).inserted, panel(element) else { continue }
+                    let prefix = Array(path.prefix(index + 1))
+                    guard attachedPath(prefix, to: [window], equal: { CFEqual($0, $1) }, children: axChildren),
+                          let bounds = axRect(element),
+                          Self.pointerIntersectsPanel(from: start, to: end, bounds: bounds) else { continue }
+                    isPanel = true
+                    break
+                }
+                if isPanel { break }
+            }
+        }
+        try Self.requirePointerDelivery(isFrontmost: false, isFilePanel: isPanel)
+    }
+
+    private func preparePointerFocus(_ snapshot: WindowSnapshot, from start: CGPoint, to end: CGPoint,
+                                     coordinateInput: Bool) async throws {
+        try await prepareFocus(snapshot)
+        try validatePointerDelivery(snapshot, from: start, to: end, coordinateInput: coordinateInput)
+    }
+
     private func prepareFocus(_ snapshot: WindowSnapshot) async throws {
+        try validateBackgroundDelivery(snapshot)
         if backgroundFocus?.pid != snapshot.app.pid || backgroundFocus?.windowID != snapshot.windowID {
             releaseFocus()
             backgroundFocus = try BackgroundFocus(snapshot: snapshot)
         }
         if backgroundFocus?.refresh() == true { try await pause(0.025) }
         try validate(snapshot)
+    }
+
+    private func prepareAXFocus(_ snapshot: WindowSnapshot) async throws {
+        // Direct AX actions do not need GHOST-style event delivery. Do not send
+        // synthetic activation to an opaque window even for a menu-bar action.
+        guard snapshot.windowID != nil else { return }
+        if snapshot.isOpaque { return }
+        try await prepareFocus(snapshot)
     }
 
     private func indexedElement(_ args: Arguments, _ snapshot: WindowSnapshot) throws -> AXUIElement {
@@ -257,13 +347,13 @@ final class InputController {
            try actionNames(element).contains(kAXPressAction) {
             // AX actions need no WindowServer ID. For a real background window,
             // retain key-window activation so AppKit validates window commands.
-            if snapshot.windowID != nil { try await prepareFocus(snapshot) }
+            try await prepareAXFocus(snapshot)
             _ = try indexedElement(args, snapshot)
             return try await perform(kAXPressAction, on: element)
         }
         if let element, button == .left,
            [kAXTextFieldRole, kAXTextAreaRole, kAXComboBoxRole].contains(axString(element, kAXRoleAttribute) ?? "") {
-            if snapshot.windowID != nil { try await prepareFocus(snapshot) }
+            try await prepareAXFocus(snapshot)
             _ = try indexedElement(args, snapshot)
             var focusSettable = DarwinBoolean(false)
             if AXUIElementIsAttributeSettable(element, kAXFocusedAttribute as CFString, &focusSettable) == .success,
@@ -285,8 +375,9 @@ final class InputController {
             }
         }
         let location = try coordinate ?? elementPoint(element!)
+        try validatePointerDelivery(snapshot, from: location, to: location, coordinateInput: coordinate != nil)
         let window = try mouseWindow(snapshot)
-        try await prepareFocus(snapshot)
+        try await preparePointerFocus(snapshot, from: location, to: location, coordinateInput: coordinate != nil)
         let source = try eventSource()
         let held = try holdChord(chord, source: source, pid: snapshot.app.pid)
         defer { held.release() }
@@ -322,8 +413,7 @@ final class InputController {
     private func perform(_ action: String, on element: AXUIElement) async throws -> MenuEffect {
         let role = axString(element, kAXRoleAttribute)
         guard [kAXPressAction, kAXPickAction].contains(action), role == kAXMenuBarItemRole || role == kAXMenuItemRole else {
-            try check(AXUIElementPerformAction(element, action as CFString), operation: action)
-            return .none
+            return try Self.actionEffect(AXUIElementPerformAction(element, action as CFString), action: action, confirmed: .none)
         }
         var submenus: CFIndex = 0
         if AXUIElementGetAttributeValueCount(element, kAXChildrenAttribute as CFString, &submenus) == .success, submenus > 0 {
@@ -335,7 +425,8 @@ final class InputController {
             current = parent as! AXUIElement
             if axString(current, kAXRoleAttribute) == kAXMenuBarItemRole { menuBarItem = current; break }
         }
-        try check(AXUIElementPerformAction(element, action as CFString), operation: action)
+        let effect = try Self.actionEffect(AXUIElementPerformAction(element, action as CFString), action: action, confirmed: .chose)
+        if effect.requiresObservation { return effect }
         // Up to 1.5 s: the command is sent when the open menu finishes closing.
         for _ in 0..<60 {
             guard let menuBarItem, axValue(menuBarItem, kAXSelectedAttribute) as? Bool == true else { break }
@@ -347,8 +438,9 @@ final class InputController {
     private func drag(_ args: Arguments, _ snapshot: WindowSnapshot) async throws {
         let start = try point(args, snapshot, x: "from_x", y: "from_y")
         let end = try point(args, snapshot, x: "to_x", y: "to_y")
+        try validatePointerDelivery(snapshot, from: start, to: end, coordinateInput: true)
         let window = try mouseWindow(snapshot)
-        try await prepareFocus(snapshot)
+        try await preparePointerFocus(snapshot, from: start, to: end, coordinateInput: true)
         let source = try eventSource()
         let down = try mouseEvent(.leftMouseDown, at: start, button: .left, source: source, window: window)
         var up = try mouseEvent(.leftMouseUp, at: start, button: .left, source: source, window: window)
@@ -394,8 +486,9 @@ final class InputController {
         }
         let positive = ["up", "left", "u", "l"].contains(direction)
         let delta = Int32(max(1, distance.rounded())) * (positive ? 1 : -1)
+        try validatePointerDelivery(snapshot, from: location, to: location, coordinateInput: coordinate != nil)
         let window = try mouseWindow(snapshot)
-        try await prepareFocus(snapshot)
+        try await preparePointerFocus(snapshot, from: location, to: location, coordinateInput: coordinate != nil)
         let source = try eventSource()
         guard let wheel = CGEvent(scrollWheelEvent2Source: source, units: .pixel, wheelCount: 2,
                                   wheel1: horizontal ? 0 : delta, wheel2: horizontal ? delta : 0, wheel3: 0) else {
@@ -780,11 +873,30 @@ final class InputController {
 
     private func requireSettable(_ element: AXUIElement, attribute: String) throws {
         var settable = DarwinBoolean(false)
-        try check(AXUIElementIsAttributeSettable(element, attribute as CFString, &settable), operation: "check \(attribute)")
-        guard settable.boolValue else { throw OpenCUError("ATTRIBUTE_NOT_SETTABLE", "The element does not allow setting \(attribute)") }
+        let result = AXUIElementIsAttributeSettable(element, attribute as CFString, &settable)
+        try Self.checkSettable(result, settable: settable.boolValue, attribute: attribute)
+    }
+
+    static func checkSettable(_ result: AXError, settable: Bool, attribute: String) throws {
+        if attribute == kAXSelectedTextRangeAttribute,
+           (result == .success && !settable) || result == .attributeUnsupported {
+            throw OpenCUError("TEXT_SELECTION_UNSUPPORTED", "This element does not support setting AXSelectedTextRange. Get a fresh screenshot and click at the text position instead.")
+        }
+        try checkAXResult(result, operation: "check \(attribute)")
+        guard settable else { throw OpenCUError("ATTRIBUTE_NOT_SETTABLE", "The element does not allow setting \(attribute)") }
+    }
+
+    static func actionEffect(_ result: AXError, action: String, confirmed: MenuEffect) throws -> MenuEffect {
+        if result == .cannotComplete { return .unconfirmed }
+        try checkAXResult(result, operation: action)
+        return confirmed
     }
 
     private func check(_ result: AXError, operation: String) throws {
+        try Self.checkAXResult(result, operation: operation)
+    }
+
+    static func checkAXResult(_ result: AXError, operation: String) throws {
         guard result == .success else {
             let code = result == .invalidUIElement ? "STALE_ELEMENT" : result == .apiDisabled ? "ACCESSIBILITY_PERMISSION_REQUIRED" : "ACCESSIBILITY_ERROR"
             throw OpenCUError(code, "Could not \(operation) (AX error \(result.rawValue)); actions are not retried")
