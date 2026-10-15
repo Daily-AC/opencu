@@ -26,6 +26,81 @@ struct OpenCUInputLogicChecks {
             catch let error as OpenCUError { expect(error.code == code, "\(error.code) != \(code)") }
             catch { expect(false, "Unexpected error: \(error)") }
         }
+        // Opaque window detection uses the window's actual decoration elements,
+        // not every AXButton, a localized title, or the application's menu bar.
+        let decorations = ["close", "minimize", "zoom"]
+        expect(windowHasOnlyDecorations(children: decorations, decorations: decorations, equal: ==),
+               "Window with only its own title-bar buttons is opaque")
+        expect(windowHasOnlyDecorations(children: [String](), decorations: [], equal: ==),
+               "An empty accessible window has no accessible content")
+        expect(!windowHasOnlyDecorations(children: nil as [String]?, decorations: decorations, equal: ==),
+               "An unreadable child list is not evidence of an empty window")
+        for content in ["textField", "webArea", "customButton", "canvas", "otherWindowClose"] {
+            expect(!windowHasOnlyDecorations(children: decorations + [content], decorations: decorations, equal: ==),
+                   "Content or another window's decoration must not match the shell")
+        }
+        expect(!windowHasOnlyDecorations(children: ["close"], decorations: [String](), equal: ==),
+               "A button is not a decoration without window-owned identity")
+        for frontmost in [false, true] {
+            for unsupportedWindow in [false, true] {
+                let delivery = {
+                    try InputController.requireBackgroundDelivery(isFrontmost: frontmost, unsupportedWindow: unsupportedWindow)
+                }
+                if !frontmost && unsupportedWindow { fails("BACKGROUND_INPUT_UNSUPPORTED", delivery) }
+                else { try delivery(); expect(true, "Foreground and content-bearing windows retain their input path") }
+            }
+        }
+        for frontmost in [false, true] {
+            for isPanel in [false, true] {
+                let delivery = { try InputController.requirePointerDelivery(isFrontmost: frontmost, isFilePanel: isPanel) }
+                if !frontmost && isPanel { fails("BACKGROUND_REMOTE_FOCUS", delivery) }
+                else { try delivery(); expect(true, "Foreground panels and ordinary background windows retain pointer delivery") }
+            }
+        }
+        let panelBounds = CGRect(x: 10, y: 10, width: 20, height: 20)
+        for (start, end, intersects) in [
+            (CGPoint(x: 15, y: 15), CGPoint(x: 15, y: 15), true),
+            (CGPoint(x: 5, y: 15), CGPoint(x: 5, y: 15), false),
+            (CGPoint(x: 0, y: 20), CGPoint(x: 40, y: 20), true),
+            (CGPoint(x: 40, y: 20), CGPoint(x: 0, y: 20), true),
+            (CGPoint(x: 20, y: 0), CGPoint(x: 20, y: 40), true),
+            (CGPoint(x: 0, y: 40), CGPoint(x: 40, y: 0), true),
+            (CGPoint(x: 0, y: 20), CGPoint(x: 20, y: 0), true), // Touching edge.
+            (CGPoint(x: 0, y: 15), CGPoint(x: 15, y: 0), false), // Bounding boxes overlap, segment misses.
+        ] {
+            expect(InputController.pointerIntersectsPanel(from: start, to: end, bounds: panelBounds) == intersects,
+                   "Pointer path correctly targets the panel")
+        }
+        expect(!InputController.pointerIntersectsPanel(from: .zero, to: .zero, bounds: .zero), "Empty panel bounds do not qualify")
+
+        expect(AXError.cannotComplete.rawValue == -25204, "Reported AX error matches cannotComplete")
+        for action in [kAXPressAction, kAXConfirmAction, kAXIncrementAction, "customAction"] {
+            let outcome = try InputController.actionEffect(.cannotComplete, action: action, confirmed: .chose)
+            expect(outcome.requiresObservation, "An unconfirmed AX action requires a fresh read")
+            expect(outcome.actionResult["ok"] as? Bool == true && outcome.actionResult["outcome"] as? String == "unknown",
+                   "Unknown outcome is not an action failure or a completion claim")
+            expect(outcome.actionResult["message"] as? String == "The app did not confirm the action. Read state before continuing; do not repeat the action automatically.",
+                   "Unknown outcome wording is stable")
+        }
+        let confirmed = try InputController.actionEffect(.success, action: kAXPressAction, confirmed: .chose)
+        if case .chose = confirmed { expect(true, "Confirmed menu choice retained") }
+        else { expect(false, "Successful action lost menu effect") }
+        expect(!confirmed.requiresObservation && confirmed.actionResult["outcome"] == nil, "Ordinary success retains its result")
+        for (error, code) in [(AXError.invalidUIElement, "STALE_ELEMENT"), (.apiDisabled, "ACCESSIBILITY_PERMISSION_REQUIRED"),
+                              (.actionUnsupported, "ACCESSIBILITY_ERROR"), (.failure, "ACCESSIBILITY_ERROR")] {
+            fails(code) { _ = try InputController.actionEffect(error, action: kAXPressAction, confirmed: .none) }
+        }
+        fails("ACCESSIBILITY_ERROR") { try InputController.checkAXResult(.cannotComplete, operation: "set element value") }
+        for result in [AXError.success, .attributeUnsupported] {
+            fails("TEXT_SELECTION_UNSUPPORTED") {
+                try InputController.checkSettable(result, settable: false, attribute: kAXSelectedTextRangeAttribute)
+            }
+        }
+        try InputController.checkSettable(.success, settable: true, attribute: kAXSelectedTextRangeAttribute)
+        expect(true, "Settable text selection remains supported")
+        fails("ATTRIBUTE_NOT_SETTABLE") { try InputController.checkSettable(.success, settable: false, attribute: kAXValueAttribute) }
+        fails("ACCESSIBILITY_ERROR") { try InputController.checkSettable(.cannotComplete, settable: false, attribute: kAXSelectedTextRangeAttribute) }
+        fails("ACCESSIBILITY_PERMISSION_REQUIRED") { try InputController.checkSettable(.apiDisabled, settable: false, attribute: kAXSelectedTextRangeAttribute) }
         // The same remote focus works in the foreground and must be refused in
         // the background. A host-PID panel proxy must also be refused; unknown
         // focus in ordinary apps keeps the existing PID-targeted path.

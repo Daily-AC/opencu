@@ -108,6 +108,10 @@ user data exposed its editor text through `AXManualAccessibility`.
 Stage Manager keeps every app that is not on the stage either as a thumbnail or
 fully hidden. Measured consequences for such a window in the background:
 
+These are the applications measured on October 12, not universal WindowServer
+rules. [The October 15 Blender investigation](opencu-blender-2026-10-15.md)
+obtained a full-size off-stage screenshot and found a different input limitation.
+
 - Screenshots: every capture path yields the thumbnail or nothing.
   [Capture evidence](../evidence/opencu-stage-manager-capture-2026-10-12.json)
 - The window cannot become key, even after setting `AXMain` or `AXFocused`, so
@@ -117,8 +121,10 @@ fully hidden. Measured consequences for such a window in the background:
 - Keyboard input reached TextEdit in a thumbnail window but not VS Code in a fully
   hidden one. Reading and indexed actions work in both.
 
-OpenCU detects both states from WindowServer without capture permission and says
-so in the returned state, recommending `activate_app` for steps that need more.
+OpenCU detects both presentation states from WindowServer without capture
+permission and says so in the returned state, recommending `activate_app` for
+steps that need more. The current implementation reports capture availability
+separately rather than inferring it from presentation state.
 A requested screenshot that cannot be taken no longer fails the call: the text
 state is returned with the reason.
 

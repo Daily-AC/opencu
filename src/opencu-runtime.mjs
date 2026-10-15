@@ -137,7 +137,20 @@ export class OpenCURuntime {
         };
         if (actions.some(action => !inputs.has(action.method))) throw new Error('Unknown input operation in batch; no input was sent.');
         for (const [index, { method: action, ...params }] of actions.entries()) {
-          try { await this.#request(action, { ...params, app }, signal); completed++; }
+          try {
+            const result = await this.#request(action, { ...params, app }, signal);
+            completed++;
+            if (result.outcome === 'unknown') {
+              // An AX timeout can mean that the action replaced its own window.
+              // Stop the batch; no automatic observation, retry or later input.
+              this.#lastText.clear();
+              return this.#coordinates.after(method, args, {
+                content: [{ type: 'text', text: result.message }],
+                _meta: { 'opencu/app': result.app, 'opencu/engine': 'independent',
+                  'opencu/actionOutcome': 'unknown', 'opencu/actionsAttempted': completed },
+              });
+            }
+          }
           catch (error) {
             error.message = `Action ${index + 1} failed: ${error.message} Earlier actions may have run. Read state before retrying.`;
             throw error;
