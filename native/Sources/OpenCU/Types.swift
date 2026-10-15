@@ -43,11 +43,26 @@ struct Observation {
     }
 }
 
-/// How an input changed menu state. Opened menus are closed again but stay listed.
+/// Menu state or an unconfirmed AX action. An unknown outcome requires a new read.
 enum MenuEffect {
     case none
     case opened(AXUIElement)
     case chose
+    case unconfirmed
+
+    static let unconfirmedMessage = "The app did not confirm the action. Read state before continuing; do not repeat the action automatically."
+
+    var requiresObservation: Bool {
+        if case .unconfirmed = self { return true }
+        return false
+    }
+
+    var actionResult: [String: Any] {
+        if requiresObservation {
+            return ["ok": true, "outcome": "unknown", "message": Self.unconfirmedMessage]
+        }
+        return ["ok": true]
+    }
 }
 
 func axValue(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
@@ -138,6 +153,24 @@ func axChildren(_ element: AXUIElement) -> [AXUIElement] {
     return values as? [AXUIElement] ?? []
 }
 
+/// A positively observed window shell, not a toolkit/name heuristic. Standard
+/// title-bar buttons can contain their own groups (for example the zoom menu).
+/// Unreadable children are unknown, not evidence of an empty content view.
+func windowHasOnlyDecorations<Node>(children: [Node]?, decorations: [Node],
+                                    equal: (Node, Node) -> Bool) -> Bool {
+    guard let children else { return false }
+    return children.allSatisfy { child in decorations.contains { equal(child, $0) } }
+}
+
+func axWindowHasOnlyDecorations(_ window: AXUIElement) -> Bool {
+    let children = axValue(window, kAXChildrenAttribute) as? [AXUIElement]
+    let decorations = [kAXCloseButtonAttribute, kAXMinimizeButtonAttribute,
+                       kAXZoomButtonAttribute, "AXFullScreenButton"]
+        .compactMap { axElement(window, $0) }
+    return windowHasOnlyDecorations(children: children, decorations: decorations,
+                                    equal: { CFEqual($0, $1) })
+}
+
 /// AppKit custom actions report their AX action name as
 /// "Name:<label>\nTarget:…\nSelector:…". Listings show the label alone.
 func axActionLabel(_ name: String) -> String {
@@ -151,4 +184,11 @@ func axResolveAction(_ requested: String, in names: [String]) -> String? {
     if names.contains(requested) { return requested }
     let matches = names.filter { axActionLabel($0) == requested }
     return matches.count == 1 ? matches[0] : nil
+}
+
+struct AXIdentity: Hashable {
+    let element: AXUIElement
+    init(_ element: AXUIElement) { self.element = element }
+    static func == (lhs: Self, rhs: Self) -> Bool { CFEqual(lhs.element, rhs.element) }
+    func hash(into hasher: inout Hasher) { hasher.combine(CFHash(element)) }
 }

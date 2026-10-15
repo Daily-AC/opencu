@@ -136,7 +136,7 @@ final class MacObserver {
     func record(_ effect: MenuEffect, pid: pid_t) {
         switch effect {
         case .none: return
-        case .chose: expandedMenus = []
+        case .chose, .unconfirmed: expandedMenus = []
         case .opened(let menu):
             // Choosing another menu bar item replaces the previous menu path.
             if expandedMenusPID != pid || axString(menu, kAXRoleAttribute) == kAXMenuBarItemRole { expandedMenus = [] }
@@ -175,15 +175,18 @@ final class MacObserver {
                      "Window: \(quoted(windowTitle))",
                      "Window bounds: x=\(bounds.minX), y=\(bounds.minY), width=\(bounds.width), height=\(bounds.height) points."]
         lines.append(contentsOf: tree.lines)
+        if !app.isFrontmost, axWindowHasOnlyDecorations(window) {
+            lines.append("Background pointer and keyboard input is unsupported for this custom-drawn window (BACKGROUND_INPUT_UNSUPPORTED). Only title-bar decorations are accessible, so the engine cannot verify where input lands. Use activate_app explicitly, then read the state before input. Exposed AX actions remain available.")
+        }
         var windowID = inputWindowID(app: app, window: window)
         let presentation = windowID.flatMap(windowPresentation)
-        // Measured on macOS 26: such a window cannot become key, so window
-        // commands are disabled; Chromium stops rendering it; captures fail.
-        let limits = "In the background, its screenshot, web pages in Chromium-based apps, and window commands such as Save or Close are unavailable"
+        // Visibility is not a capture capability test: Blender can retain a
+        // full-size backing surface off-stage. Report the capture result below.
+        let limits = "Background screenshots and window commands may be unavailable; Chromium web content may stop rendering"
         if let presentation, !presentation.onscreen {
-            lines.append("This window is not on screen (hidden by Stage Manager or the app, or on another Space). \(limits), and keyboard input may not arrive; reading and indexed actions still work. Use activate_app for steps that need more.")
+            lines.append("This window is not on screen (hidden by Stage Manager or the app, or on another Space). \(limits). Keyboard input may not arrive; reading and exposed AX actions remain available. Use activate_app for steps that need more.")
         } else if let presentation, abs(presentation.size.width - bounds.width) > 1 || abs(presentation.size.height - bounds.height) > 1 {
-            lines.append("Stage Manager shows this window only as a \(presentation.size.width) x \(presentation.size.height) point thumbnail. \(limits); reading, indexed actions and typing still work. Use activate_app for steps that need more.")
+            lines.append("Stage Manager shows this window only as a \(presentation.size.width) x \(presentation.size.height) point thumbnail. \(limits). Keyboard delivery depends on the app; reading and exposed AX actions remain available. Use activate_app for steps that need more.")
         } else if !tree.webContent, let url = app.application.bundleURL, isChromium(url) {
             lines.append("Web content unavailable: Chromium does not render pages in a fully covered window, so only browser controls are exposed. Use activate_app or keep the window visible, then read the state again.")
         }
@@ -566,11 +569,4 @@ final class MacObserver {
         let value = text.count > limit ? String(text.prefix(limit)) + "… [truncated]" : text
         return String(reflecting: value)
     }
-}
-
-private struct AXIdentity: Hashable {
-    let element: AXUIElement
-    init(_ element: AXUIElement) { self.element = element }
-    static func == (lhs: Self, rhs: Self) -> Bool { CFEqual(lhs.element, rhs.element) }
-    func hash(into hasher: inout Hasher) { hasher.combine(CFHash(element)) }
 }
