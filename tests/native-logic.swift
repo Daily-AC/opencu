@@ -56,16 +56,9 @@ struct OpenCUInputLogicChecks {
         }
         try CaptureSafety.requireVerifiedEngine(respawned: true, pid: 10, responsiblePID: 10)
         expect(true, "Only a respawned and OS-verified self-responsible engine qualifies")
-        fails("SCREEN_RECORDING_PERMISSION_REQUIRED") {
-            try CaptureSafety.requireNoninteractiveCapture(osMajorVersion: 14, screenRecordingGranted: false)
-        }
-        for version in [13, 15, 26, 27] {
-            fails("CAPTURE_REQUIRES_INTERACTIVE_AUTHORIZATION") {
-                try CaptureSafety.requireNoninteractiveCapture(osMajorVersion: version, screenRecordingGranted: true)
-            }
-        }
-        try CaptureSafety.requireNoninteractiveCapture(osMajorVersion: 14, screenRecordingGranted: true)
-        expect(true, "Existing grant allows only the non-reminder OS capture path")
+        fails("SCREEN_RECORDING_PERMISSION_REQUIRED") { try CaptureSafety.requireScreenRecordingGrant(false) }
+        try CaptureSafety.requireScreenRecordingGrant(true)
+        expect(true, "An existing grant allows capture by a verified engine")
         let mainDisplay = CGRect(x: 0, y: 0, width: 1728, height: 1117)
         let offstageFrame = CGRect(x: 160, y: 255, width: 700, height: 782)
         typealias Candidate = AgentDisplayWindowIdentity.Candidate

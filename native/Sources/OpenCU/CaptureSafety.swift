@@ -11,16 +11,11 @@ enum CaptureSafety {
         }
     }
 
-    static func requireNoninteractiveCapture(osMajorVersion: Int, screenRecordingGranted: Bool) throws {
-        guard screenRecordingGranted else {
+    // Preflight checks TCC only. On macOS 15+ the system may still show its periodic
+    // private-picker reminder for the verified responsible app; that is expected.
+    static func requireScreenRecordingGrant(_ granted: Bool) throws {
+        guard granted else {
             throw OpenCUError("SCREEN_RECORDING_PERMISSION_REQUIRED", "Screenshots need OpenCU's Screen Recording grant. Use opencu setup explicitly; no permission request was made by capture.")
-        }
-        // Preflight checks TCC, not the periodic private-picker bypass reminder.
-        // No supported API establishes that a direct SCK capture will not prompt
-        // on these systems. Do not invoke even shareable-content enumeration.
-        guard osMajorVersion == 14 else {
-            throw OpenCUError("CAPTURE_REQUIRES_INTERACTIVE_AUTHORIZATION",
-                "Background screenshots are disabled on macOS \(osMajorVersion): direct ScreenCaptureKit access can show the private-window-picker bypass prompt even with Screen Recording granted. No capture API was called. Text-only observation and indexed actions remain available; a verified non-prompting capture route is required.")
         }
     }
 }
@@ -42,15 +37,13 @@ enum EngineResponsibility {
     static var json: Arguments {
         ["pid": getpid(), "responsiblePID": responsiblePID().map { $0 as Any } ?? NSNull(),
          "respawnMarkerSeen": respawned, "verifiedSelfResponsible": verified,
-         "capturePolicy": ProcessInfo.processInfo.operatingSystemVersion.majorVersion == 14
-            ? "verified-engine-and-existing-grant" : "refuse-before-ScreenCaptureKit-private-picker-risk"]
+         "capturePolicy": "verified-engine-and-existing-grant"]
     }
 
     static func requireCapture() throws {
         do {
             try CaptureSafety.requireVerifiedEngine(respawned: respawned, pid: getpid(), responsiblePID: responsiblePID())
-            try CaptureSafety.requireNoninteractiveCapture(osMajorVersion: ProcessInfo.processInfo.operatingSystemVersion.majorVersion,
-                                                          screenRecordingGranted: CGPreflightScreenCaptureAccess())
+            try CaptureSafety.requireScreenRecordingGrant(CGPreflightScreenCaptureAccess())
         } catch let error as OpenCUError {
             throw OpenCUError(error.code, error.message, details: ["captureContext": json])
         }

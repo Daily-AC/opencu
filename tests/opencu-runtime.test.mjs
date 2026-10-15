@@ -63,13 +63,13 @@ test('an arbitrary MCP client works with no account, turn metadata or official i
 });
 
 test('capture safety refusals preserve diagnostics without retrying or granting coordinates', async t => {
-  const data = { captureContext: { pid: 123, responsiblePID: 123, verifiedSelfResponsible: true,
-    capturePolicy: 'refuse-before-ScreenCaptureKit-private-picker-risk' } };
-  const f = await fixture(t, [{ error: { code: 'CAPTURE_REQUIRES_INTERACTIVE_AUTHORIZATION',
+  const data = { captureContext: { pid: 123, responsiblePID: 456, verifiedSelfResponsible: false,
+    capturePolicy: 'verified-engine-and-existing-grant' } };
+  const f = await fixture(t, [{ error: { code: 'CAPTURE_RESPONSIBILITY_UNVERIFIED',
     message: 'No capture API was called.', data } }]);
   const result = await f.call('get_app_state', { app: 'Fixture', includeScreenshot: true });
   assert.equal(result.isError, true);
-  assert.equal(result._meta['opencu/error'], 'CAPTURE_REQUIRES_INTERACTIVE_AUTHORIZATION');
+  assert.equal(result._meta['opencu/error'], 'CAPTURE_RESPONSIBILITY_UNVERIFIED');
   assert.deepEqual(result._meta['opencu/errorDetails'], data);
   assert.equal(result.content.some(item => item.type === 'image'), false);
   assert.equal((await f.calls()).length, 1);

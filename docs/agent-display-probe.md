@@ -177,15 +177,15 @@ requires Apple's approval for VNC apps; it is not added to this locally signed
 engine. The Apple forum page about the reminder was blocked by security
 verification and is not treated as a verified workaround.
 
-Consequently **macOS 15 and later refuse this direct screenshot path** with
-`CAPTURE_REQUIRES_INTERACTIVE_AUTHORIZATION` before even enumerating SCK content,
-including when Screen Recording is granted and responsibility is verified.
-This is the requested explicit-error option, not a newly working screenshot
-backend. The macOS 14 path requires verified responsibility and preflight both
-before enumeration and before capture. No legacy API, CLI, prompt suppression,
-automatic permission request or automatic input retry is substituted. Text-only
-observation/indexed actions remain available. A denied screenshot grants no
-coordinates. Offline policy, boundary-audit and MCP tests cover these refusals.
+The reviewer rejected refusing all screenshots on macOS 15+: it removes the
+engine's core capability to avoid a periodic system reminder. Capture requires
+verified responsibility and an existing grant, checked before enumeration and
+before capture. Run 6's unified log shows the reminder came from replayd's
+`SCAlertStatsManager requireAlertWithCanonicalBundleID` (a per-identity
+last-alerted date), not from a TCC request: both TCC checks returned Allow. Why
+the dialog named "node" instead of OpenCU is still unexplained; the doctor path
+spawned from Node reports a self-responsible engine. No legacy API, CLI, prompt
+suppression, automatic permission request or automatic input retry is used.
 
 EOF, a broken stdout pipe and SIGINT/SIGTERM/SIGHUP run the same cleanup on the main actor, after any
 in-flight request unwinds. Shutdown releases synthetic focus, attempts the saved
