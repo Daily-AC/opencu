@@ -29,6 +29,12 @@ MCP caller approvals remain the caller's responsibility. Local invocation is not
 restricted to Codex or any other agent. No proprietary lock-screen unlock path
 is carried over.
 
+The direct macOS engine also exposes opt-in `experimental_agent_display_*`
+methods described in [the agent display probe note](agent-display-probe.md).
+They are not MCP tools. Display geometry mutations invalidate the connection's
+observation; callers must serialize them with ordinary input and observe again.
+The probe requires separate live reviewer acceptance and has no consent UI yet.
+
 Pointer routing uses the system-exported CGEventSetWindowLocation SPI after
 public NSEvent/CGEvent creation. Actual received events showed that public
 creation alone left the window-relative point at an invalid sentinel. Resolve

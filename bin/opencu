@@ -13,8 +13,9 @@ engine="$app/Contents/MacOS/opencu-engine"
 
 case "${1:-mcp}" in
     -h|--help|help)
-        printf '%s\n' 'Usage: opencu [mcp|doctor|setup]' \
+        printf '%s\n' 'Usage: opencu [mcp|engine|doctor|setup]' \
             '  mcp     Run the MCP server on stdin/stdout (default).' \
+            '  engine  Run the native JSON-lines stdio engine directly (experimental APIs included).' \
             '  doctor  Report engine and macOS permission status.' \
             '  setup   Open the standard macOS permission setup flow.'
         exit 0
@@ -28,6 +29,10 @@ if [ ! -x "$engine" ]; then
 fi
 
 case "${1:-mcp}" in
+    engine)
+        shift
+        exec "$engine" serve "$@"
+        ;;
     doctor)
         shift
         exec "$engine" --doctor "$@"
