@@ -238,8 +238,12 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegat
             guard let self, let editor = notification.object as? NSTextView, editor === self.textField.currentEditor() else { return }
             self.lastTextSelection = editor.selectedRange()
         }
-        window.makeKeyAndOrderFront(nil)
-        NSApp.activate(ignoringOtherApps: true)
+        if CommandLine.arguments.contains("--background") {
+            window.orderBack(nil)
+        } else {
+            window.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        }
         window.makeFirstResponder(textField)
         activationObserver = NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] notification in
             guard let self, let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
@@ -433,6 +437,10 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegat
         ["location": range.location == NSNotFound ? -1 : range.location, "length": range.length]
     }
 
+    private func rectJSON(_ rect: NSRect) -> [String: Double] {
+        ["x": rect.minX, "y": rect.minY, "width": rect.width, "height": rect.height]
+    }
+
     @objc private func writeState() {
         // A fixture-only control file makes stale-observation tests deterministic:
         // change the UI externally, wait for completion, then use the old index.
@@ -445,6 +453,11 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegat
         if let editor = textField.currentEditor() as? NSTextView { lastTextSelection = editor.selectedRange() }
         sliderValue.stringValue = String(format: "%.1f", slider.doubleValue)
         let state: [String: Any] = ["visibleWindows": NSApp.windows.filter { $0.isVisible }.count,
+                                   "windowFrame": ["x": window.frame.minX, "y": window.frame.minY,
+                                                   "width": window.frame.width, "height": window.frame.height],
+                                   "backingScale": window.backingScaleFactor,
+                                   "screenID": (window.screen?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? UInt32) ?? 0,
+                                   "probeInWindow": rectJSON(probe.convert(probe.bounds, to: nil)),
                                    "savePanelVisible": savePanel?.isVisible ?? false,
                                    "savedPath": savedPath, "panelError": panelError,
                                    "newCommands": newCommands, "openCommands": openCommands,
@@ -479,6 +492,19 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegat
 }
 
 let arguments = Array(CommandLine.arguments.dropFirst())
+// Non-GUI image inspection for the agent-display probe. Inspect the actual PNG
+// bytes rather than accepting screenshot metadata as proof of rendered content.
+if arguments.count == 4, arguments[0] == "--inspect-image",
+   let bytes = try? Data(contentsOf: URL(fileURLWithPath: arguments[1])),
+   let bitmap = NSBitmapImageRep(data: bytes),
+   let x = Int(arguments[2]), let y = Int(arguments[3]),
+   x >= 0, y >= 0, x < bitmap.pixelsWide, y < bitmap.pixelsHigh,
+   let color = bitmap.colorAt(x: x, y: y)?.usingColorSpace(.sRGB) {
+    let result: [String: Any] = ["width": bitmap.pixelsWide, "height": bitmap.pixelsHigh,
+                               "r": color.redComponent, "g": color.greenComponent, "b": color.blueComponent]
+    print(String(decoding: try JSONSerialization.data(withJSONObject: result), as: UTF8.self))
+    exit(0)
+}
 if arguments == ["--clipboard-digest"] || arguments == ["--clipboard-state"] {
     var digest = SHA256()
     for (index, item) in (NSPasteboard.general.pasteboardItems ?? []).enumerated() {
@@ -497,8 +523,9 @@ if arguments == ["--clipboard-digest"] || arguments == ["--clipboard-state"] {
     } else { print(checksum) }
     exit(0)
 }
-guard (arguments.count == 2 || arguments.count == 3 && arguments[2] == "--stage-managed"), arguments[0] == "--output", arguments[1].hasPrefix("/") else {
-    FileHandle.standardError.write(Data("Usage: OpenCUFixture --output /absolute/path/to/fixture-state.json [--stage-managed]\n".utf8))
+guard arguments.count >= 2, arguments[0] == "--output", arguments[1].hasPrefix("/"),
+      arguments.dropFirst(2).allSatisfy({ ["--stage-managed", "--background"].contains($0) }) else {
+    FileHandle.standardError.write(Data("Usage: OpenCUFixture --output /absolute/path/to/fixture-state.json [--stage-managed] [--background]\n".utf8))
     exit(2)
 }
 let outputURL = URL(fileURLWithPath: arguments[1])

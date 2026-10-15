@@ -26,6 +26,56 @@ struct OpenCUInputLogicChecks {
             catch let error as OpenCUError { expect(error.code == code, "\(error.code) != \(code)") }
             catch { expect(false, "Unexpected error: \(error)") }
         }
+        let mainDisplay = CGRect(x: 0, y: 0, width: 1728, height: 1117)
+        let agentSize = CGSize(width: 1728, height: 1117)
+        let bottomRight = try AgentDisplayGeometry.placement(main: mainDisplay, others: [], size: agentSize)
+        expect(bottomRight.origin == CGPoint(x: 1728, y: 1117), "Agent display touches the main display at one corner")
+        let alternate = try AgentDisplayGeometry.placement(main: mainDisplay, others: [bottomRight], size: agentSize)
+        expect(alternate.origin == CGPoint(x: -1728, y: 1117), "Occupied corner uses a free corner without translating existing displays")
+        let edgeBlocked = try AgentDisplayGeometry.placement(main: mainDisplay,
+            others: [CGRect(x: 1728, y: 0, width: 1728, height: 1117)], size: agentSize)
+        expect(edgeBlocked.origin == CGPoint(x: -1728, y: 1117), "Do not expose a wide pointer crossing from another display")
+        let offset = try AgentDisplayGeometry.placement(main: CGRect(x: -100, y: -200, width: 1000, height: 700), others: [], size: agentSize)
+        expect(offset.origin == CGPoint(x: 900, y: 500), "Placement handles negative Quartz coordinates")
+        fails("AGENT_DISPLAY_GEOMETRY") {
+            _ = try AgentDisplayGeometry.placement(main: mainDisplay,
+                others: [CGRect(x: -2000, y: -2000, width: 6000, height: 6000)], size: agentSize)
+        }
+        fails("AGENT_DISPLAY_GEOMETRY") {
+            _ = try AgentDisplayGeometry.placement(main: mainDisplay, others: [], size: CGSize(width: 0, height: 20))
+        }
+        fails("AGENT_DISPLAY_GEOMETRY") {
+            _ = try AgentDisplayGeometry.placement(main: CGRect(x: Double.infinity, y: 0, width: 10, height: 10), others: [], size: agentSize)
+        }
+        let originalFrame = CGRect(x: 120, y: 80, width: 700, height: 782)
+        let movedFrame = try AgentDisplayGeometry.destination(original: originalFrame, display: bottomRight)
+        expect(movedFrame.size == originalFrame.size && bottomRight.contains(movedFrame), "Move preserves a fitting window's size")
+        let clamped = try AgentDisplayGeometry.destination(original: CGRect(x: 0, y: 0, width: 4000, height: 2000), display: bottomRight)
+        expect(bottomRight.contains(clamped) && clamped.width == 1600, "Oversized target is fitted within display margins")
+        var ledger = AgentDisplayLedger()
+        expect(ledger.cleanupSteps.isEmpty, "Cleanup before creation is idempotent")
+        try ledger.created(42)
+        expect(ledger.cleanupSteps == [.releaseDisplay], "Created display alone needs release")
+        fails("AGENT_DISPLAY_BUSY") { try ledger.created(43) }
+        let savedFrame = AgentDisplayLedger.SavedFrame(windowID: 21, displayID: 1, frame: originalFrame)
+        try ledger.remember(savedFrame)
+        expect(ledger.saved == savedFrame && ledger.restorePending, "Frame committed before any AX mutation")
+        fails("AGENT_DISPLAY_BUSY") {
+            try ledger.remember(.init(windowID: 22, displayID: 42, frame: movedFrame))
+        }
+        expect(ledger.saved == savedFrame, "Repeated/other-window move cannot overwrite original frame")
+        expect(ledger.cleanupSteps == [.restore, .releaseDisplay], "Disconnect and failure restore before release")
+        ledger.released() // Simulated failed restore: still release the display.
+        expect(ledger.restorePending && ledger.saved == savedFrame && ledger.cleanupSteps == [.restore], "Failed restoration retains recovery state after release")
+        fails("AGENT_DISPLAY_BUSY") { try ledger.created(43) }
+        ledger.restored()
+        ledger.released()
+        expect(ledger.cleanupSteps.isEmpty, "Successful restoration plus repeated destroy is idempotent")
+        try ledger.created(43)
+        expect(ledger.saved == nil, "Fresh display clears completed bookkeeping")
+        try ledger.remember(savedFrame)
+        ledger.restored()
+        expect(ledger.cleanupSteps == [.releaseDisplay], "Explicit restore prevents duplicate window writes at shutdown")
         // The same remote focus works in the foreground and must be refused in
         // the background. A host-PID panel proxy must also be refused; unknown
         // focus in ordinary apps keeps the existing PID-targeted path.
@@ -150,6 +200,6 @@ struct OpenCUInputLogicChecks {
         expect(NSFontManager.shared.traits(of: boldFont).contains(.boldFontMask), "Markdown RTF bold survives decode")
         expect(NSFontManager.shared.traits(of: italicFont).contains(.italicFontMask), "Markdown RTF italic survives decode")
         expect(String(data: markdown.html, encoding: .utf8)?.contains("https://example.com") == true, "Markdown HTML link")
-        print("\(checked) attachment identity, input parsing, UTF-16, AX type, and rich Markdown checks passed; no input or clipboard writes")
+        print("\(checked) agent-display geometry/cleanup, attachment identity, input parsing, UTF-16, AX type, and rich Markdown checks passed; no GUI actions or clipboard writes")
     }
 }

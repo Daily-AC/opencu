@@ -8,12 +8,39 @@ final class Engine {
     private let input = InputController()
     private var snapshot: WindowSnapshot?
     private let focusGuard = FocusGuard()
+    private let agentDisplay = AgentDisplay()
 
-    func shutdown() { input.releaseFocus(); observer.restoreAccessibilityModes() }
+    func shutdown() async {
+        focusGuard.cancel()
+        input.releaseFocus()
+        observer.restoreAccessibilityModes()
+        let cleanup = await agentDisplay.destroy()
+        if cleanup["ok"] as? Bool == false {
+            FileHandle.standardError.write(Data("Agent display cleanup: \(cleanup)\n".utf8))
+        }
+    }
 
     func dispatch(_ method: String, _ args: Arguments) async throws -> Any {
         if method == "doctor" { return permissions() }
         if method == "list_apps" { return observer.listApps() }
+        if method.hasPrefix("experimental_agent_display_") {
+            if method == "experimental_agent_display_status" { return try agentDisplay.status() }
+            // Any attempted geometry mutation invalidates prior indexes and
+            // screenshot coordinates, including on partial failure.
+            snapshot = nil
+            input.releaseFocus()
+            focusGuard.cancel()
+            switch method {
+            case "experimental_agent_display_create": return try await agentDisplay.create()
+            case "experimental_agent_display_move_window":
+                try requireAccessibility()
+                let app = try await observer.resolveApp(requiredString(args, "app"), launch: false)
+                return try await agentDisplay.moveWindow(app)
+            case "experimental_agent_display_restore": return try await agentDisplay.restore()
+            case "experimental_agent_display_destroy": return await agentDisplay.destroy()
+            default: throw OpenCUError("METHOD_NOT_FOUND", "Unknown experimental agent display operation: \(method)")
+            }
+        }
         let actions = ["click", "drag", "press_key", "type_text", "paste", "scroll", "set_value", "select_text", "perform_secondary_action"]
         guard actions.contains(method) || ["get_app_state", "activate_app"].contains(method) else {
             throw OpenCUError("METHOD_NOT_FOUND", "Unknown OpenCU operation: \(method)")
@@ -99,13 +126,15 @@ func permissions() -> [String: Any] {
      "transport": "stdio", "requiresAccount": false, "requiresOfficialRuntime": false]
 }
 
-func emit(_ value: Any) {
+@discardableResult
+func emit(_ value: Any) -> Bool {
     do {
         let data = try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys, .fragmentsAllowed])
-        FileHandle.standardOutput.write(data)
-        FileHandle.standardOutput.write(Data([10]))
+        try FileHandle.standardOutput.write(contentsOf: data + Data([10]))
+        return true
     } catch {
-        FileHandle.standardError.write(Data("OpenCU could not encode a response.\n".utf8))
+        try? FileHandle.standardError.write(contentsOf: Data("OpenCU could not encode or deliver a response; closing the connection.\n".utf8))
+        return false
     }
 }
 
@@ -151,13 +180,28 @@ struct OpenCUMain {
             return
         }
         let engine = Engine()
+        // Run cleanup on the main actor, never inside a POSIX signal handler.
+        // Signals stop accepting queued work; an in-flight action unwinds first.
+        signal(SIGPIPE, SIG_IGN)
+        var stopping = false
+        var finishInput: (() -> Void)?
+        var signalSources: [DispatchSourceSignal] = []
+        for number in [SIGINT, SIGTERM, SIGHUP] {
+            signal(number, SIG_IGN)
+            let source = DispatchSource.makeSignalSource(signal: number, queue: .main)
+            source.setEventHandler { stopping = true; finishInput?() }
+            source.resume()
+            signalSources.append(source)
+        }
         let lines = AsyncStream<String> { continuation in
+            finishInput = { continuation.finish() }
             Task.detached {
                 while let line = readLine() { continuation.yield(line) }
                 continuation.finish()
             }
         }
         for await line in lines {
+            if stopping { break }
             var id: Any = NSNull()
             do {
                 guard line.utf8.count <= 4_194_304,
@@ -169,12 +213,13 @@ struct OpenCUMain {
                 }
                 id = requestID
                 let result = try await engine.dispatch(method, args)
-                emit(["id": id, "result": result])
+                if !emit(["id": id, "result": result]) { break }
             } catch {
                 let failure = error as? OpenCUError ?? OpenCUError("ENGINE_ERROR", error.localizedDescription)
-                emit(["id": id, "error": ["code": failure.code, "message": failure.message]])
+                if !emit(["id": id, "error": ["code": failure.code, "message": failure.message]]) { break }
             }
         }
-        engine.shutdown()
+        await engine.shutdown()
+        for source in signalSources { source.cancel() }
     }
 }
