@@ -35,7 +35,7 @@ Run `bin/opencu setup`. The guided window follows your system language (English
 or Simplified Chinese) and shows live Accessibility and Screen Recording status.
 Choose **Allow…** beside each permission to request it and open its exact System
 Settings pane. Accessibility reads and operates app controls; Screen Recording
-sees app windows. Grant these to **OpenCU**, whose purple monitor icon also appears
+sees app windows. Grant these to **OpenCU**, whose V-shaped pointer icon also appears
 in System Settings. No account is needed, and the same grants apply whichever
 agent starts OpenCU (`opencu doctor` reports `ownPermissions: true`).
 
@@ -44,15 +44,15 @@ focus. Follow the window on the Mac, then reconnect if it says **Reconnect your
 agent to finish**. Screen Recording may not take effect until a new connection;
 text-only observations do not need it.
 
-While an app is being used, a purple OpenCU menu bar item identifies the last
+While an app is being used, a monochrome V in the menu bar identifies the last
 target. Its **Stop** command immediately latches this connection: further input,
 app activation and screenshots return `STOPPED_BY_PERSON`. Text-only reads remain
 available. The agent must wait for your explicit permission and must never retry
 or reconnect by itself. **Permissions…** reopens setup. The item disappears after
 15 seconds without app calls or on disconnect.
 
-Pointer actions display a purple agent cursor above the target window, beneath
-windows covering it. It glides between points, pulses on clicks, and disappears
+Pointer actions display a V-shaped agent cursor (ink with a white rim) above the target window, beneath
+windows covering it. It glides between points, presses in on clicks, and disappears
 after three seconds of pointer inactivity, a target change, Stop or disconnect.
 It does not move or hide your cursor, take input, or become the foreground app.
 OpenCU's single-window captures exclude its presence UI. Live macOS acceptance

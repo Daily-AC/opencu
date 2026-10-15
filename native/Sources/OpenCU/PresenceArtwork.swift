@@ -1,64 +1,65 @@
 import AppKit
 
-/// Original OpenCU artwork. The monitor glyph is shared by the app, setup and
-/// status item; no symbol font or third-party image is used.
+/// Original OpenCU artwork. One shape everywhere: a V-shaped pointer tip
+/// without a tail. The app icon is `native/Artwork/AppIcon-1024.png`; the
+/// status item and agent cursor draw the same V in code. No symbol font or
+/// third-party image is used.
 @MainActor
 enum PresenceArtwork {
-    static func glyph(size: NSSize) -> NSImage {
-        let image = NSImage(size: size, flipped: false) { rect in
-            NSColor.systemPurple.setFill()
-            NSBezierPath(roundedRect: rect, xRadius: rect.height * 0.23, yRadius: rect.height * 0.23).fill()
-            let s = min(rect.width, rect.height)
-            let monitor = NSRect(x: rect.midX - s * 0.29, y: rect.midY - s * 0.14,
-                                 width: s * 0.58, height: s * 0.40)
-            NSColor.white.setStroke()
-            let screen = NSBezierPath(roundedRect: monitor, xRadius: s * 0.05, yRadius: s * 0.05)
-            screen.lineWidth = s * 0.055
-            screen.stroke()
-            let stand = NSBezierPath()
-            stand.lineWidth = s * 0.055
-            stand.lineCapStyle = .round
-            stand.move(to: NSPoint(x: rect.midX, y: monitor.minY))
-            stand.line(to: NSPoint(x: rect.midX, y: rect.midY - s * 0.27))
-            stand.move(to: NSPoint(x: rect.midX - s * 0.13, y: rect.midY - s * 0.27))
-            stand.line(to: NSPoint(x: rect.midX + s * 0.13, y: rect.midY - s * 0.27))
-            stand.stroke()
+    /// The V in unit coordinates, y down: tip, right wing, notch, bottom wing.
+    /// The tip is the cursor hotspot.
+    static let vertices: [CGPoint] = [CGPoint(x: 0, y: 0), CGPoint(x: 1, y: 0.357),
+                                      CGPoint(x: 0.411, y: 0.411), CGPoint(x: 0.357, y: 1)]
+
+    static func vPath(origin: CGPoint, size: CGFloat) -> NSBezierPath {
+        let path = NSBezierPath()
+        for (index, vertex) in vertices.enumerated() {
+            let point = CGPoint(x: origin.x + vertex.x * size, y: origin.y + vertex.y * size)
+            if index == 0 { path.move(to: point) } else { path.line(to: point) }
+        }
+        path.close()
+        path.lineJoinStyle = .round
+        return path
+    }
+
+    /// Set by the offline renderer; the engine uses its bundle icon.
+    static var iconOverride: NSImage?
+
+    static var appIcon: NSImage { iconOverride ?? NSApp.applicationIconImage }
+
+    /// Monochrome template: the menu bar tints it for light and dark.
+    static func statusGlyph(size: NSSize) -> NSImage {
+        let image = NSImage(size: size, flipped: true) { rect in
+            let side = min(rect.width, rect.height) * 0.74
+            let origin = CGPoint(x: rect.midX - side * 0.46, y: rect.midY - side * 0.46)
+            NSColor.black.setFill()
+            NSColor.black.setStroke()
+            let path = vPath(origin: origin, size: side)
+            path.lineWidth = 1
+            path.fill(); path.stroke()
             return true
         }
-        image.isTemplate = false
+        image.isTemplate = true
         return image
     }
 
-    /// Drawn in a flipped view: the point is the arrow's hotspot, not its centre.
+    /// Drawn in a flipped view: the point is the V's tip, the hotspot.
     static func cursor(at point: CGPoint, press: CGFloat) {
+        // A click presses the V to 90% around its tip.
+        let path = vPath(origin: point, size: 19 * (1 - press * 0.1))
+        path.lineWidth = 1.6
         NSGraphicsContext.saveGraphicsState()
-        let transform = NSAffineTransform()
-        transform.translateX(by: point.x, yBy: point.y)
-        transform.concat()
-        if press > 0 {
-            NSColor.systemPurple.withAlphaComponent(0.18 * press).setFill()
-            let r = 8 + 9 * press
-            NSBezierPath(ovalIn: NSRect(x: -r, y: -r, width: 2*r, height: 2*r)).fill()
-        }
         let shadow = NSShadow()
-        shadow.shadowColor = NSColor.black.withAlphaComponent(0.30)
-        shadow.shadowBlurRadius = 2
+        shadow.shadowColor = NSColor.black.withAlphaComponent(0.24)
+        shadow.shadowBlurRadius = 1.6
         shadow.shadowOffset = NSSize(width: 0, height: -1)
         shadow.set()
-        let arrow = NSBezierPath()
-        let scale = 1 - press * 0.12
-        let vertices: [CGPoint] = [.zero, CGPoint(x: 1, y: 22), CGPoint(x: 6, y: 17),
-                                   CGPoint(x: 10, y: 25), CGPoint(x: 14, y: 23),
-                                   CGPoint(x: 10, y: 15), CGPoint(x: 18, y: 14)]
-        arrow.move(to: .zero)
-        for v in vertices.dropFirst() { arrow.line(to: CGPoint(x: v.x * scale, y: v.y * scale)) }
-        arrow.close()
-        NSColor.systemPurple.setFill()
         NSColor.white.setStroke()
-        arrow.lineWidth = 1
-        arrow.lineJoinStyle = .round
-        arrow.fill(); arrow.stroke()
+        path.stroke()
         NSGraphicsContext.restoreGraphicsState()
+        NSColor(srgbRed: 0.08, green: 0.08, blue: 0.09, alpha: 1).setFill()
+        NSColor.white.setStroke()
+        path.stroke(); path.fill()
     }
 }
 

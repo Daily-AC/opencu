@@ -31,7 +31,7 @@ final class SetupContentView: NSView {
         done = NSButton(title: strings.text("Done"), target: nil, action: nil)
         super.init(frame: NSRect(x: 0, y: 0, width: 500, height: 360))
         let icon = NSImageView()
-        icon.image = PresenceArtwork.glyph(size: NSSize(width: 56, height: 56))
+        icon.image = PresenceArtwork.appIcon
         icon.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([icon.widthAnchor.constraint(equalToConstant: 56), icon.heightAnchor.constraint(equalToConstant: 56)])
         let title = NSTextField(labelWithString: strings.text("Set up OpenCU"))

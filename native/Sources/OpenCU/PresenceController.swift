@@ -44,8 +44,8 @@ final class PresenceController: NSObject, NSMenuDelegate {
         state.call(target: target ?? state.target ?? name, now: now)
         targetName = name
         if statusItem == nil {
-            let item = NSStatusBar.system.statusItem(withLength: 28)
-            item.button?.image = PresenceArtwork.glyph(size: NSSize(width: 24, height: 18))
+            let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+            item.button?.image = PresenceArtwork.statusGlyph(size: NSSize(width: 18, height: 18))
             item.button?.setAccessibilityLabel("OpenCU")
             statusItem = item
         }
