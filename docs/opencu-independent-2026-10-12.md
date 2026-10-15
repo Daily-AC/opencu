@@ -148,7 +148,7 @@ control) that the window-location fix resolved.
 
 ## Limits
 
-- macOS presence adds a target-relative purple cursor, temporary menu bar item,
+- macOS presence adds a target-relative V-shaped cursor, temporary menu bar item,
   `STOPPED_BY_PERSON` latch, and localized permission setup. Native policy and
   offscreen artwork can be tested without taking the desktop. Cross-process
   stacking, capture exclusion, focus behavior, live Stop delivery and TCC setup

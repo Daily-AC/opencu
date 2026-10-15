@@ -8,16 +8,8 @@ struct PresenceRenderer {
         NSApp.setActivationPolicy(.prohibited)
         let output = URL(fileURLWithPath: CommandLine.arguments[2], isDirectory: true)
         try FileManager.default.createDirectory(at: output, withIntermediateDirectories: true)
-        if CommandLine.arguments[1] == "icon" {
-            for size in [16, 32, 128, 256, 512] {
-                for scale in [1, 2] {
-                    try image(PresenceArtwork.glyph(size: NSSize(width: size, height: size)), scale: scale,
-                              to: output.appendingPathComponent("icon_\(size)x\(size)\(scale == 2 ? "@2x" : "").png"))
-                }
-            }
-            return
-        }
         let resources = Bundle(path: CommandLine.arguments[3])!
+        PresenceArtwork.iconOverride = NSImage(contentsOfFile: CommandLine.arguments[4])
         for language in ["en", "zh-Hans"] {
             let strings = PresenceStrings(language: language, resources: resources)
             for (theme, appearance) in [("light", NSAppearance.Name.aqua), ("dark", .darkAqua)] {
@@ -56,7 +48,7 @@ struct PresenceRenderer {
                     preview.appearance = NSAppearance(named: appearance)
                     try render(preview, to: output.appendingPathComponent("menu-layout-\(language)-\(theme).png"))
                     for scale in [1, 2] {
-                        try image(PresenceArtwork.glyph(size: NSSize(width: 24, height: 18)), scale: scale,
+                        try image(PresenceArtwork.statusGlyph(size: NSSize(width: 18, height: 18)), scale: scale,
                                   to: output.appendingPathComponent("menu-item-\(theme)@\(scale)x.png"))
                     }
                     for (name, press) in [("rest", CGFloat(0)), ("mid-press", CGFloat(1))] {

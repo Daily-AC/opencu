@@ -38,7 +38,7 @@ def sha256(path):
 
 
 def sources():
-    files = [NATIVE / "Package.swift", *sorted(path for path in (NATIVE / "Resources").rglob("*") if path.is_file()),
+    files = [NATIVE / "Package.swift", *sorted(path for path in (NATIVE / "Resources").rglob("*") if path.is_file()), NATIVE / "Artwork/AppIcon-1024.png",
              ROOT / "scripts/render-presence.py", ROOT / "scripts/render-presence.swift", *sorted((NATIVE / "Sources").rglob("*.swift"))]
     return {str(path.relative_to(ROOT)): sha256(path) for path in files}
 

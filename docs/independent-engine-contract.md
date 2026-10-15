@@ -180,7 +180,7 @@ runs, and the suite now prints the fixture state and tree if it does.
 
 The stdio engine runs an AppKit event loop with accessory activation policy.
 No UI is created for `doctor` or `list_apps`. App-targeting calls show a non-template
-purple monitor status item, with the last app name, Stop and Permissions. It
+monochrome V status item, with the last app name, Stop and Permissions. It
 expires 15 seconds after the last app call completes; an in-flight call keeps
 Stop available even during a 30-second hold. An open menu stays until dismissed
 so its Stop item cannot disappear under the person. Timers use monotonic system
