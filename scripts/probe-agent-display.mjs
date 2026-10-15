@@ -80,9 +80,11 @@ const area = path.join(root, '.cache/agent-display');
 await mkdir(area, { recursive: true });
 const run = await mkdtemp(path.join(area, 'run-'));
 const temporary = path.join(run, 'fixture');
+const fixtureBundleID = `dev.opencu.test.agent-display.${path.basename(run).toLowerCase()}`;
 const report = { timestamp: new Date().toISOString(), run, checks: Object.fromEntries(checks.map(c => [c, 'NOT RUN'])),
-  frontmost: [], samplingErrors: [], direct: [], fixtureStates: [], cleanupErrors: [], engineStderr: [], mcpStderr: [] };
+  baselineSamples: [], frontmost: [], samplingErrors: [], direct: [], fixtureStates: [], cleanupErrors: [], engineStderr: [], mcpStderr: [] };
 let failure, initialFront, timer, sampling, direct, client, transport, fixture, tree = '', sequence = 0;
+let candidateFront, stableSince;
 let before, originalFixture;
 const cancelled = new AbortController();
 const abort = reason => { failure ??= reason instanceof Error ? reason : new Error(reason); cancelled.abort(failure); };
@@ -103,19 +105,37 @@ async function guarded(operation) {
 }
 async function command(file, args) { return guarded(() => exec(file, args, { signal: cancelled.signal, timeout: 60_000 })); }
 async function sample() {
-  if (sampling) return; // Never run overlapping lsappinfo processes.
+  if (sampling) return sampling; // Never run overlapping lsappinfo processes.
   sampling = (async () => {
     const started = performance.now();
     try {
       const { stdout } = await exec('/usr/bin/lsappinfo', ['front'], { timeout: 1000 });
       const front = stdout.trim();
       assert.match(front, /^ASN:/, 'lsappinfo did not identify a foreground app');
-      report.frontmost.push({ elapsedMs: started, completedMs: performance.now(), front });
-      initialFront ??= front;
-      if (front !== initialFront) abort('Frontmost application changed; no further probe actions will be sent');
+      const value = { elapsedMs: started, completedMs: performance.now(), front };
+      if (initialFront === undefined) {
+        report.baselineSamples.push(value);
+        if (front !== candidateFront) { candidateFront = front; stableSince = value.completedMs; }
+      } else {
+        report.frontmost.push(value);
+        if (front !== initialFront) abort('Frontmost application changed; no further probe actions will be sent');
+      }
     } catch (error) { report.samplingErrors.push(error.message); abort(error); }
   })();
   try { await sampling; } finally { sampling = undefined; }
+}
+async function establishBaseline() {
+  await until(async () => {
+    await sample();
+    return report.baselineSamples.at(-1).completedMs - stableSince >= 1000;
+  }, 'frontmost application stable for one second');
+  initialFront = candidateFront;
+  report.baseline = { front: initialFront, stableSinceMs: stableSince, recordedMs: performance.now() };
+  const identities = await Promise.all(['name', 'bundleid'].map(key =>
+    command('/usr/bin/lsappinfo', ['info', '-only', key, initialFront])));
+  report.baseline.identity = identities.map(value => value.stdout.trim()).join('\n');
+  const dialog = report.baseline.identity.match(/\b(UserNotificationCenter|SecurityAgent)\b/i);
+  if (dialog) throw new Error(`System dialog is frontmost (${dialog[1]}). Close it before running the probe; no fixture or agent display was created.`);
 }
 async function state(label) {
   const value = JSON.parse(await readFile(path.join(temporary, 'state.json'), 'utf8'));
@@ -187,18 +207,48 @@ async function call(name, args = {}) {
   await state(`after ${name}`);
   return { result, text, imagePath };
 }
+async function findFixturePID() {
+  // A unique bundle ID scopes discovery/cleanup to this run, including when
+  // launch is interrupted before the fixture writes its first state file.
+  const { stdout } = await exec('/usr/bin/lsappinfo', ['find', `bundleid=${fixtureBundleID}`], { timeout: 1000 });
+  const asns = stdout.match(/ASN:0x[\da-f]+[-:]0x[\da-f]+:/gi) ?? [];
+  assert.ok(asns.length <= 1, 'Multiple processes registered for this fixture run');
+  if (!asns.length) return;
+  const info = await exec('/usr/bin/lsappinfo', ['info', '-only', 'pid', asns[0]], { timeout: 1000 });
+  const pid = Number(info.stdout.match(/\bpid"?\s*=\s*(\d+)/i)?.[1]);
+  assert.ok(Number.isInteger(pid) && pid > 1, 'Could not resolve fixture PID from LaunchServices');
+  return pid;
+}
 async function stopFixture() {
-  if (!fixture || fixture.exitCode !== null || fixture.signalCode !== null) return;
-  const done = new Promise(resolve => fixture.once('close', resolve));
-  fixture.kill('SIGTERM');
-  if (!await Promise.race([done.then(() => true), pause(3000).then(() => false)])) fixture.kill('SIGKILL');
-  await done;
+  if (!fixture) return;
+  // open's PID is not the app PID. Let the launch request finish before cleanup
+  // even after Ctrl-C, then discover a late registration if needed.
+  await fixture.launch.catch(() => {});
+  let pid;
+  for (let attempt = 0; attempt < (fixture.pid ? 1 : 50); attempt++) {
+    pid = await findFixturePID();
+    if (pid) break;
+    await pause(100);
+  }
+  if (!pid) return;
+  for (const signal of ['SIGTERM', 'SIGKILL']) {
+    try { process.kill(pid, signal); } catch (error) { if (error.code !== 'ESRCH') throw error; }
+    for (let attempt = 0; attempt < 30; attempt++) {
+      try { process.kill(pid, 0); } catch (error) { if (error.code === 'ESRCH') return; throw error; }
+      const running = await findFixturePID();
+      // LaunchServices may unregister an app before its process finishes.
+      if (running) assert.equal(running, pid, 'Fixture process identity changed during cleanup');
+      await pause(100);
+    }
+  }
+  throw new Error(`Fixture PID ${pid} did not exit after SIGKILL`);
 }
 
 try {
   await sample();
   active();
   timer = setInterval(sample, 50);
+  await establishBaseline();
   report.platform = (await command('/usr/bin/sw_vers', [])).stdout.trim();
   report.engineSHA256 = createHash('sha256').update(await readFile(path.join(root, '.build/OpenCU.app/Contents/MacOS/opencu-engine'))).digest('hex');
   await check(checks[0], async () => {
@@ -216,18 +266,29 @@ try {
   await command('/usr/bin/xcrun', ['swiftc', path.join(root, 'tests/fixtures/OpenCUFixture.swift'),
     '-target', 'arm64-apple-macosx14.0', '-framework', 'AppKit', '-o', executable]);
   await writeFile(path.join(contents, 'Info.plist'), `<?xml version="1.0" encoding="UTF-8"?>
-<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>dev.opencu.test.agent-display</string>
+<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>${fixtureBundleID}</string>
 <key>CFBundleExecutable</key><string>OpenCUFixture</string><key>CFBundleName</key><string>OpenCU Agent Display Fixture</string>
 <key>CFBundlePackageType</key><string>APPL</string><key>NSHighResolutionCapable</key><true/>
 <key>LSMinimumSystemVersion</key><string>14.0</string></dict></plist>`);
   await command('/usr/bin/codesign', ['--force', '--sign', '-', app]);
   await check(checks[1], async () => {
-    fixture = spawn(executable, ['--output', path.join(temporary, 'state.json'), '--stage-managed', '--background'], { stdio: 'ignore' });
-    fixture.on('error', abort);
+    active();
+    fixture = { bundleID: fixtureBundleID };
+    fixture.launch = new Promise((resolve, reject) => {
+      // No --stdin/--stdout/--stderr redirection through LaunchServices.
+      const launcher = spawn('/usr/bin/open', ['-g', '-n', '-a', app, '--args',
+        '--output', path.join(temporary, 'state.json'), '--stage-managed', '--background'], { stdio: 'inherit' });
+      launcher.once('error', reject);
+      launcher.once('close', code => code === 0 ? resolve() : reject(new Error(`open exited with ${code}`)));
+    });
+    await fixture.launch;
     await until(async () => {
+      fixture.pid ??= await findFixturePID();
+      if (!fixture.pid) return false;
       try { return (await state('launch')).visibleWindows === 1; }
       catch (error) { if (error.code === 'ENOENT') return false; throw error; }
     }, 'fixture launch');
+    report.fixture = { bundleID: fixtureBundleID, pid: fixture.pid };
     originalFixture = await state('original');
     assert.notEqual(originalFixture.frontmostPID, fixture.pid);
     await sample(); active();
