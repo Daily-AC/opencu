@@ -76,6 +76,7 @@ final class Engine {
         presence.called(target: String(app.pid), name: app.name)
         input.releaseFocus(unlessTarget: app.pid)
         if method == "activate_app" {
+            if let current = snapshot, current.app.pid == app.pid { presence.badge(method: method, args: args, snapshot: current) }
             input.releaseFocus()
             focusGuard.cancel()
             guard app.application.activate(options: []) else {
@@ -94,6 +95,10 @@ final class Engine {
         if method == "get_app_state" || method == "activate_app" {
             // A failed read must not leave a previous window usable for input.
             snapshot = nil
+            observer.willObserveWindow = { [weak self] window in
+                self?.presence.badge(method: method, args: args, snapshot: window)
+            }
+            defer { observer.willObserveWindow = nil }
             let state = try await observer.observe(app, includeScreenshot: args["includeScreenshot"] as? Bool ?? false)
             presence.observed(state.snapshot)
             snapshot = state.snapshot
@@ -106,7 +111,7 @@ final class Engine {
         snapshot = WindowSnapshot(app: current.app, window: current.window, bounds: current.bounds,
                                   windowID: current.windowID, elements: current.elements, elementPaths: current.elementPaths,
                                   screenshotWidth: nil, screenshotHeight: nil)
-        presence.observed(current)
+        presence.badge(method: method, args: args, snapshot: current)
         focusGuard.protect(target: app.pid)
         observer.record(try await input.perform(method: method, args: args, snapshot: current), pid: app.pid)
         return ["ok": true, "app": app.json]

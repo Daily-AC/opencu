@@ -211,7 +211,7 @@ def main():
     engine = json.loads((ROOT / ".build/engine-manifest.json").read_text())
     if sha256(executable) != engine["executable_sha256"]:
         raise SystemExit("Built engine hash differs from its build manifest; rebuild before packaging.")
-    native_sources = [ROOT / "native/Package.swift", *sorted(path for path in (ROOT / "native/Resources").rglob("*") if path.is_file()),
+    native_sources = [ROOT / "native/Package.swift", ROOT / "native/Artwork/AppIcon-1024.png", *sorted(path for path in (ROOT / "native/Resources").rglob("*") if path.is_file()),
                       ROOT / "scripts/render-presence.py", ROOT / "scripts/render-presence.swift",
                       *sorted((ROOT / "native/Sources").rglob("*.swift"))]
     source_hashes = {str(path.relative_to(ROOT)): sha256(path) for path in native_sources}
@@ -245,7 +245,7 @@ def main():
             target = package_root / name
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(ROOT / name, target)
-        for name in ["native/Resources", "native/Sources"]:
+        for name in ["native/Resources", "native/Sources", "native/Artwork"]:
             shutil.copytree(ROOT / name, package_root / name)
         (package_root / "src").mkdir()
         for source in sorted((ROOT / "src").glob("*.mjs")):
@@ -287,7 +287,7 @@ def main():
             names = set(archive.getnames())
             required = ["bin/opencu", "src/server.mjs", ".build/OpenCU.app/Contents/MacOS/opencu-engine",
                         ".dependencies/node/bin/node", ".dependencies/node/LICENSE", "manifest.json",
-                        "native/Resources/Info.plist", "native/Sources/OpenCU/Main.swift", RELEASE_RECEIPT, *source_files]
+                        "native/Resources/Info.plist", "native/Artwork/AppIcon-1024.png", "native/Sources/OpenCU/Main.swift", RELEASE_RECEIPT, *source_files]
             if not all(f"opencu/{name}" in names for name in required):
                 raise SystemExit("Release archive is missing a required runtime component.")
             if any(FORBIDDEN_PARTS.intersection(pathlib.PurePosixPath(name).parts) for name in names):

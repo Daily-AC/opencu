@@ -8,7 +8,8 @@ import { CoordinateState } from './coordinate-state.mjs';
 const inputs = new Set(['click', 'drag', 'paste', 'press_key', 'type_text', 'scroll', 'set_value', 'select_text', 'perform_secondary_action']);
 
 export function toolError(error) {
-  return { isError: true, content: [{ type: 'text', text: error.message }], _meta: { 'opencu/error': error.code ?? 'RUNTIME_ERROR' } };
+  const code = error.code ?? 'RUNTIME_ERROR';
+  return { isError: true, content: [{ type: 'text', text: `${code}: ${error.message}` }], _meta: { 'opencu/error': code } };
 }
 
 export function defaultEnginePath(root, platform = process.platform) {
@@ -161,8 +162,12 @@ export class OpenCURuntime {
         response = this.#stateResult(await this.#observe(method === 'activate_app' ? method : 'get_app_state', options, signal), options);
       } catch (error) {
         if (completed) error.message = `All ${completed} actions returned, but their final observation failed. Do not repeat them; inspect state. ${error.message}`;
-        response = error.lastState ? { ...this.#stateResult(error.lastState, { disableDiff: true }), isError: true } : toolError(error);
-        if (error.lastState) response.content.push({ type: 'text', text: error.message });
+        response = toolError(error);
+        if (error.lastState) {
+          const state = this.#stateResult(error.lastState, { disableDiff: true });
+          response = { ...state, ...response, _meta: { ...state._meta, ...response._meta },
+            content: [...response.content, ...state.content] };
+        }
       }
       return this.#coordinates.after(method, args, response);
     });

@@ -32,7 +32,7 @@ def main():
         sources = ROOT / 'native/Sources/OpenCU'
         executable = area / 'render-presence'
         subprocess.run(['xcrun', 'swiftc', '-parse-as-library', '-target', f'{platform.machine()}-apple-macos14.0',
-                        *[str(sources / name) for name in ['Types.swift', 'PresenceModel.swift', 'PresenceArtwork.swift',
+                        *[str(sources / name) for name in ['Types.swift', 'PresenceModel.swift', 'PresenceArtwork.swift', 'BadgeModel.swift', 'TitleBarBadge.swift',
                                                           'PermissionSetup.swift', 'PresenceController.swift']],
                         str(ROOT / 'scripts/render-presence.swift'), '-o', str(executable)], check=True)
         subprocess.run([str(executable), 'review', str(args.output), str(ROOT / 'native/Resources'), str(ARTWORK)], check=True)

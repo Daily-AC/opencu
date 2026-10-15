@@ -55,9 +55,17 @@ Pointer actions display a V-shaped agent cursor (ink with a white rim) above the
 windows covering it. It glides between points, presses in on clicks, and disappears
 after three seconds of pointer inactivity, a target change, Stop or disconnect.
 It does not move or hide your cursor, take input, or become the foreground app.
-OpenCU's single-window captures exclude its presence UI. Live macOS acceptance
-of layering and capture exclusion is still pending; see the
-[engine contract](docs/independent-engine-contract.md#macos-presence-and-person-stop).
+A small V badge inside the target title bar describes the current call, including
+reads, clicks, typing and shortcuts. It fades after three seconds without a call;
+Stop changes it to **Stopped by you** for three seconds. Secure or unverified text
+focus shows only a character count; ordinary input previews use at most 16
+characters from the submitted text, never the existing clipboard. Narrow windows
+show the V alone. Both overlays pass your clicks through to the target.
+
+The owner reports two 18/18 GUI runs, a smooth visible cursor, working menu Stop,
+and a post-click engine screenshot without the cursor on 2026-10-15. The new badge
+still requires live layering, focus and capture-exclusion checks; see the
+[engine contract](docs/independent-engine-contract.md#macos-title-bar-badge).
 
 Configure a stdio MCP server in your agent:
 
@@ -87,6 +95,11 @@ instructions to your existing prompt. One connection lasts for the whole session
 it never reconnects automatically after a disconnect or a person's Escape stop.
 Print and RPC modes are supported. See the [pi adapter guide](adapters/pi/README.md)
 for persistent loading, Windows use and command overrides.
+
+Tool errors begin with their stable code in the text the agent sees, for example
+`STOPPED_BY_PERSON: The person stopped OpenCU on this Mac…`. The same code remains
+in `_meta["opencu/error"]`. Batch failures and failed final observations retain
+that prefix; a wait timeout puts `WAIT_TIMEOUT:` before the last observed state.
 
 ## Tools
 

@@ -148,12 +148,16 @@ control) that the window-location fix resolved.
 
 ## Limits
 
-- macOS presence adds a target-relative V-shaped cursor, temporary menu bar item,
-  `STOPPED_BY_PERSON` latch, and localized permission setup. Native policy and
-  offscreen artwork can be tested without taking the desktop. Cross-process
-  stacking, capture exclusion, focus behavior, live Stop delivery and TCC setup
-  still require reviewer acceptance on disposable windows; no new live GUI
-  result is claimed here. See the [presence contract](independent-engine-contract.md#macos-presence-and-person-stop).
+- macOS presence includes the V cursor, menu Stop, localized setup and an action
+  badge in the target title bar. On 2026-10-15 the owner reported two 18/18 GUI
+  runs, a smooth visible cursor, working menu Stop, and a post-click engine
+  screenshot without the cursor. The newly added badge is checked only through
+  pure logic and offscreen fixture rendering: its live stacking, capture exclusion,
+  AX title-bar placement, secure-focus metadata and focus behavior still need
+  reviewer acceptance. See the [badge contract](independent-engine-contract.md#macos-title-bar-badge).
+- Custom title bars without usable AX toolbar/title geometry use a 28 pt title
+  region. Badge text is capped to 45% width, with glyph-only display below 260 pt.
+  Unverified text focus is masked; the badge never reads the existing clipboard.
 - Cursor display requires an exact visible window and usable element centre;
   windowless menu actions and hidden/Stage Manager thumbnails have no indicator
   over the target. Stop cannot undo input already delivered or prevent a client

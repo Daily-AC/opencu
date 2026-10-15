@@ -17,6 +17,10 @@ final class PresenceController: NSObject, NSMenuDelegate {
     private var statusItem: NSStatusItem?
     private var timer: Timer?
     private var overlay: CursorWindow?
+    private var badgePanel: CursorWindow?
+    private let badgeView = BadgeView()
+    private var badgeLifetime = BadgeLifetime()
+    private var badgeTitleHeight: CGFloat?
     private let cursor = AgentCursorView(frame: NSRect(x: 0, y: 0, width: 60, height: 60))
     private var motion: CursorMotion?
     private var pressBegan: TimeInterval?
@@ -34,13 +38,13 @@ final class PresenceController: NSObject, NSMenuDelegate {
         setup.willShow = { [weak self] in self?.onPersonInteraction?() }
     }
     func beginCall(query: String) {
-        if lastQuery != query { hideCursor() }
+        if lastQuery != query { hideCursor(); hideBadge() }
         lastQuery = query
         called(target: nil, name: query)
     }
     func called(target: String?, name: String) {
         guard state.connected else { return }
-        if let target, state.target != target { hideCursor() }
+        if let target, state.target != target { hideCursor(); hideBadge() }
         state.call(target: target ?? state.target ?? name, now: now)
         targetName = name
         if statusItem == nil {
@@ -54,7 +58,8 @@ final class PresenceController: NSObject, NSMenuDelegate {
     }
     func finishedCall() { state.finished(now: now) }
     func observed(_ snapshot: WindowSnapshot) {
-        if targetWindow != snapshot.windowID || targetPID != snapshot.app.pid || targetBounds != snapshot.bounds { hideCursor() }
+        if targetWindow != snapshot.windowID || targetPID != snapshot.app.pid { hideCursor(); hideBadge() }
+        else if targetBounds != snapshot.bounds { hideCursor() }
         targetWindow = snapshot.windowID; targetPID = snapshot.app.pid
         targetBounds = snapshot.bounds
     }
@@ -81,7 +86,12 @@ final class PresenceController: NSObject, NSMenuDelegate {
     func menuWillOpen(_ menu: NSMenu) { trackingMenu = true; onPersonInteraction?() }
     func menuDidClose(_ menu: NSMenu) { trackingMenu = false }
     @objc private func stop() {
-        state.stop(); hideCursor(); onPersonInteraction?(); onStop?()
+        state.stop(); hideCursor()
+        badgeLifetime.stop(now: now)
+        badgeView.text = BadgeAction(method: "stopped").localized(PresenceStrings().text)
+        badgeView.stopped = true
+        startTimer(); tickBadge(at: now)
+        onPersonInteraction?(); onStop?()
         // Update the existing menu after tracking ends, without reopening it.
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }; self.statusItem?.menu = self.makeMenu()
@@ -108,6 +118,56 @@ final class PresenceController: NSObject, NSMenuDelegate {
         state.pointer(now: time)
         targetWindow = id
         startTimer(); tick()
+    }
+    func badge(method: String, args: Arguments, snapshot: WindowSnapshot) {
+        guard state.connected else { return }
+        observed(snapshot)
+        guard !state.stopped, let id = snapshot.windowID, let window = snapshot.window else { return }
+        guard let selected = axSelectedWindow(AXUIElementCreateApplication(snapshot.app.pid)), CFEqual(selected, window) else {
+            hideBadge(); return
+        }
+        badgeView.text = BadgeAccessibility.action(method: method, args: args, snapshot: snapshot).localized(PresenceStrings().text)
+        badgeView.stopped = false
+        badgeTitleHeight = BadgeAccessibility.titleBarHeight(window: window, bounds: snapshot.bounds)
+        badgeLifetime.call(target: "\(snapshot.app.pid):\(id)", now: now)
+        startTimer(); tickBadge(at: now)
+    }
+    private func tickBadge(at time: TimeInterval) {
+        let opacity = badgeLifetime.opacity(at: time)
+        guard opacity > 0, let id = targetWindow, let pid = targetPID,
+              let records = CGWindowListCopyWindowInfo(.optionIncludingWindow, id) as? [[String: Any]],
+              let record = records.first(where: { ($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value == id }),
+              (record[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == pid,
+              record[kCGWindowIsOnscreen as String] as? Bool == true,
+              let raw = record[kCGWindowBounds as String] as? NSDictionary,
+              let bounds = CGRect(dictionaryRepresentation: raw as CFDictionary), bounds.size == targetBounds.size else {
+            if badgePanel?.isVisible == true { badgePanel?.orderOut(nil) }
+            return
+        }
+        let layout = BadgeLayout(window: bounds, titleBarHeight: badgeTitleHeight, textWidth: BadgeView.textWidth(badgeView.text))
+        guard layout.frame.width >= 29 else { hideBadge(); return }
+        if badgePanel == nil {
+            let panel = CursorWindow(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+            panel.isOpaque = false; panel.backgroundColor = .clear
+            panel.hasShadow = false; panel.ignoresMouseEvents = true
+            panel.hidesOnDeactivate = false; panel.becomesKeyOnlyIfNeeded = true
+            panel.sharingType = .none
+            panel.collectionBehavior = [.transient, .ignoresCycle, .fullScreenAuxiliary]
+            panel.contentView = badgeView
+            badgePanel = panel
+        }
+        let frame = layout.frame.insetBy(dx: -BadgeLayout.shadowInset, dy: -BadgeLayout.shadowInset)
+        badgePanel?.setFrame(CursorMotion.appKitRect(frame, primaryHeight: NSScreen.screens.first?.frame.height ?? 0), display: false)
+        badgePanel?.level = NSWindow.Level(rawValue: (record[kCGWindowLayer as String] as? Int) ?? 0)
+        badgePanel?.alphaValue = opacity
+        badgeView.glyphOnly = layout.glyphOnly
+        badgeView.needsDisplay = true
+        if NSApp.isHidden { NSApp.unhideWithoutActivation() }
+        badgePanel?.order(.above, relativeTo: Int(id))
+    }
+    private func hideBadge() {
+        badgeLifetime.hide()
+        if badgePanel?.isVisible == true { badgePanel?.orderOut(nil) }
     }
     private func startTimer() {
         guard timer == nil else { return }
@@ -157,7 +217,8 @@ final class PresenceController: NSObject, NSMenuDelegate {
                 overlay?.order(.above, relativeTo: Int(id))
             } else { hideCursor() }
         } else { hideCursor() }
-        if statusItem == nil && !state.cursorVisible(at: time) { timer?.invalidate(); timer = nil }
+        tickBadge(at: time)
+        if statusItem == nil && !state.cursorVisible(at: time) && badgeLifetime.opacity(at: time) == 0 { timer?.invalidate(); timer = nil }
     }
     func hideCursor() {
         state.hideCursor()
@@ -165,7 +226,7 @@ final class PresenceController: NSObject, NSMenuDelegate {
         motion = nil; pressBegan = nil
     }
     func disconnect() {
-        state.disconnect(); hideCursor(); timer?.invalidate(); timer = nil
+        state.disconnect(); badgeLifetime.disconnect(); hideBadge(); hideCursor(); timer?.invalidate(); timer = nil
         if let item = statusItem { NSStatusBar.system.removeStatusItem(item); statusItem = nil }
         setup.close()
     }
