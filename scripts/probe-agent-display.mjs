@@ -20,7 +20,7 @@ const checks = ['Stage Manager enabled', 'fixture launched without activation', 
   'target moved to agent display', 'full screenshot and rendered fixture pixels', 'indexed click effect',
   'coordinate click delivery', 'shortcut and Unicode typing', 'menu item effect without menu tracking',
   'original target frame restored', 'display removed; original arrangement preserved', 'destroy is idempotent',
-  'fixture exited', 'frontmost app unchanged in samples and fixture events'];
+  'fixture exited', 'frontmost app unchanged in samples and fixture events', 'pointer unchanged'];
 
 // This transport exists only in the probe. Experimental operations are never
 // exposed as MCP tools and the ordinary MCP adapter is used for all input.
@@ -41,7 +41,7 @@ class DirectEngine {
         if (!pending) return;
         this.pending.delete(response.id);
         clearTimeout(pending.timer);
-        if (response.error) pending.reject(Object.assign(new Error(response.error.message), { code: response.error.code }));
+        if (response.error) pending.reject(Object.assign(new Error(response.error.message), { code: response.error.code, details: response.error.data }));
         else pending.resolve(response.result);
       } catch (error) { this.fail(error); }
     });
@@ -59,7 +59,7 @@ class DirectEngine {
         const timer = setTimeout(() => {
           this.fail(new Error(`Direct engine timed out during ${method}; no replay`));
           this.child.stdin.end();
-        }, 10_000);
+        }, 30_000); // Includes a 10 s display-removal wait and restoration.
         this.pending.set(id, { resolve, reject, timer });
         this.child.stdin.write(JSON.stringify({ id, method: prefix + method, params }) + '\n');
       });
@@ -69,7 +69,7 @@ class DirectEngine {
   }
   async close() {
     this.child.stdin.end();
-    for (const [timeout, signal] of [[7000, 'SIGTERM'], [5000, 'SIGKILL']]) {
+    for (const [timeout, signal] of [[15000, 'SIGTERM'], [15000, 'SIGKILL']]) {
       if (await Promise.race([this.done.then(() => true), pause(timeout).then(() => false)])) return;
       try { process.kill(-this.child.pid, signal); } catch (error) { if (error.code !== 'ESRCH') throw error; }
     }
@@ -84,8 +84,9 @@ const temporary = path.join(run, 'fixture');
 const fixtureBundleID = `dev.opencu.test.agent-display.${path.basename(run).toLowerCase()}`;
 const report = { timestamp: new Date().toISOString(), run, checks: Object.fromEntries(checks.map(c => [c, 'NOT RUN'])),
   baselineSamples: [], frontmost: [], samplingErrors: [], direct: [], fixtureStates: [], fixtureDiscovery: [],
-  windowMovementWarnings: [], cleanupErrors: [], engineStderr: [], mcpStderr: [] };
+  windowMovementWarnings: [], pointerSamples: [], cleanupErrors: [], engineStderr: [], mcpStderr: [] };
 let failure, initialFront, timer, sampling, direct, client, transport, fixture, tree = '', sequence = 0;
+let pointerMonitor, pointerMonitorDone, stoppingPointerMonitor = false;
 let candidateFront, stableSince;
 let before, originalFixture;
 const cancelled = new AbortController();
@@ -106,6 +107,30 @@ async function guarded(operation) {
   } finally { cancelled.signal.removeEventListener('abort', listener); }
 }
 async function command(file, args) { return guarded(() => exec(file, args, { signal: cancelled.signal, timeout: 60_000 })); }
+async function startPointerMonitor() {
+  const executable = path.join(run, 'pointer-monitor');
+  await command('/usr/bin/xcrun', ['swiftc', path.join(root, 'tests/fixtures/OpenCUPointerMonitor.swift'), '-o', executable]);
+  pointerMonitor = spawn(executable, [], { stdio: ['ignore', 'pipe', 'pipe'] });
+  pointerMonitorDone = new Promise(resolve => pointerMonitor.once('close', resolve));
+  pointerMonitor.on('error', error => { report.pointerMonitorError = error.message; abort(error); });
+  pointerMonitor.stderr.on('data', data => report.engineStderr.push(data.toString()));
+  pointerMonitor.once('close', () => {
+    if (!stoppingPointerMonitor) { report.pointerMonitorError = 'Pointer monitor exited'; abort(report.pointerMonitorError); }
+  });
+  createInterface({ input: pointerMonitor.stdout }).on('line', line => {
+    try {
+      const point = JSON.parse(line);
+      assert.ok(Number.isFinite(point.x) && Number.isFinite(point.y), 'Invalid pointer sample');
+      report.pointerSamples.push(point);
+      report.pointerBaseline ??= point;
+      if (point.x !== report.pointerBaseline.x || point.y !== report.pointerBaseline.y) {
+        report.pointerMoved = true;
+        abort('Pointer moved; no further probe actions will be sent');
+      }
+    } catch (error) { report.pointerMonitorError = error.message; abort(error); }
+  });
+  await until(async () => !!report.pointerBaseline, 'first pointer sample');
+}
 async function sample() {
   if (sampling) return sampling; // Never run overlapping lsappinfo processes.
   sampling = (async () => {
@@ -160,12 +185,12 @@ async function until(predicate, label, cleanup = false) {
 async function experiment(method, params = {}, cleanup = false) {
   if (!cleanup) active();
   try {
-    const result = await direct.request(method, params);
+    const result = cleanup ? await direct.request(method, params) : await guarded(() => direct.request(method, params));
     report.direct.push({ method, params, result, time: new Date().toISOString() });
     if (!cleanup) active();
     return result;
   } catch (error) {
-    report.direct.push({ method, params, error: error.message, code: error.code });
+    report.direct.push({ method, params, error: error.message, code: error.code, details: error.details });
     throw error;
   }
 }
@@ -234,9 +259,8 @@ async function stopFixture() {
     try { process.kill(pid, signal); } catch (error) { if (error.code !== 'ESRCH') throw error; }
     for (let attempt = 0; attempt < 30; attempt++) {
       try { process.kill(pid, 0); } catch (error) { if (error.code === 'ESRCH') return; throw error; }
-      const running = await findFixturePID();
-      // LaunchServices may unregister an app before its process finishes.
-      if (running) assert.equal(running, pid, 'Fixture process identity changed during cleanup');
+      // The process is already identified. LaunchServices can drop its name or
+      // unregister it during exit, so wait on PID lifetime rather than metadata.
       await pause(100);
     }
   }
@@ -247,6 +271,7 @@ try {
   await sample();
   active();
   timer = setInterval(sample, 50);
+  await startPointerMonitor();
   await establishBaseline();
   report.platform = (await command('/usr/bin/sw_vers', [])).stdout.trim();
   report.engineSHA256 = createHash('sha256').update(await readFile(path.join(root, '.build/OpenCU.app/Contents/MacOS/opencu-engine'))).digest('hex');
@@ -409,15 +434,22 @@ try {
   report.checks[checks[13]] = changed ? 'FAIL: frontmost app changed' : report.samplingErrors.length ? 'FAIL: foreground sampling failed' : report.frontmost.length > 1 ? 'PASS' : 'NOT RUN';
   report.sampling = { requestedIntervalMs: 50, count: report.frontmost.length,
     maxStartGapMs: Math.max(0, ...report.frontmost.slice(1).map((s, i) => s.elapsedMs - report.frontmost[i].elapsedMs)) };
+  stoppingPointerMonitor = true;
+  pointerMonitor?.kill('SIGTERM');
+  await pointerMonitorDone;
+  report.checks[checks[14]] = report.pointerMoved ? 'FAIL: pointer moved' : report.pointerMonitorError ? `FAIL: ${report.pointerMonitorError}` : report.pointerSamples.length > 1 ? 'PASS' : 'NOT RUN';
+  report.pointerSampling = { requestedIntervalMs: 20, count: report.pointerSamples.length,
+    maxGapMs: Math.max(0, ...report.pointerSamples.slice(1).map((s, i) => s.uptimeMs - report.pointerSamples[i].uptimeMs)) };
   report.error = failure?.message;
   report.ok = !failure && !report.cleanupErrors.length && Object.values(report.checks).every(v => v === 'PASS');
   await rm(temporary, { recursive: true, force: true });
+  await rm(path.join(run, 'pointer-monitor'), { force: true });
   await writeFile(path.join(run, 'report.json'), JSON.stringify(report, null, 2) + '\n');
   await writeFile(path.join(area, 'latest.json'), JSON.stringify({ report: path.join(run, 'report.json') }, null, 2) + '\n');
   for (const [name, value] of Object.entries(report.checks)) console.log(`${value === 'PASS' ? 'PASS' : value.startsWith('FAIL') ? 'FAIL' : 'SKIP'}  ${name}${value.startsWith('FAIL') ? `: ${value.slice(6)}` : ''}`);
   if (failure) console.error(failure.message);
   for (const error of report.cleanupErrors) console.error(error);
-  for (const warning of report.windowMovementWarnings) console.warn(`WARN  ${warning.ownerName} (PID ${warning.pid}), window ${warning.windowID} moved; cause unattributed`);
+  for (const warning of report.windowMovementWarnings) console.warn(`WARN  ${warning.ownerName} (PID ${warning.pid}), window ${warning.windowID} moved; before onscreen=${warning.beforeOnScreen ?? 'unknown'}, size=${warning.beforeSize.width}x${warning.beforeSize.height}; cause unattributed`);
   console.log(`Evidence: ${path.join(run, 'report.json')}`);
   process.exitCode = report.ok ? 0 : 1;
 }

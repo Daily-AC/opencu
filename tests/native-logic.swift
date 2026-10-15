@@ -27,6 +27,33 @@ struct OpenCUInputLogicChecks {
             catch { expect(false, "Unexpected error: \(error)") }
         }
         let mainDisplay = CGRect(x: 0, y: 0, width: 1728, height: 1117)
+        let offstageFrame = CGRect(x: 160, y: 255, width: 700, height: 782)
+        typealias Candidate = AgentDisplayWindowIdentity.Candidate
+        let hidden = Candidate(id: 71, pid: 10, title: "Fixture", frame: offstageFrame, onScreen: false)
+        let hiddenMatch = try AgentDisplayWindowIdentity.resolve(pid: 10, title: "Fixture", frame: offstageFrame,
+            exactID: nil, candidates: [hidden])
+        expect(hiddenMatch.id == 71, "Offscreen windows remain eligible for identity matching")
+        let thumbnail = Candidate(id: 71, pid: 10, title: "Fixture", frame: CGRect(x: 16, y: 300, width: 80, height: 90), onScreen: true)
+        let transformed = try AgentDisplayWindowIdentity.resolve(pid: 10, title: "Fixture", frame: offstageFrame,
+            exactID: nil, candidates: [thumbnail])
+        expect(transformed.id == 71 && transformed.source.contains("unique-title"), "Unique PID/title bridges Stage Manager transformed geometry")
+        let unnamed = Candidate(id: 72, pid: 10, title: nil, frame: offstageFrame, onScreen: false)
+        let unnamedMatch = try AgentDisplayWindowIdentity.resolve(pid: 10, title: "Fixture", frame: offstageFrame,
+            exactID: nil, candidates: [unnamed])
+        expect(unnamedMatch.id == 72, "Unique bounds match when CG hides window title")
+        fails("AGENT_DISPLAY_WINDOW_ID_UNAVAILABLE") {
+            _ = try AgentDisplayWindowIdentity.resolve(pid: 11, title: "Fixture", frame: offstageFrame, exactID: 71, candidates: [hidden])
+        }
+        fails("AGENT_DISPLAY_AMBIGUOUS_WINDOW") {
+            _ = try AgentDisplayWindowIdentity.resolve(pid: 10, title: "Fixture", frame: offstageFrame, exactID: nil,
+                candidates: [hidden, Candidate(id: 72, pid: 10, title: "Fixture", frame: offstageFrame, onScreen: true)])
+        }
+        fails("AGENT_DISPLAY_WINDOW_ID_UNAVAILABLE") {
+            _ = try AgentDisplayWindowIdentity.resolve(pid: 10, title: "Other", frame: offstageFrame, exactID: nil, candidates: [hidden])
+        }
+        let exactMatch = try AgentDisplayWindowIdentity.resolve(pid: 10, title: "Other", frame: offstageFrame,
+            exactID: 71, candidates: [hidden])
+        expect(exactMatch.id == 71, "Exact AX identity wins over stale title")
         let agentSize = CGSize(width: 1728, height: 1117)
         let bottomRight = try AgentDisplayGeometry.placement(main: mainDisplay, others: [], size: agentSize)
         expect(bottomRight.origin == CGPoint(x: 1728, y: 1117), "Agent display touches the main display at one corner")
