@@ -30,14 +30,11 @@ restricted to Codex or any other agent. No proprietary lock-screen unlock path
 is carried over.
 
 macOS capture additionally requires an OS-verified self-responsible, disclaimed
-engine, rather than trusting its respawn environment marker. On macOS 15 and
-later, direct ScreenCaptureKit capture is refused before SCK enumeration with
-`CAPTURE_REQUIRES_INTERACTIVE_AUTHORIZATION`: an existing Screen Recording grant
-does not rule out the private-window-picker bypass reminder. Attribution failure
-returns `CAPTURE_RESPONSIBILITY_UNVERIFIED`. Error `data.captureContext` is retained
-as MCP `_meta["opencu/errorDetails"]`; `doctor` reports that context too. This is
-a deliberate screenshot limitation pending a verified non-prompting route, not
-a text/AX restriction. See [capture evidence and policy](agent-display-probe.md#capture-boundary-and-the-private-picker-prompt).
+engine, rather than trusting its respawn environment marker. Attribution failure
+returns `CAPTURE_RESPONSIBILITY_UNVERIFIED` before ScreenCaptureKit. Error
+`data.captureContext` is retained as MCP `_meta["opencu/errorDetails"]`; `doctor`
+reports that context too. On macOS 15 and later the system may show its periodic
+private-window-picker reminder even with a grant; capture is not refused for that. See [capture evidence and policy](agent-display-probe.md#capture-boundary-and-the-private-picker-prompt).
 
 The direct macOS engine also exposes opt-in `experimental_agent_display_*`
 methods described in [the agent display probe note](agent-display-probe.md).
