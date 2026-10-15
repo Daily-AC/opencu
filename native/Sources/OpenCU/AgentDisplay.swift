@@ -13,26 +13,14 @@ final class AgentDisplay {
     private var lastRemoval: Arguments?
     private let reconfiguration = DisplayReconfiguration()
 
-    struct Display: Equatable {
-        let id: CGDirectDisplayID
-        let frame: CGRect
-        let main: Bool
-        let mirrored: Bool
-        var json: Arguments {
-            ["id": id, "frame": agentDisplayRectJSON(frame), "main": main, "mirrored": mirrored,
-             "pixelWidth": CGDisplayCopyDisplayMode(id)?.pixelWidth ?? 0,
-             "pixelHeight": CGDisplayCopyDisplayMode(id)?.pixelHeight ?? 0]
-        }
-    }
+    private typealias Display = OnlineDisplay
+    // Once this process has released a display, its CG cache is not a reliable
+    // inventory even after callbacks/run-loop service. All later reads use a
+    // fresh process too, including status and idempotent destroy responses.
+    private var requiresFreshDisplayList = false
 
     private func displays() throws -> [Display] {
-        var ids = [CGDirectDisplayID](repeating: 0, count: 64), count: UInt32 = 0
-        guard CGGetOnlineDisplayList(UInt32(ids.count), &ids, &count) == .success, count < ids.count else {
-            throw OpenCUError("AGENT_DISPLAY_STATUS_FAILED", "Could not enumerate all online displays.")
-        }
-        return ids.prefix(Int(count)).map {
-            Display(id: $0, frame: CGDisplayBounds($0), main: $0 == CGMainDisplayID(), mirrored: CGDisplayIsInMirrorSet($0) != 0)
-        }.sorted { $0.id < $1.id }
+        try requiresFreshDisplayList ? FreshOnlineDisplays.list() : OnlineDisplays.current()
     }
 
     // No window titles. Owner names explain movement warnings in local evidence;
@@ -54,8 +42,8 @@ final class AgentDisplay {
         }
     }
 
-    func status() throws -> Arguments {
-        let current = try displays()
+    func status(displaySnapshot: [OnlineDisplay]? = nil) throws -> Arguments {
+        let current = try displaySnapshot ?? displays()
         var result: Arguments = ["displays": current.map(\.json), "windowFrames": try windowFrames(),
                                  "restorePending": ledger.restorePending, "backingScale": scale,
                                  "agentDisplayID": ledger.displayID.map { $0 as Any } ?? NSNull()]
@@ -336,28 +324,34 @@ final class AgentDisplay {
         var errors: [String] = []
         let removedID = ledger.displayID
         var removalStarted: TimeInterval?
+        var freshSnapshot: [OnlineDisplay]?
         for step in ledger.cleanupSteps {
             switch step {
             case .restore:
                 do { _ = try await restore() } catch { errors.append(error.localizedDescription) }
             case .releaseDisplay:
                 removalStarted = ProcessInfo.processInfo.systemUptime
+                requiresFreshDisplayList = true
                 autoreleasepool { display = nil }
             }
         }
         if let removedID {
-            do {
-                try await settle(seconds: 10) { try !self.displays().contains { $0.id == removedID } }
-                ledger.released()
+            let started = removalStarted ?? ProcessInfo.processInfo.systemUptime
+            let confirmation = await DisplayRemovalPoll.wait(for: removedID, started: started) { budget in
+                // No blocking child pipe/waitpid on the main actor. Every check
+                // spawns a new metadata-only process, even after a prior timeout.
+                try await Task.detached { try FreshOnlineDisplays.list(timeout: budget) }.value
             }
-            catch { errors.append("Display removal was not observed: \(error.localizedDescription)") }
-            lastRemoval = ["displayID": removedID, "elapsedMs": (ProcessInfo.processInfo.systemUptime - (removalStarted ?? ProcessInfo.processInfo.systemUptime)) * 1000,
-                           "timeoutMs": 10000, "removed": ledger.displayID == nil,
-                           "observationMechanism": "CGDisplayRegisterReconfigurationCallback + CGGetOnlineDisplayList on serviced main CFRunLoop",
-                           "reconfigurationEvents": reconfiguration.snapshot(since: (removalStarted ?? 0) * 1000)]
+            freshSnapshot = confirmation.displays
+            if confirmation.removed { ledger.released() }
+            if let error = confirmation.error { errors.append("Display removal was not observed: \(error)") }
+            lastRemoval = ["displayID": removedID, "elapsedMs": confirmation.elapsedMs,
+                           "timeoutMs": 10000, "checks": confirmation.checks, "removed": confirmation.removed,
+                           "observationMechanism": "fresh posix_spawn --online-displays process per check",
+                           "reconfigurationEvents": reconfiguration.snapshot(since: started * 1000)]
         }
         var result: Arguments = [:]
-        do { result = try status() }
+        do { result = try status(displaySnapshot: freshSnapshot) }
         catch { errors.append("Cleanup status unavailable: \(error.localizedDescription)") }
         result["cleanupErrors"] = errors
         result["ok"] = errors.isEmpty

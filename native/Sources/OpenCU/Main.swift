@@ -167,6 +167,18 @@ func setup() {
 struct OpenCUMain {
     @MainActor
     static func main() {
+        // Hidden one-shot metadata mode. Must precede NSApplication creation,
+        // responsibility respawn, doctor/setup, and all permission/AX calls.
+        if CommandLine.arguments.dropFirst() == ["--online-displays"] {
+            do {
+                let data = try OnlineDisplays.encode(OnlineDisplays.current())
+                try FileHandle.standardOutput.write(contentsOf: data + Data([10]))
+            } catch {
+                emit(["error": error.localizedDescription])
+                exit(1)
+            }
+            return
+        }
         if CommandLine.arguments.contains("--version") { print("opencu-engine 0.2.0"); return }
         if CommandLine.arguments.contains("--doctor") || CommandLine.arguments.dropFirst() == ["serve"],
            let status = runAsResponsibleProcess() { exit(status) }

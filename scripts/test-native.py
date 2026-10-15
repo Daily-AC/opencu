@@ -29,6 +29,7 @@ def main() -> int:
             str(sources / "AgentDisplayLogic.swift"),
             str(sources / "CaptureSafety.swift"),
             str(sources / "EngineRunLoop.swift"),
+            str(sources / "OnlineDisplays.swift"),
             str(root / "tests" / "native-logic.swift"),
             "-o", str(executable),
         ], cwd=root)
