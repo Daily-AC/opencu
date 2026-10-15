@@ -86,6 +86,37 @@ test('a failed action stops the batch and is never replayed', async t => {
   assert.deepEqual((await f.calls()).map(x => x.method), ['press_key', 'paste']);
 });
 
+const unknownAction = {
+  ok: true, outcome: 'unknown', app: state.app,
+  message: 'The app did not confirm the action. Read state before continuing; do not repeat the action automatically.',
+};
+
+test('an unconfirmed AXPress is non-error and requires an explicit new observation', async t => {
+  const f = await fixture(t, [{ result: state }, { result: unknownAction }]);
+  await f.call('get_app_state', { app: 'Fixture' });
+  const result = await f.call('click', { app: 'Fixture', element_index: 1 });
+  assert.equal(result.isError ?? false, false);
+  assert.equal(result.content[0].text, unknownAction.message);
+  assert.equal(result._meta['opencu/actionOutcome'], 'unknown');
+  assert.equal(result._meta['opencu/actionsAttempted'], 1);
+  assert.deepEqual((await f.calls()).map(x => x.method), ['get_app_state', 'click']);
+  const refreshed = await f.call('get_app_state', { app: 'Fixture' });
+  assert.equal(refreshed.content[0].text, state.text, 'Required read must not be hidden by the old diff');
+});
+
+test('an unknown AX action stops a batch without retrying or sending later input', async t => {
+  const f = await fixture(t, [{ result: { ok: true } }, { result: unknownAction }]);
+  const result = await f.call('run_actions', { app: 'Fixture', actions: [
+    { method: 'press_key', key: 'Tab' },
+    { method: 'perform_secondary_action', element_index: 1, action: 'AXConfirm' },
+    { method: 'type_text', text: 'must-not-type' },
+  ] });
+  assert.equal(result.isError ?? false, false);
+  assert.equal(result.content[0].text, unknownAction.message);
+  assert.equal(result._meta['opencu/actionsAttempted'], 2);
+  assert.deepEqual((await f.calls()).map(x => x.method), ['press_key', 'perform_secondary_action']);
+});
+
 test('capture recovery retries observations without replaying completed input', async t => {
   const f = await fixture(t, [{ result: { ok: true } }, { error: { code: 'SCREENSHOT_FAILED', message: 'Capture temporarily unavailable' } }, { result: state }]);
   const result = await f.call('press_key', { app: 'Fixture', key: 'Return' });

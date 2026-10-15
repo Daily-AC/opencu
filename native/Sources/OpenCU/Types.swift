@@ -28,8 +28,16 @@ struct WindowSnapshot {
     let windowID: CGWindowID?
     let elements: [Int: AXUIElement]
     let elementPaths: [Int: [AXUIElement]]
+    let elementTraits: [Int: ObservedElementTraits]
     let screenshotWidth: Int?
     let screenshotHeight: Int?
+
+    var isOpaque: Bool {
+        observedWindowIsOpaque(window: window.map(AXIdentity.init),
+                               elements: elements.mapValues(AXIdentity.init),
+                               paths: elementPaths.mapValues { $0.map(AXIdentity.init) },
+                               traits: elementTraits)
+    }
 }
 
 struct Observation {
@@ -43,11 +51,26 @@ struct Observation {
     }
 }
 
-/// How an input changed menu state. Opened menus are closed again but stay listed.
+/// Menu state or an unconfirmed AX action. An unknown outcome requires a new read.
 enum MenuEffect {
     case none
     case opened(AXUIElement)
     case chose
+    case unconfirmed
+
+    static let unconfirmedMessage = "The app did not confirm the action. Read state before continuing; do not repeat the action automatically."
+
+    var requiresObservation: Bool {
+        if case .unconfirmed = self { return true }
+        return false
+    }
+
+    var actionResult: [String: Any] {
+        if requiresObservation {
+            return ["ok": true, "outcome": "unknown", "message": Self.unconfirmedMessage]
+        }
+        return ["ok": true]
+    }
 }
 
 func axValue(_ element: AXUIElement, _ name: String) -> CFTypeRef? {
@@ -138,6 +161,41 @@ func axChildren(_ element: AXUIElement) -> [AXUIElement] {
     return values as? [AXUIElement] ?? []
 }
 
+/// Captured only for indexed nodes, using the same labels/actions as the listing.
+/// No live AX reads or title-bar attribute identity matching in this policy.
+struct ObservedElementTraits {
+    let role: String
+    var hasLabel = false
+    var actions: [String] = []
+
+    var isTitleBarButton: Bool {
+        role == kAXButtonRole && !hasLabel && actions.contains(kAXPressAction)
+            && actions.allSatisfy { $0 == kAXPressAction || $0 == "AXZoomWindow" }
+    }
+}
+
+/// Apply the policy to the filtered observation, not to unprinted AX children.
+/// A button must be a direct child in the *printed* tree to count as chrome;
+/// all of its descendants, including the zoom button's groups, remain chrome.
+func observedWindowIsOpaque<Node: Hashable>(window: Node?, elements: [Int: Node],
+                                            paths: [Int: [Node]], traits: [Int: ObservedElementTraits]) -> Bool {
+    guard let window, elements.values.contains(window) else { return false }
+    var byNode: [Node: ObservedElementTraits] = [:]
+    for (index, element) in elements {
+        guard let trait = traits[index] else { return false }
+        byNode[element] = trait
+    }
+    for (index, element) in elements {
+        guard let path = paths[index], path.last == element else { return false }
+        guard path.first == window, element != window else { continue }
+        // Filtered layout wrappers are absent from byNode, just as in the listing.
+        guard let firstChild = path.dropFirst().first(where: { byNode[$0] != nil }),
+              byNode[firstChild]?.isTitleBarButton == true else { return false }
+    }
+    // Root title / AXRaise and the separate menu bar are not window content.
+    return true
+}
+
 /// AppKit custom actions report their AX action name as
 /// "Name:<label>\nTarget:…\nSelector:…". Listings show the label alone.
 func axActionLabel(_ name: String) -> String {
@@ -151,4 +209,11 @@ func axResolveAction(_ requested: String, in names: [String]) -> String? {
     if names.contains(requested) { return requested }
     let matches = names.filter { axActionLabel($0) == requested }
     return matches.count == 1 ? matches[0] : nil
+}
+
+struct AXIdentity: Hashable {
+    let element: AXUIElement
+    init(_ element: AXUIElement) { self.element = element }
+    static func == (lhs: Self, rhs: Self) -> Bool { CFEqual(lhs.element, rhs.element) }
+    func hash(into hasher: inout Hasher) { hasher.combine(CFHash(element)) }
 }

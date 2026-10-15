@@ -43,12 +43,21 @@ async function readState(file) {
   return JSON.parse(await readFile(file, 'utf8'));
 }
 
-async function waitUntil(predicate, label) {
-  for (let attempt = 0; attempt < 50; attempt++) {
+async function waitUntil(predicate, label, attempts = 50) {
+  for (let attempt = 0; attempt < attempts; attempt++) {
     try { if (await predicate()) return; } catch {}
     await pause(100);
   }
   throw new Error('Timed out: ' + label);
+}
+
+// macOS 14+ may refuse a background-launched app's own activation request.
+// If the fixture is not frontmost within 3 s, ask LaunchServices to bring it
+// forward (no redirected streams; fixtures only).
+async function bringForward(appPath, file, pid, label) {
+  try { await waitUntil(async () => (await readState(file)).frontmostPID === pid, label, 30); return; } catch {}
+  execFileSync('/usr/bin/open', ['-a', appPath]);
+  await waitUntil(async () => (await readState(file)).frontmostPID === pid, label);
 }
 
 async function stop(child) {
@@ -68,10 +77,10 @@ try {
   const sentinelFile = path.join(fixtureArea, 'sentinel.json');
   const target = spawn(path.join(app, 'Contents/MacOS/OpenCUFixture'), ['--output', targetFile], { stdio: 'ignore' });
   owned.push(target);
-  await waitUntil(async () => (await readState(targetFile)).frontmostPID === target.pid, 'target launch');
+  await bringForward(app, targetFile, target.pid, 'target launch');
   const sentinel = spawn(path.join(sentinelApp, 'Contents/MacOS/OpenCUFixture'), ['--output', sentinelFile], { stdio: 'ignore' });
   owned.push(sentinel);
-  await waitUntil(async () => (await readState(targetFile)).frontmostPID === sentinel.pid, 'sentinel foreground');
+  await bringForward(sentinelApp, targetFile, sentinel.pid, 'sentinel foreground');
   await pause(500);
   const baseline = await readState(targetFile);
   const sentinelBaseline = await readState(sentinelFile);

@@ -94,8 +94,9 @@ The second rule is deliberately about system file-panel identity, not a claim
 that AX exposes the actual hosting process. On macOS 26 the proxy can report the
 host PID. It also works without a readable focused element when the selected
 root itself identifies the panel. Identifiers on unrelated windows, stale paths,
-ordinary text controls or running service processes do not qualify. This is only
-a keyboard refusal rule; it never authorizes an indexed action. A local custom
+ordinary text controls or running service processes do not qualify. These signals
+never authorize an indexed action; pointer refusals below use the selected panel
+or a panel on a revalidated window path at the pointer location. A local custom
 window/sheet using these system panel identifiers will also be refused in the
 background. Ordinary local text controls/sheets without them keep their existing
 background input behavior, including when their focused owner is unreadable.
@@ -108,10 +109,28 @@ synthetic focus, again before each character/chord, and before paste changes the
 clipboard. If focus changes during a multi-character operation, input already
 sent is not replayed. The engine never automatically activates the app.
 
-Remote pointer fallbacks (including held,
-modified or multiple clicks and scrolling) are refused rather than guessing a
-WindowServer ID or sending the event to the host window. Coordinates retain the
-existing exact window ID and screenshot requirements.
+Background screenshot-coordinate click, drag and scroll into a system Open/Save
+panel also return `BACKGROUND_REMOTE_FOCUS`, before synthetic focus, modifiers or
+pointer events. Indexed clicks and scrolls aimed at a live panel element are not
+refused: they were measured to work on the GUI fixture's save sheet, while
+coordinate input had no effect on Keynote's (2026-10-15). A selected AXWindow/AXSheet identified as `save-panel` or
+`open-panel` qualifies regardless of the PID its AX proxy reports. If the app
+keeps its document selected, a panel on a recorded `AXChildren` path must still
+be attached to that exact document and intersect the pointer point or drag
+segment. A drag crossing the panel qualifies even if its endpoints are outside;
+a menu-bar path, detached panel or another window's panel does not. The guard is
+checked again after asynchronous focus preparation and before the first event.
+The message says the panel needs the app in front (`activate_app`) or a person;
+indexed `set_value` and exposed AXPress remain available. No success is inferred
+from AXConfirm or a disabled OK button; inspect the resulting state.
+
+Foreground coordinate delivery retains its existing path. Unknown panel
+identifiers outside the selected root/live recorded paths are outside this
+rule; it does not discover arbitrary unobserved remote UI. Indexed pointer
+fallbacks to positively foreign-PID controls (including held, modified or
+multiple clicks and scrolling) retain `TARGETED_MOUSE_UNAVAILABLE` rather than
+guessing a WindowServer ID or sending events to the host window. Coordinates
+retain the exact window identity and fresh screenshot requirements.
 
 A windowless snapshot contains only the target's menu bar and an explicit note;
 requesting a screenshot still returns that text, without an image. Only AXWindow
@@ -174,3 +193,98 @@ observation instead of the action's immediate reply, 10 consecutive runs passed 
 windowless File > New / Open, Cmd+N / Cmd+O flows. One earlier run timed out waiting
 for the save to complete after AXPress on Save; it did not recur in the next 10
 runs, and the suite now prints the fixture state and tree if it does.
+
+## macOS windows exposing only decorations
+
+Before synthetic focus or physical pointer/keyboard events, classify the selected
+window using its latest filtered observation: `WindowSnapshot.elements`,
+`elementPaths`, and role/label/action traits saved for those same indexed nodes.
+Use the pure `observedWindowIsOpaque` function; do not re-read raw AXChildren or
+compare children with AXCloseButton/AXZoomButton attribute identities.
+
+A window is opaque when every indexed descendant is a title-bar button or lies
+beneath one in the printed tree. A title-bar button here is an unlabelled direct
+printed child with role AXButton and AXPress, optionally AXZoomWindow, and no
+other listed actions. Its descendants, including the zoom button's nested
+unlabelled groups, remain decorations. Filtered layout wrappers do not change
+printed ancestry. Labels use the same title, description, identifier,
+placeholder, readable value and kind fields as the listing; passive actions
+omitted by the observer are omitted here too.
+
+Any other printed content (a labelled empty group, ordinary labelled button,
+static text, or even a single unlabelled text field) makes the window non-opaque.
+The window's own title/AXRaise and the separate application menu bar do not count
+as content. A root-only window is opaque; a windowless observation is not.
+Missing root/path/trait data is not a valid opaque classification. Observation
+filtering/truncation limits this policy to what was actually listed, not all
+possible content in the app. An unlabelled direct content button with precisely
+the title-bar action signature is indistinguishable here and is conservatively
+treated as a decoration.
+
+The observation warning and all relevant input guards use the same snapshot
+classification, retained when a coordinate grant is consumed. Existing live
+application/window and indexed-path validation still applies independently.
+Refresh the app state to update the classification after content changes.
+
+The stable error is `BACKGROUND_INPUT_UNSUPPORTED`; its message explains that
+the engine cannot verify where background input lands and recommends explicit
+`activate_app` followed by a new observation. This conservative boundary covers
+coordinate click, multiple/modified/held click and indexed pointer fallbacks,
+drag, scroll, `press_key`, `type_text`, and `paste`. Keyboard delivery is
+rechecked for each character/chord and before clipboard mutation. Refusal occurs
+before synthetic activation, modifier keys, mouse events or clipboard changes.
+It consumes the prior coordinate grant like other failed actions. Remote-panel
+refusals retain their existing error precedence.
+
+Direct indexed AX actions (including menu items), value setting and selection
+remain available under the existing live-attachment rules; AX clicks on these
+windows skip synthetic focus. Reading and capturing remain available. Windowless
+application shortcuts and foreground delivery retain their existing paths.
+The rule deliberately also refuses ordinary empty AppKit windows with this AX
+shape: the engine cannot verify their background pointer/keyboard destination.
+It is not a general effect detector or a guarantee for other custom canvases.
+
+Blender is the measured example: inactive button events refresh coordinates
+from the person's real cursor, and key-window activation can order it forward.
+The reviewer confirmed a click at the wrong location and 2.04 seconds of
+foreground activation even on Blender's own full-screen Space. Treat Blender
+as foreground-only. Do not repair this by moving the real cursor, activating or
+raising the app implicitly, injecting target code, sending global input or
+replaying input. Restoring the former foreground app afterwards does not undo
+the violation. See [source analysis and measured limits](opencu-blender-2026-10-15.md).
+
+WindowServer off-screen/thumbnail status must not be described as proof that
+capture is unavailable. Report presentation status and the actual capture result
+separately; a full screenshot is not proof of background input support.
+
+## Unconfirmed AX actions and unsupported text selection
+
+`AXUIElementPerformAction` returning `kAXErrorCannotComplete` (-25204) means the
+outcome is unknown: the action can have replaced its own window before replying.
+For AXPress, menu choices and exposed secondary actions, return a non-error
+native result `{ok: true, outcome: "unknown", message: ..., app: ...}`. `ok` here
+means a result was returned, not that the action completed. Use this exact text:
+
+> The app did not confirm the action. Read state before continuing; do not repeat the action automatically.
+
+Clear the native observation (including element indexes and coordinate grants)
+and remembered menu paths. Further input requires `get_app_state` or an explicit
+`activate_app` observation. The MCP adapter preserves the notice as a non-error
+reply, with `_meta["opencu/actionOutcome"] = "unknown"` and
+`_meta["opencu/actionsAttempted"]` equal to the number of requests sent in this
+call. Stop `run_actions` at that action; do not send later actions, retry it or
+perform the usual automatic final observation. The caller must explicitly read
+and inspect state. That read is not hidden by the old accessibility diff.
+Other AX errors retain their existing codes. In particular, -25204 from an
+attribute read/write or capability query remains an error; only action dispatch
+has this unknown-outcome rule. A successful AX response is still not proof of
+the intended UI effect.
+
+If `AXSelectedTextRange` is not settable (or the settable query reports that the
+attribute is unsupported), `select_text` returns `TEXT_SELECTION_UNSUPPORTED`:
+
+> This element does not support setting AXSelectedTextRange. Get a fresh screenshot and click at the text position instead.
+
+No selection is written in that case. Other capability-query errors, non-text
+attribute errors and the existing post-write selection verification are retained.
+A fresh screenshot does not override any background input refusal.
