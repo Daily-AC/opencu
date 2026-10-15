@@ -123,7 +123,8 @@ async function startPointerMonitor() {
       assert.ok(Number.isFinite(point.x) && Number.isFinite(point.y), 'Invalid pointer sample');
       report.pointerSamples.push(point);
       report.pointerBaseline ??= point;
-      if (point.x !== report.pointerBaseline.x || point.y !== report.pointerBaseline.y) {
+      // Sub-point jitter is not a person; a person moving the pointer travels more than 3 points.
+      if (Math.hypot(point.x - report.pointerBaseline.x, point.y - report.pointerBaseline.y) > 3) {
         report.pointerMoved = true;
         abort('Pointer moved; no further probe actions will be sent');
       }
