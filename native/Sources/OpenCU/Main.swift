@@ -216,7 +216,9 @@ struct OpenCUMain {
                 if !emit(["id": id, "result": result]) { break }
             } catch {
                 let failure = error as? OpenCUError ?? OpenCUError("ENGINE_ERROR", error.localizedDescription)
-                if !emit(["id": id, "error": ["code": failure.code, "message": failure.message]]) { break }
+                var errorJSON: Arguments = ["code": failure.code, "message": failure.message]
+                if let details = failure.details { errorJSON["data"] = details }
+                if !emit(["id": id, "error": errorJSON]) { break }
             }
         }
         await engine.shutdown()

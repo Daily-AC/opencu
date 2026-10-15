@@ -79,3 +79,33 @@ struct AgentDisplayLedger {
 func agentDisplayRectJSON(_ rect: CGRect) -> [String: Double] {
     ["x": rect.minX, "y": rect.minY, "width": rect.width, "height": rect.height]
 }
+
+/// Experimental relocation only. Ordinary input/capture still requires its
+/// existing exact-window identity path. On-screen state is never a match filter.
+struct AgentDisplayWindowIdentity {
+    struct Candidate {
+        let id: UInt32
+        let pid: Int32
+        let title: String?
+        let frame: CGRect
+        let onScreen: Bool
+    }
+    static func resolve(pid: Int32, title: String?, frame: CGRect, exactID: UInt32?,
+                        candidates: [Candidate]) throws -> (id: UInt32, source: String) {
+        let owned = candidates.filter { $0.pid == pid }
+        if let exactID, owned.contains(where: { $0.id == exactID }) { return (exactID, "AXWindowID") }
+        let bounds = owned.filter { AgentDisplayGeometry.close($0.frame, frame) }
+        if let title, !title.isEmpty {
+            let titled = owned.filter { $0.title == title }
+            let both = titled.filter { AgentDisplayGeometry.close($0.frame, frame) }
+            if both.count == 1 { return (both[0].id, "PID+title+bounds") }
+            if titled.count == 1 { return (titled[0].id, "PID+unique-title (WindowServer may transform bounds)") }
+            if !titled.isEmpty { throw OpenCUError("AGENT_DISPLAY_AMBIGUOUS_WINDOW", "Several WindowServer windows match the AX title and no unique bounds match exists.") }
+            // If CG hides names, a unique bounds match still identifies the AX
+            // window. A positively conflicting title must not match by bounds.
+            let unnamed = bounds.filter { $0.title?.isEmpty != false }
+            if unnamed.count == 1 { return (unnamed[0].id, "PID+bounds (CG title unavailable)") }
+        } else if bounds.count == 1 { return (bounds[0].id, "PID+unique-bounds") }
+        throw OpenCUError("AGENT_DISPLAY_WINDOW_ID_UNAVAILABLE", "No unambiguous AX-to-WindowServer match by PID, title and bounds; see move diagnostics.")
+    }
+}

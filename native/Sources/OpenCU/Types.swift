@@ -6,7 +6,10 @@ typealias Arguments = [String: Any]
 struct OpenCUError: Error, LocalizedError {
     let code: String
     let message: String
-    init(_ code: String, _ message: String) { self.code = code; self.message = message }
+    let details: Arguments?
+    init(_ code: String, _ message: String, details: Arguments? = nil) {
+        self.code = code; self.message = message; self.details = details
+    }
     var errorDescription: String? { message }
 }
 

@@ -7,19 +7,22 @@ is deliberately left to the reviewer. It does not introduce MCP tools or consent
 ## Direct engine API
 
 Run `bin/opencu engine`. Each line is `{id, method, params}`; responses use the
-existing `{id, result}` / `{id, error}` contract. One connection owns at most one
+existing `{id, result}` / `{id, error}` contract. Errors from window relocation include structured `error.data.move` diagnostics.
+One connection owns at most one
 display and one outstanding window restoration. Methods are:
 
 | Method (all prefixed `experimental_agent_display_`) | Parameters | Result / behavior |
 | --- | --- | --- |
 | `create` | `{}` | Create a 1728 × 1117 point, 60 Hz display at the main display's 1x/2x backing scale. Refuse mirrored/unsupported layouts or an outstanding display/restoration. |
-| `move_window` | `{app: "bundle ID or .app path"}` | Resolve an already-running app's selected ordinary window; record its exact AX identity, WindowServer ID, original frame/display before any write. Move only that window. Refuse a second move until restored. |
+| `move_window` | `{app: "bundle ID or .app path"}` | Resolve an already-running app's selected ordinary window; record its AX identity, matched WindowServer ID and original frame/display before any write (including off-stage windows). Move only that window. Refuse a second move until restored. |
 | `restore` | `{}` | Restore the recorded window, even if selection changed. Verify process/window identity and the original display still exists. Never substitute another window. Idempotent after success. |
 | `destroy` | `{}` | Attempt restoration, release the display even if restoration fails, wait for removal, return `ok` and `cleanupErrors`. Repeated calls are safe. |
 | `status` | `{}` | Online display IDs, Quartz frames, main/mirror flags and pixel dimensions; requested/actual agent placement; target AX/WindowServer frames, original frame/display, intersecting display IDs, on-screen flag and restoration state. |
 
 Status also returns title-free WindowServer frame records with owner names for ordinary windows,
-Dock-level and main-menu-level windows, for movement warnings. These are
+Dock-level and main-menu-level windows, for movement warnings. Every warning includes
+`beforeOnScreen`, `afterOnScreen`, `beforeSize`, owner, PID and before/after frames;
+unknown visibility stays null and zero-size helper windows remain distinguishable. These are
 private local evidence, not publishable app inventories. Mutation attempts discard
 that engine connection's observation and coordinate grant. Observe again before
 input. Direct display calls and ordinary MCP input must be serialized; they must
@@ -56,7 +59,19 @@ top-left corners in Quartz global coordinates, without overlap or a shared edge
 with an existing display. If none is free it refuses. macOS may normalize corner adjacency; status
 reports both requested and actual frames and `placementAdjustedByOS`. Any accepted
 placement remains nonoverlapping and non-main. Pointer isolation is **not**
-guaranteed. The window gets 64-point margins and retains its size if it fits;
+guaranteed. Relocation first uses the exact AX window ID when available. Otherwise it matches
+only within the app PID using AX title and bounds against `CGWindowList` with
+`.optionAll`; it never filters by on-screen state. Unique title matches allow
+Stage Manager-transformed bounds; duplicate title/bounds matches fail closed.
+This experimental correspondence does not change ordinary input/capture identity
+checks. AX initialization gets a bounded read-only wait. After AX writes the engine
+waits up to five seconds for the requested AX frame and for WindowServer to report
+the same window on screen inside the agent display. `lastMove` / `error.data.move`
+retain pre/post AX attributes and errors, CG candidates, each write result, and the
+observation timeline with frame, display IDs and on-screen flags. If macOS refuses
+to move/render it, the failure records what happened without automatic replay.
+
+The window gets 64-point margins and retains its size if it fits;
 oversized windows are clamped, with their original size preserved for restoration.
 
 Creating a display is equivalent to attaching a monitor: WindowServer may react
@@ -76,7 +91,8 @@ The controller holds the sole owning reference to the `CGVirtualDisplay`; no
 termination block captures it. Objective-C ownership releases its display resource
 when the object is deallocated, as demonstrated by Chromium's strong-map erase
 followed by waiting for display removal. Normal `destroy` drops that reference
-inside an autorelease pool and polls the online display list for up to two seconds.
+inside an autorelease pool and polls the online display list for up to ten seconds. `lastRemoval` reports display ID,
+measured elapsed milliseconds, timeout and whether removal was observed.
 A timeout preserves the display ID for subsequent cleanup/status; it is not success.
 
 EOF, a broken stdout pipe and SIGINT/SIGTERM/SIGHUP run the same cleanup on the main actor, after any
@@ -107,11 +123,13 @@ and no redirected LaunchServices streams (no Stage Manager bypass or activation
 request), and operates only that fixture. Its unique per-run bundle ID resolves
 the app PID for cleanup; the `open` process is not the fixture. It never activates a
 sentinel or target, switches Spaces, or changes Stage Manager settings.
-Discovery accepts `lsappinfo find`'s named ASN form as well as its bare form, and
+Discovery accepts `lsappinfo find`'s named ASN, empty-name `ASN:0x0-0x…-:`, and bare forms, and
 records raw discovery/PID responses in the evidence. A fixture-only live diagnosis
 found the state file present after about 1.16 seconds with one visible window and
 no foreground change; the earlier timeout was ASN parsing, not lost launch arguments
 or Stage Manager suppressing the state file.
+A read-only helper samples the actual cursor location every 20 ms before the
+baseline and throughout cleanup. It creates no windows and posts no events.
 Before the first check, it waits for one second of stable foreground samples and
 records that baseline separately from startup transitions. A baseline owned by
 UserNotificationCenter or SecurityAgent stops the probe before launching the
@@ -129,8 +147,10 @@ fixture or creating a display, with an explicit system-dialog message.
 | Restore / destroy | AX frame, fixture frame/display return to baseline; agent ID disappears; original display arrangement matches; second destroy succeeds. Other-app movement is a warning with its owner, not a failed arrangement check. |
 | Foreground / exit | `lsappinfo front` scheduled every 50 ms from before compilation through cleanup; fixture exits. Actual sample times and maximum sampling gap are recorded. |
 
-Any foreground change or sampling failure aborts further probe actions and cancels
-the active MCP request. Already-dispatched input cannot be retracted. Cleanup
+Any foreground change, cursor movement or sampling failure aborts further probe actions and cancels
+the active MCP request. Already-dispatched input cannot be retracted. Native creation/relocation also
+rechecks foreground and pointer position before subsequent geometry writes;
+restoration/removal remain available during cleanup. Cleanup
 closes the MCP input connection before restoring geometry, then restores, destroys,
 closes the owning engine and terminates the fixture. Ctrl-C takes that same path;
 no input is replayed. Engine shutdown has bounded TERM/KILL escalation if EOF
