@@ -109,9 +109,11 @@ synthetic focus, again before each character/chord, and before paste changes the
 clipboard. If focus changes during a multi-character operation, input already
 sent is not replayed. The engine never automatically activates the app.
 
-Background coordinate click, drag and scroll into a system Open/Save panel
-also return `BACKGROUND_REMOTE_FOCUS`, before synthetic focus, modifiers or
-pointer events. A selected AXWindow/AXSheet identified as `save-panel` or
+Background screenshot-coordinate click, drag and scroll into a system Open/Save
+panel also return `BACKGROUND_REMOTE_FOCUS`, before synthetic focus, modifiers or
+pointer events. Indexed clicks and scrolls aimed at a live panel element are not
+refused: they were measured to work on the GUI fixture's save sheet, while
+coordinate input had no effect on Keynote's (2026-10-15). A selected AXWindow/AXSheet identified as `save-panel` or
 `open-panel` qualifies regardless of the PID its AX proxy reports. If the app
 keeps its document selected, a panel on a recorded `AXChildren` path must still
 be attached to that exact document and intersect the pointer point or drag

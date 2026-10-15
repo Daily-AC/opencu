@@ -206,9 +206,13 @@ final class InputController {
         return true
     }
 
-    private func validatePointerDelivery(_ snapshot: WindowSnapshot, from start: CGPoint, to end: CGPoint) throws {
+    /// Only screenshot-coordinate input is refused on background file panels: it was
+    /// measured to have no effect there (Keynote, 2026-10-15). Indexed input aimed at
+    /// a live panel element was measured to work (GUI fixture) and stays allowed.
+    private func validatePointerDelivery(_ snapshot: WindowSnapshot, from start: CGPoint, to end: CGPoint,
+                                         coordinateInput: Bool) throws {
         try validate(snapshot)
-        guard !snapshot.app.isFrontmost, let window = snapshot.window else { return }
+        guard coordinateInput, !snapshot.app.isFrontmost, let window = snapshot.window else { return }
         func panel(_ element: AXUIElement) -> Bool {
             Self.isFilePanel(role: axString(element, kAXRoleAttribute), identifier: axString(element, kAXIdentifierAttribute))
         }
@@ -235,9 +239,10 @@ final class InputController {
         try Self.requirePointerDelivery(isFrontmost: false, isFilePanel: isPanel)
     }
 
-    private func preparePointerFocus(_ snapshot: WindowSnapshot, from start: CGPoint, to end: CGPoint) async throws {
+    private func preparePointerFocus(_ snapshot: WindowSnapshot, from start: CGPoint, to end: CGPoint,
+                                     coordinateInput: Bool) async throws {
         try await prepareFocus(snapshot)
-        try validatePointerDelivery(snapshot, from: start, to: end)
+        try validatePointerDelivery(snapshot, from: start, to: end, coordinateInput: coordinateInput)
     }
 
     private func prepareFocus(_ snapshot: WindowSnapshot) async throws {
@@ -371,9 +376,9 @@ final class InputController {
             }
         }
         let location = try coordinate ?? elementPoint(element!)
-        try validatePointerDelivery(snapshot, from: location, to: location)
+        try validatePointerDelivery(snapshot, from: location, to: location, coordinateInput: coordinate != nil)
         let window = try mouseWindow(snapshot)
-        try await preparePointerFocus(snapshot, from: location, to: location)
+        try await preparePointerFocus(snapshot, from: location, to: location, coordinateInput: coordinate != nil)
         let source = try eventSource()
         let held = try holdChord(chord, source: source, pid: snapshot.app.pid)
         defer { held.release() }
@@ -434,9 +439,9 @@ final class InputController {
     private func drag(_ args: Arguments, _ snapshot: WindowSnapshot) async throws {
         let start = try point(args, snapshot, x: "from_x", y: "from_y")
         let end = try point(args, snapshot, x: "to_x", y: "to_y")
-        try validatePointerDelivery(snapshot, from: start, to: end)
+        try validatePointerDelivery(snapshot, from: start, to: end, coordinateInput: true)
         let window = try mouseWindow(snapshot)
-        try await preparePointerFocus(snapshot, from: start, to: end)
+        try await preparePointerFocus(snapshot, from: start, to: end, coordinateInput: true)
         let source = try eventSource()
         let down = try mouseEvent(.leftMouseDown, at: start, button: .left, source: source, window: window)
         var up = try mouseEvent(.leftMouseUp, at: start, button: .left, source: source, window: window)
@@ -482,9 +487,9 @@ final class InputController {
         }
         let positive = ["up", "left", "u", "l"].contains(direction)
         let delta = Int32(max(1, distance.rounded())) * (positive ? 1 : -1)
-        try validatePointerDelivery(snapshot, from: location, to: location)
+        try validatePointerDelivery(snapshot, from: location, to: location, coordinateInput: coordinate != nil)
         let window = try mouseWindow(snapshot)
-        try await preparePointerFocus(snapshot, from: location, to: location)
+        try await preparePointerFocus(snapshot, from: location, to: location, coordinateInput: coordinate != nil)
         let source = try eventSource()
         guard let wheel = CGEvent(scrollWheelEvent2Source: source, units: .pixel, wheelCount: 2,
                                   wheel1: horizontal ? 0 : delta, wheel2: horizontal ? delta : 0, wheel3: 0) else {
