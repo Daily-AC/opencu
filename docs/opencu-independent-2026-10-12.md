@@ -34,6 +34,12 @@ SIGINT and SIGHUP and returns the child's exit status. Measured from an
 unauthorized host: a direct start reported both permissions false; the disclaimed
 child reported both true. `opencu doctor` reports this as `ownPermissions`.
 
+2026-10-16 qualification: that historical permission result did not establish
+immunity from ScreenCaptureKit's private-picker reminder. New capture policy
+verifies the responsible PID and refuses direct screenshots on macOS 15+ before
+SCK, even with an existing grant. `ownPermissions` now reflects OS verification,
+not merely the respawn marker. See the [agent-display capture audit](agent-display-probe.md#capture-boundary-and-the-private-picker-prompt).
+
 An earlier temporary test instead started the app through
 `open --stdin FIFO --stdout FIFO`. When the reading side vanished, launchd's
 `xpcproxy` blocked on the FIFO and every later GUI launch on the Mac queued behind

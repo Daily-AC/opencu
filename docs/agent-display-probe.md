@@ -1,8 +1,10 @@
 # Experimental agent display probe
 
 This is a feasibility experiment, not a claim that macOS offers an invisible or
-isolated desktop. Implementation and non-GUI tests are complete; live acceptance
-is deliberately left to the reviewer. It does not introduce MCP tools or consent UI.
+isolated desktop. Reviewer runs on 2026-10-16 reached relocation and full capture,
+but exposed a stage change, a capture prompt and stale removal observation.
+The fixes below have offline checks only; live revalidation is left to the reviewer.
+It does not introduce MCP tools or consent UI.
 
 ## Direct engine API
 
@@ -85,6 +87,25 @@ These checks cannot prevent a transient rearrangement, detect every rebuilt
 system window, or guarantee that the Dock/menu bar never appears on the new
 screen. The live reviewer must assess those effects.
 
+**Measured stage side effect (reviewer run 6, 2026-10-16):** the create-step warning
+in `.cache/agent-display/run-4BTWD7/report.json` records Google Chrome changing from
+`(297,208), 952×727` to `(16,646), 133×141`, before `move_window`. The reviewer
+identified this as their on-stage Chrome window moving into the Stage Manager
+strip, with the pointer untouched. The stored on-screen flags were null, so they
+must not be retrospectively called true or false. Preserving physical display
+frames/main identity did **not** preserve the person's stage.
+
+Each new probe report includes this historical measurement separately in
+`stageSideEffects.previousMeasurement`, and records current large-to-thumbnail
+contractions as candidates with phase labels. The geometry heuristic alone does
+not prove a Stage Manager transition. No documented CoreGraphics configuration
+flag or inspected virtual-display descriptor/settings property preserves the
+existing stage when attaching a display. `initWithDescriptor:` attaches the
+display before OpenCU can set its origin; `.forSession` controls configuration
+persistence, not WindowManager staging. There is no verified way to avoid this
+effect with the current approach. This is a feasibility limitation, not solved
+by corner placement. No Stage Manager or Spaces setting is changed.
+
 ## Lifetime and cleanup
 
 The controller holds the sole owning reference to the `CGVirtualDisplay`; no
@@ -94,6 +115,77 @@ followed by waiting for display removal. Normal `destroy` drops that reference
 inside an autorelease pool and polls the online display list for up to ten seconds. `lastRemoval` reports display ID,
 measured elapsed milliseconds, timeout and whether removal was observed.
 A timeout preserves the display ID for subsequent cleanup/status; it is not success.
+
+Run 6's owner process still listed its display after 10 seconds, while the
+reviewer's external process saw removal roughly 0.2 seconds after release.
+That is evidence of stale in-process state, not evidence that the display lived
+for 10 seconds. The engine now explicitly runs the main CFRunLoop throughout
+stdio service and subscribes with `CGDisplayRegisterReconfigurationCallback`
+**before creation**. The same run loop remains active during creation, AX settle,
+restoration and removal `Task.sleep` waits. Apple's `CGDisplayConfiguration.h`
+documents that CoreGraphics state is current at completion callbacks.
+`displayReconfigurationEvents` and `lastRemoval.reconfigurationEvents` preserve
+add/remove/begin flags and monotonic timestamps; `elapsedMs` still measures the
+query-observed removal. Cleanup diagnostics no longer dump the entire app inventory.
+
+An offline timer test verifies main-run-loop delivery while requests sleep. A
+control with the old async-main shape also delivered a timer, so a blanket claim
+that async main or `Task.sleep` cannot process a run loop is **not established**.
+The fix makes subscription and run-loop lifetime explicit; only the reviewer can
+verify the actual CoreGraphics cache update and removal latency. No display was
+created or removed during this round's investigation.
+
+## Capture boundary and the private-picker prompt
+
+The complete macOS pixel path is `src/opencu-runtime.mjs` spawning the native
+`serve` process, its disclaimed respawn, then `MacObserver.capture` calling
+`SCShareableContent.excludingDesktopWindows`, constructing an exact-window
+`SCContentFilter`, and calling `SCScreenshotManager.captureImage`. The non-picker
+ScreenCaptureKit chain is the only pixel-capture path in this checkout. There is
+no `CGWindowListCreateImage`, `CGDisplayCreateImage`, capture helper, `SCStream`,
+`CGDisplayStream`, or `screencapture` CLI path. CG window/display **metadata** reads,
+the cursor monitor, and decoding the fixture PNG do not capture pixels.
+`CGRequestScreenCaptureAccess` occurs only in explicitly invoked setup.
+
+Run 6's `mcp-1.json` contains the returned PNG. Read-only unified-log inspection
+at 03:51:20 local finds replayd's shareable-content enumeration with `TCC Allow`
+at `.682600`, `captureScreenshot` at `.801131`, another `TCC Allow` at `.807895`,
+and a successful screenshot at `.829722`. These logs and the reviewer's subsequent
+UserNotificationCenter prompt identify the direct SCK chain, despite an existing
+grant; they do not identify a Node or bash pixel-capture implementation. Client
+identity fields are redacted. Neither the old report nor those logs establish
+the engine's responsible PID, or whether enumeration or capture queued the
+asynchronous reminder. Attribution to “node” is the reviewer's observed dialog
+label, not proof that Node executed the capture. The separate hub Keynote path
+is outside this repository and was not audited as OpenCU code.
+
+Previously `ownPermissions` trusted only `OPENCU_RESPONSIBLE_PROCESS`; capture
+also proceeded if respawn setup failed and the caller's Screen Recording grant
+passed preflight. Now `responsibility_get_pid_responsible_for_pid` is resolved
+and checked at runtime, using the self-PID rule also used by
+[Chromium](https://chromium.googlesource.com/chromium/src/+/refs/tags/133.0.6916.0/base/process/process_info_mac.cc).
+Capture requires both the respawn path and OS-confirmed self responsibility;
+unavailable/failed/mismatched attribution returns `CAPTURE_RESPONSIBILITY_UNVERIFIED`
+before SCK. `doctor.captureContext`, direct error data and MCP
+`opencu/errorDetails` record the actual engine PID, responsible PID and policy.
+
+There is no supported non-prompting preflight for the private-picker reminder.
+The SDK exposes neither a suppression switch on `SCScreenshotManager` nor a
+silent interactive picker. Apple's
+[Persistent Content Capture entitlement](https://developer.apple.com/documentation/bundleresources/entitlements/com.apple.developer.persistent-content-capture)
+requires Apple's approval for VNC apps; it is not added to this locally signed
+engine. The Apple forum page about the reminder was blocked by security
+verification and is not treated as a verified workaround.
+
+Consequently **macOS 15 and later refuse this direct screenshot path** with
+`CAPTURE_REQUIRES_INTERACTIVE_AUTHORIZATION` before even enumerating SCK content,
+including when Screen Recording is granted and responsibility is verified.
+This is the requested explicit-error option, not a newly working screenshot
+backend. The macOS 14 path requires verified responsibility and preflight both
+before enumeration and before capture. No legacy API, CLI, prompt suppression,
+automatic permission request or automatic input retry is substituted. Text-only
+observation/indexed actions remain available. A denied screenshot grants no
+coordinates. Offline policy, boundary-audit and MCP tests cover these refusals.
 
 EOF, a broken stdout pipe and SIGINT/SIGTERM/SIGHUP run the same cleanup on the main actor, after any
 in-flight request unwinds. Shutdown releases synthetic focus, attempts the saved
@@ -116,6 +208,10 @@ and Screen Recording grants already present, from this worktree run:
 node scripts/probe-agent-display.mjs
 ```
 
+On the owner's macOS 26, the screenshot check is now expected to fail clearly
+before capture and enter cleanup; it must not pass based on the old PNG evidence.
+This still exercises create/move/restore/removal for reviewer revalidation.
+
 The script uses `bin/opencu engine` for the experimental API and a separate normal
 `bin/opencu` MCP connection for observation/input. It compiles a disposable AppKit
 fixture, launches it through `open -g -n -a` with `--stage-managed --background`
@@ -123,6 +219,10 @@ and no redirected LaunchServices streams (no Stage Manager bypass or activation
 request), and operates only that fixture. Its unique per-run bundle ID resolves
 the app PID for cleanup; the `open` process is not the fixture. It never activates a
 sentinel or target, switches Spaces, or changes Stage Manager settings.
+Reviewer fix `a28ace1` is retained: `--stage-managed --background` orders the
+fixture window front without activating the app. Run 5 showed that `orderBack`
+left this fixture absent from AXWindows, unlike a real off-stage TextEdit window;
+run 6 verified AX visibility, relocation, full capture and restoration after the fix.
 Discovery accepts `lsappinfo find`'s named ASN, empty-name `ASN:0x0-0x…-:`, and bare forms, and
 records raw discovery/PID responses in the evidence. A fixture-only live diagnosis
 found the state file present after about 1.16 seconds with one visible window and

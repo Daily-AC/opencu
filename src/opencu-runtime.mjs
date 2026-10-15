@@ -8,7 +8,10 @@ import { CoordinateState } from './coordinate-state.mjs';
 const inputs = new Set(['click', 'drag', 'paste', 'press_key', 'type_text', 'scroll', 'set_value', 'select_text', 'perform_secondary_action']);
 
 export function toolError(error) {
-  return { isError: true, content: [{ type: 'text', text: error.message }], _meta: { 'opencu/error': error.code ?? 'RUNTIME_ERROR' } };
+  return { isError: true, content: [{ type: 'text', text: error.message }], _meta: {
+    'opencu/error': error.code ?? 'RUNTIME_ERROR',
+    ...(error.details ? { 'opencu/errorDetails': error.details } : {}),
+  } };
 }
 
 export function defaultEnginePath(root, platform = process.platform) {
@@ -51,7 +54,7 @@ export class OpenCURuntime {
         }
         this.#pending.delete(message.id);
         clearTimeout(request.timer);
-        if (message.error) request.reject(Object.assign(new Error(message.error.message), { code: message.error.code }));
+        if (message.error) request.reject(Object.assign(new Error(message.error.message), { code: message.error.code, details: message.error.data }));
         else request.resolve(message.result);
       } catch { this.#fail(new Error('OpenCU returned invalid JSON.')); }
     });

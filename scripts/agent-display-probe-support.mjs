@@ -28,3 +28,20 @@ export function windowMovementWarnings(first, second, exclude = []) {
   }
   return warnings;
 }
+
+// Reviewer measurement, not a result of the current run. Keep it separate from
+// heuristic detection below and do not rewrite the original evidence file.
+export const measuredStageSideEffect = {
+  source: '.cache/agent-display/run-4BTWD7/report.json', measuredLocalDate: '2026-10-16', phase: 'create',
+  ownerName: 'Google Chrome', before: { x: 297, y: 208, width: 952, height: 727 },
+  after: { x: 16, y: 646, width: 133, height: 141 },
+  beforeOnScreen: null, afterOnScreen: null,
+  reviewerObservation: 'Creating the display moved the person’s on-stage Chrome window into the Stage Manager strip.',
+  limitation: 'Display-frame preservation does not establish preservation of the person’s stage. No supported no-stage-relayout option is known for CGVirtualDisplay.',
+};
+
+export function possibleStageRelayout(warning) {
+  const { before, after } = warning;
+  return before.width >= 400 && before.height >= 300 && after.width > 0 && after.height > 0
+    && after.width <= before.width * 0.4 && after.height <= before.height * 0.4;
+}

@@ -16,7 +16,7 @@ final class Engine {
         observer.restoreAccessibilityModes()
         let cleanup = await agentDisplay.destroy()
         if cleanup["ok"] as? Bool == false {
-            FileHandle.standardError.write(Data("Agent display cleanup: \(cleanup)\n".utf8))
+            FileHandle.standardError.write(Data("Agent display cleanup errors: \(cleanup["cleanupErrors"] ?? []); removal: \(cleanup["lastRemoval"] ?? [:])\n".utf8))
         }
     }
 
@@ -84,7 +84,6 @@ final class Engine {
     }
 }
 
-private var ownsPermissions = false
 private var disclaimedChild: pid_t = 0
 
 /// macOS attributes privacy grants to the responsible process, normally the app
@@ -96,7 +95,7 @@ func runAsResponsibleProcess() -> Int32? {
     let marker = "OPENCU_RESPONSIBLE_PROCESS"
     if getenv(marker) != nil {
         unsetenv(marker)
-        ownsPermissions = true
+        EngineResponsibility.respawned = true
         return nil
     }
     typealias Disclaim = @convention(c) (UnsafeMutablePointer<posix_spawnattr_t?>, Int32) -> Int32
@@ -122,7 +121,7 @@ func runAsResponsibleProcess() -> Int32? {
 func permissions() -> [String: Any] {
     ["engine": "opencu", "version": "0.2.0", "platform": "macos",
      "accessibility": AXIsProcessTrusted(), "screenRecording": CGPreflightScreenCaptureAccess(), "screenLocked": desktopLocked(),
-     "ownPermissions": ownsPermissions,
+     "ownPermissions": EngineResponsibility.verified, "captureContext": EngineResponsibility.json,
      "transport": "stdio", "requiresAccount": false, "requiresOfficialRuntime": false]
 }
 
@@ -167,7 +166,7 @@ func setup() {
 @main
 struct OpenCUMain {
     @MainActor
-    static func main() async {
+    static func main() {
         if CommandLine.arguments.contains("--version") { print("opencu-engine 0.2.0"); return }
         if CommandLine.arguments.contains("--doctor") || CommandLine.arguments.dropFirst() == ["serve"],
            let status = runAsResponsibleProcess() { exit(status) }
@@ -179,6 +178,11 @@ struct OpenCUMain {
             FileHandle.standardError.write(Data("Usage: opencu-engine serve | --doctor | --setup | --version\n".utf8))
             return
         }
+        EngineRunLoop.run { await serve() }
+    }
+
+    @MainActor
+    private static func serve() async {
         let engine = Engine()
         // Run cleanup on the main actor, never inside a POSIX signal handler.
         // Signals stop accepting queued work; an in-flight action unwinds first.

@@ -11,6 +11,7 @@ final class AgentDisplay {
     private var scale = 1
     private var lastMove: Arguments?
     private var lastRemoval: Arguments?
+    private let reconfiguration = DisplayReconfiguration()
 
     struct Display: Equatable {
         let id: CGDirectDisplayID
@@ -60,6 +61,7 @@ final class AgentDisplay {
                                  "agentDisplayID": ledger.displayID.map { $0 as Any } ?? NSNull()]
         if let lastMove { result["lastMove"] = lastMove }
         if let lastRemoval { result["lastRemoval"] = lastRemoval }
+        result["displayReconfigurationEvents"] = reconfiguration.snapshot()
         if let requestedFrame { result["requestedFrame"] = agentDisplayRectJSON(requestedFrame) }
         if let agent = current.first(where: { $0.id == ledger.displayID }) {
             result["actualFrame"] = agentDisplayRectJSON(agent.frame)
@@ -91,6 +93,7 @@ final class AgentDisplay {
         guard display == nil, ledger.displayID == nil, !ledger.restorePending else {
             throw OpenCUError("AGENT_DISPLAY_BUSY", "Restore and destroy the previous display first.")
         }
+        try reconfiguration.start()
         baseline = try displays()
         guard let main = baseline.first(where: \.main), !baseline.contains(where: \.mirrored),
               let screen = NSScreen.screens.first(where: { ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? UInt32) == main.id }),
@@ -349,7 +352,9 @@ final class AgentDisplay {
             }
             catch { errors.append("Display removal was not observed: \(error.localizedDescription)") }
             lastRemoval = ["displayID": removedID, "elapsedMs": (ProcessInfo.processInfo.systemUptime - (removalStarted ?? ProcessInfo.processInfo.systemUptime)) * 1000,
-                           "timeoutMs": 10000, "removed": ledger.displayID == nil]
+                           "timeoutMs": 10000, "removed": ledger.displayID == nil,
+                           "observationMechanism": "CGDisplayRegisterReconfigurationCallback + CGGetOnlineDisplayList on serviced main CFRunLoop",
+                           "reconfigurationEvents": reconfiguration.snapshot(since: (removalStarted ?? 0) * 1000)]
         }
         var result: Arguments = [:]
         do { result = try status() }

@@ -6,11 +6,31 @@ import ApplicationServices
 // NSPasteboard.general and the production CLI entry point are never accessed.
 struct OpenCUInputLogicChecks {
     @MainActor static func main() {
-        do { try run() }
-        catch {
-            FileHandle.standardError.write(Data("FAIL: \(error)\n".utf8))
-            exit(1)
+        EngineRunLoop.run {
+            do {
+                try run()
+                try await checkRunLoop()
+            } catch {
+                FileHandle.standardError.write(Data("FAIL: \(error)\n".utf8))
+                exit(1)
+            }
         }
+    }
+
+    @MainActor static func checkRunLoop() async throws {
+        // No AppKit window/server access: a real main-run-loop timer models the
+        // source that must fire while display settling suspends on Task.sleep.
+        final class Flag: @unchecked Sendable { var fired = false }
+        let flag = Flag()
+        let timer = Timer(timeInterval: 0.02, repeats: false) { _ in flag.fired = Thread.isMainThread }
+        RunLoop.main.add(timer, forMode: .default)
+        defer { timer.invalidate() }
+        for _ in 0..<50 {
+            if flag.fired { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        guard flag.fired else { throw OpenCUError("TEST_FAILED", "Main CFRunLoop source did not run during async settling") }
+        print("Main CFRunLoop timer delivered on the main thread during Task.sleep; no GUI access")
     }
     @MainActor static func run() throws {
         var checked = 0
@@ -26,6 +46,26 @@ struct OpenCUInputLogicChecks {
             catch let error as OpenCUError { expect(error.code == code, "\(error.code) != \(code)") }
             catch { expect(false, "Unexpected error: \(error)") }
         }
+        for responsible: Int32? in [nil, -1, 0, 20] {
+            fails("CAPTURE_RESPONSIBILITY_UNVERIFIED") {
+                try CaptureSafety.requireVerifiedEngine(respawned: true, pid: 10, responsiblePID: responsible)
+            }
+        }
+        fails("CAPTURE_RESPONSIBILITY_UNVERIFIED") {
+            try CaptureSafety.requireVerifiedEngine(respawned: false, pid: 10, responsiblePID: 10)
+        }
+        try CaptureSafety.requireVerifiedEngine(respawned: true, pid: 10, responsiblePID: 10)
+        expect(true, "Only a respawned and OS-verified self-responsible engine qualifies")
+        fails("SCREEN_RECORDING_PERMISSION_REQUIRED") {
+            try CaptureSafety.requireNoninteractiveCapture(osMajorVersion: 14, screenRecordingGranted: false)
+        }
+        for version in [13, 15, 26, 27] {
+            fails("CAPTURE_REQUIRES_INTERACTIVE_AUTHORIZATION") {
+                try CaptureSafety.requireNoninteractiveCapture(osMajorVersion: version, screenRecordingGranted: true)
+            }
+        }
+        try CaptureSafety.requireNoninteractiveCapture(osMajorVersion: 14, screenRecordingGranted: true)
+        expect(true, "Existing grant allows only the non-reminder OS capture path")
         let mainDisplay = CGRect(x: 0, y: 0, width: 1728, height: 1117)
         let offstageFrame = CGRect(x: 160, y: 255, width: 700, height: 782)
         typealias Candidate = AgentDisplayWindowIdentity.Candidate
