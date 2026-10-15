@@ -196,14 +196,35 @@ runs, and the suite now prints the fixture state and tree if it does.
 
 ## macOS windows exposing only decorations
 
-Before synthetic focus or physical pointer/keyboard events, refuse a background
-window whose readable, live `AXChildren` list contains only elements identified
-by that same window's `AXCloseButton`, `AXMinimizeButton`, `AXZoomButton`, or
-`AXFullScreenButton` attributes. An empty readable list also qualifies. Compare
-AX element identity, not button roles, titles, app names, bundle IDs, the printed
-tree, or the application's separate menu bar. A decoration's own descendants
-(such as the zoom button's group) do not count as content. An unreadable list is
-unknown, not positive evidence of a decoration-only window.
+Before synthetic focus or physical pointer/keyboard events, classify the selected
+window using its latest filtered observation: `WindowSnapshot.elements`,
+`elementPaths`, and role/label/action traits saved for those same indexed nodes.
+Use the pure `observedWindowIsOpaque` function; do not re-read raw AXChildren or
+compare children with AXCloseButton/AXZoomButton attribute identities.
+
+A window is opaque when every indexed descendant is a title-bar button or lies
+beneath one in the printed tree. A title-bar button here is an unlabelled direct
+printed child with role AXButton and AXPress, optionally AXZoomWindow, and no
+other listed actions. Its descendants, including the zoom button's nested
+unlabelled groups, remain decorations. Filtered layout wrappers do not change
+printed ancestry. Labels use the same title, description, identifier,
+placeholder, readable value and kind fields as the listing; passive actions
+omitted by the observer are omitted here too.
+
+Any other printed content (a labelled empty group, ordinary labelled button,
+static text, or even a single unlabelled text field) makes the window non-opaque.
+The window's own title/AXRaise and the separate application menu bar do not count
+as content. A root-only window is opaque; a windowless observation is not.
+Missing root/path/trait data is not a valid opaque classification. Observation
+filtering/truncation limits this policy to what was actually listed, not all
+possible content in the app. An unlabelled direct content button with precisely
+the title-bar action signature is indistinguishable here and is conservatively
+treated as a decoration.
+
+The observation warning and all relevant input guards use the same snapshot
+classification, retained when a coordinate grant is consumed. Existing live
+application/window and indexed-path validation still applies independently.
+Refresh the app state to update the classification after content changes.
 
 The stable error is `BACKGROUND_INPUT_UNSUPPORTED`; its message explains that
 the engine cannot verify where background input lands and recommends explicit
