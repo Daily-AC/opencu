@@ -239,7 +239,9 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegat
             self.lastTextSelection = editor.selectedRange()
         }
         if CommandLine.arguments.contains("--background") {
-            window.orderBack(nil)
+            // With Stage Manager, an orderBack window stays out of AXWindows until it is
+            // ordered front; ordering front without activating keeps it in the strip.
+            if CommandLine.arguments.contains("--stage-managed") { window.makeKeyAndOrderFront(nil) } else { window.orderBack(nil) }
         } else {
             window.makeKeyAndOrderFront(nil)
             NSApp.activate(ignoringOtherApps: true)
