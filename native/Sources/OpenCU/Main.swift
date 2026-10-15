@@ -9,17 +9,71 @@ final class Engine {
     private var snapshot: WindowSnapshot?
     private let focusGuard = FocusGuard()
 
-    func shutdown() { input.releaseFocus(); observer.restoreAccessibilityModes() }
+    private let presence = PresenceController()
+    private var activeTask: Task<Any, Error>?
+    private var activeSensitive = false
+
+    init() {
+        input.pointerDelivered = { [weak self] point, snapshot, click in
+            self?.presence.pointer(point, snapshot: snapshot, click: click)
+        }
+        input.requireInputAllowed = { [weak self] in try self?.presence.state.requireAllowed("click") }
+        observer.requireCaptureAllowed = { [weak self] in try self?.presence.state.requireAllowed("get_app_state", screenshot: true) }
+        presence.onPersonInteraction = { [weak self] in self?.focusGuard.cancel() }
+        presence.onStop = { [weak self] in
+            guard let self else { return }
+            if self.activeSensitive { self.activeTask?.cancel() }
+            self.input.releaseFocus()
+        }
+    }
+    func disconnected() {
+        presence.disconnect()
+        if activeSensitive { activeTask?.cancel() }
+        focusGuard.cancel()
+    }
+    func shutdown() { disconnected(); input.releaseFocus(); observer.restoreAccessibilityModes() }
 
     func dispatch(_ method: String, _ args: Arguments) async throws -> Any {
+        let screenshot = args["includeScreenshot"] as? Bool ?? false
+        let appCall = PresenceState.inputMethods.contains(method) || method == "get_app_state"
+        defer { if appCall { presence.finishedCall() } }
+        if presence.state.connected, let query = args["app"] as? String, appCall {
+            presence.beginCall(query: query)
+        }
+        try presence.state.requireAllowed(method, screenshot: screenshot)
+        activeSensitive = PresenceState.requiresPermissionToContinue(method, screenshot: screenshot)
+        let task = Task { try await self.perform(method, args) }
+        activeTask = task
+        defer { activeTask = nil; activeSensitive = false }
+        do {
+            let value = try await task.value
+            try presence.state.requireAllowed(method, screenshot: screenshot)
+            return value
+        } catch {
+            try presence.state.requireAllowed(method, screenshot: screenshot)
+            let failure = error as? OpenCUError ?? OpenCUError("ENGINE_ERROR", error.localizedDescription)
+            throw presence.permissionFailure(failure)
+        }
+    }
+
+    private func perform(_ method: String, _ args: Arguments) async throws -> Any {
         if method == "doctor" { return permissions() }
         if method == "list_apps" { return observer.listApps() }
         let actions = ["click", "drag", "press_key", "type_text", "paste", "scroll", "set_value", "select_text", "perform_secondary_action"]
         guard actions.contains(method) || ["get_app_state", "activate_app"].contains(method) else {
             throw OpenCUError("METHOD_NOT_FOUND", "Unknown OpenCU operation: \(method)")
         }
+        guard presence.state.connected else { throw OpenCUError("ENGINE_DISCONNECTED", "The client disconnected. No input was sent.") }
+        let query = try requiredString(args, "app")
         try requireAccessibility()
-        let app = try await observer.resolveApp(requiredString(args, "app"), launch: method == "get_app_state" || method == "activate_app")
+        let app = try await observer.resolveApp(query, launch: !presence.state.stopped && (method == "get_app_state" || method == "activate_app"))
+        try Task.checkCancellation()
+        guard app.pid != getpid(), app.id != "dev.opencu.engine" else {
+            throw OpenCUError("INVALID_TARGET", "OpenCU's own interface is reserved for the person and cannot be targeted.")
+        }
+        // Use a stable identity after resolution, so aliases do not carry a
+        // cursor across applications. Every observed window is checked as well.
+        presence.called(target: String(app.pid), name: app.name)
         input.releaseFocus(unlessTarget: app.pid)
         if method == "activate_app" {
             input.releaseFocus()
@@ -41,6 +95,7 @@ final class Engine {
             // A failed read must not leave a previous window usable for input.
             snapshot = nil
             let state = try await observer.observe(app, includeScreenshot: args["includeScreenshot"] as? Bool ?? false)
+            presence.observed(state.snapshot)
             snapshot = state.snapshot
             return state.json
         }
@@ -51,6 +106,7 @@ final class Engine {
         snapshot = WindowSnapshot(app: current.app, window: current.window, bounds: current.bounds,
                                   windowID: current.windowID, elements: current.elements, elementPaths: current.elementPaths,
                                   screenshotWidth: nil, screenshotHeight: nil)
+        presence.observed(current)
         focusGuard.protect(target: app.pid)
         observer.record(try await input.perform(method: method, args: args, snapshot: current), pid: app.pid)
         return ["ok": true, "app": app.json]
@@ -109,52 +165,40 @@ func emit(_ value: Any) {
     }
 }
 
-@MainActor
-func setup() {
-    NSApplication.shared.setActivationPolicy(.accessory)
-    let settings: [(String, String)] = [
-        ("Accessibility", "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"),
-        ("Screen Recording", "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"),
-    ]
-    let alert = NSAlert()
-    alert.messageText = "Set up OpenCU"
-    alert.informativeText = "OpenCU runs locally and needs no account.\n\nAccessibility: \(AXIsProcessTrusted() ? "Allowed" : "Not yet allowed")\nScreen Recording: \(CGPreflightScreenCaptureAccess() ? "Allowed" : "Not yet allowed")\n\nAllow OpenCU in System Settings, then reconnect your agent. The grants apply to OpenCU whichever agent starts it."
-    alert.addButton(withTitle: "Request Permissions")
-    alert.addButton(withTitle: "Accessibility Settings")
-    alert.addButton(withTitle: "Screen Recording Settings")
-    alert.addButton(withTitle: "Close")
-    NSApplication.shared.activate(ignoringOtherApps: true)
-    let response = alert.runModal()
-    if response == .alertFirstButtonReturn {
-        _ = AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary)
-        _ = CGRequestScreenCaptureAccess()
-    } else if response == .alertSecondButtonReturn {
-        NSWorkspace.shared.open(URL(string: settings[0].1)!)
-    } else if response == .alertThirdButtonReturn {
-        NSWorkspace.shared.open(URL(string: settings[1].1)!)
-    }
-}
-
 @main
 struct OpenCUMain {
     @MainActor
-    static func main() async {
+    static func main() {
         if CommandLine.arguments.contains("--version") { print("opencu-engine 0.2.0"); return }
+        // `opencu setup` already launches through LaunchServices with its own
+        // responsibility. Only stdio/doctor need the disclaimed respawn.
         if CommandLine.arguments.contains("--doctor") || CommandLine.arguments.dropFirst() == ["serve"],
            let status = runAsResponsibleProcess() { exit(status) }
         _ = NSApplication.shared
-        NSApplication.shared.setActivationPolicy(.prohibited)
+        NSApplication.shared.setActivationPolicy(.accessory)
         if CommandLine.arguments.contains("--doctor") { emit(permissions()); return }
-        if CommandLine.arguments.contains("--setup") || CommandLine.arguments.count == 1 { setup(); return }
+        if CommandLine.arguments.contains("--setup") || CommandLine.arguments.count == 1 {
+            let setup = PermissionSetup()
+            setup.didClose = { NSApp.stop(nil); wakeApplicationLoop() }
+            setup.show(activate: true)
+            withExtendedLifetime(setup) { NSApp.run() }
+            return
+        }
         guard CommandLine.arguments.dropFirst() == ["serve"] else {
             FileHandle.standardError.write(Data("Usage: opencu-engine serve | --doctor | --setup | --version\n".utf8))
             return
         }
         let engine = Engine()
+        Task { await serve(engine); NSApp.stop(nil); wakeApplicationLoop() }
+        NSApp.run()
+    }
+
+    @MainActor private static func serve(_ engine: Engine) async {
         let lines = AsyncStream<String> { continuation in
             Task.detached {
                 while let line = readLine() { continuation.yield(line) }
                 continuation.finish()
+                await MainActor.run { engine.disconnected() }
             }
         }
         for await line in lines {
@@ -176,5 +220,15 @@ struct OpenCUMain {
             }
         }
         engine.shutdown()
+    }
+}
+
+/// NSApplication.stop only takes effect after the next event. This application-
+/// local event wakes an idle run loop without posting any device input.
+@MainActor
+private func wakeApplicationLoop() {
+    if let event = NSEvent.otherEvent(with: .applicationDefined, location: .zero, modifierFlags: [],
+                                     timestamp: 0, windowNumber: 0, context: nil, subtype: 0, data1: 0, data2: 0) {
+        NSApp.postEvent(event, atStart: false)
     }
 }

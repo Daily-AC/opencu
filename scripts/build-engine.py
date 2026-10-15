@@ -38,7 +38,8 @@ def sha256(path):
 
 
 def sources():
-    files = [NATIVE / "Package.swift", NATIVE / "Resources/Info.plist", *sorted((NATIVE / "Sources").rglob("*.swift"))]
+    files = [NATIVE / "Package.swift", *sorted(path for path in (NATIVE / "Resources").rglob("*") if path.is_file()),
+             ROOT / "scripts/render-presence.py", ROOT / "scripts/render-presence.swift", *sorted((NATIVE / "Sources").rglob("*.swift"))]
     return {str(path.relative_to(ROOT)): sha256(path) for path in files}
 
 
@@ -118,6 +119,11 @@ def main():
         info["CFBundleShortVersionString"] = version
         with (app / "Contents/Info.plist").open("wb") as handle:
             plistlib.dump(info, handle)
+        resources = app / "Contents/Resources"
+        shutil.copytree(NATIVE / "Resources", resources, ignore=shutil.ignore_patterns("Info.plist"))
+        subprocess.run(["python3", str(ROOT / "scripts/render-presence.py"), "--icon", str(resources / "AppIcon.icns")], check=True)
+        if sources() != source_hashes:
+            raise SystemExit("Native resources changed during icon generation; run the build again.")
         sign(app, leaf, password)
         subprocess.run(["codesign", "--verify", "--deep", "--strict", str(app)], check=True)
         engine_version = subprocess.check_output([str(executable), "--version"], text=True, timeout=15).strip()

@@ -24,6 +24,7 @@ export class OpenCURuntime {
   #tail = Promise.resolve();
   #closing = false;
   #failure;
+  #personStop;
   #coordinates = new CoordinateState();
   #lastText = new Map();
 
@@ -51,8 +52,12 @@ export class OpenCURuntime {
         }
         this.#pending.delete(message.id);
         clearTimeout(request.timer);
-        if (message.error) request.reject(Object.assign(new Error(message.error.message), { code: message.error.code }));
-        else request.resolve(message.result);
+        if (message.error) {
+          if (message.error.code === 'STOPPED_BY_PERSON') {
+            this.#personStop ??= Object.assign(new Error(message.error.message), { code: message.error.code });
+          }
+          request.reject(Object.assign(new Error(message.error.message), { code: message.error.code }));
+        } else request.resolve(message.result);
       } catch { this.#fail(new Error('OpenCU returned invalid JSON.')); }
     });
   }
@@ -126,6 +131,12 @@ export class OpenCURuntime {
         return { content: [{ type: 'text', text: JSON.stringify(await this.#request(method, {}, signal)) }] };
       }
       if (!inputs.has(method) && !['get_app_state', 'activate_app', 'run_actions'].includes(method)) throw new Error('Unknown OpenCU tool');
+      // Preserve the person's stop even when local coordinate validation would
+      // otherwise mask it. Text reads keep the same connection and remain usable.
+      if (this.#personStop && (inputs.has(method) || ['activate_app', 'run_actions'].includes(method)
+          || method === 'get_app_state' && args.includeScreenshot)) {
+        throw Object.assign(new Error(this.#personStop.message), { code: 'STOPPED_BY_PERSON' });
+      }
       this.#coordinates.before(method, args);
       let options = args;
       let completed = 0;
@@ -139,7 +150,7 @@ export class OpenCURuntime {
         for (const [index, { method: action, ...params }] of actions.entries()) {
           try { await this.#request(action, { ...params, app }, signal); completed++; }
           catch (error) {
-            error.message = `Action ${index + 1} failed: ${error.message} Earlier actions may have run. Read state before retrying.`;
+            error.message = `Action ${index + 1} failed: ${error.message} Earlier actions may have run.${error.code === 'STOPPED_BY_PERSON' ? '' : ' Read state before retrying.'}`;
             throw error;
           }
         }

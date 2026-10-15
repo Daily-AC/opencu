@@ -174,3 +174,99 @@ observation instead of the action's immediate reply, 10 consecutive runs passed 
 windowless File > New / Open, Cmd+N / Cmd+O flows. One earlier run timed out waiting
 for the save to complete after AXPress on Save; it did not recur in the next 10
 runs, and the suite now prints the fixture state and tree if it does.
+
+
+## macOS presence and person stop
+
+The stdio engine runs an AppKit event loop with accessory activation policy.
+No UI is created for `doctor` or `list_apps`. App-targeting calls show a non-template
+purple monitor status item, with the last app name, Stop and Permissions. It
+expires 15 seconds after the last app call completes; an in-flight call keeps
+Stop available even during a 30-second hold. An open menu stays until dismissed
+so its Stop item cannot disappear under the person. Timers use monotonic system
+uptime and run during menu tracking. Disconnect removes the item, cursor and setup.
+Each engine process owns one connection and one irreversible stop latch.
+
+`STOPPED_BY_PERSON` is a stable error code. It rejects `click`, `drag`, `scroll`,
+`press_key`, `type_text`, `paste`, `set_value`, `select_text`,
+`perform_secondary_action`, `activate_app`, and `get_app_state` with
+`includeScreenshot: true`, before app resolution or permission checks. Text-only
+`get_app_state`, `doctor` and `list_apps` remain allowed; a stopped text read does
+not launch a missing app. The MCP batch stops on the first error and preserves
+the code. The adapter also latches it before coordinate validation so subsequent
+input cannot obscure Stop with a stale-screenshot error. Hosts must not reconnect or retry automatically, including on another
+engine instance; a new connection is appropriate only after the person explicitly
+allows it. A new connection starts with a fresh latch.
+
+Stop cancels a currently suspended input/capture task. Input's existing defers
+release held buttons/modifiers and restore an unchanged clipboard. Input checks
+the latch again during validation and waits; capture checks it before capture and
+after the async result, and dispatch checks it before returning. A completed input
+or already submitted capture cannot be undone; a capture completing after Stop is
+not returned. Synchronous AX IPC can delay processing a menu event until AppKit
+regains control. This is a person-operated stop, not general human-activity
+interruption or a security boundary against a malicious client.
+
+InputController reports delivered pointer positions through one callback. The
+visual arrow uses the same screenshot-pixel to AX-screen-point conversion as
+input, then converts CG's top-left origin to AppKit's primary-display bottom-left
+origin. Movement is a clamped 250 ms cubic ease-out; clicks pulse for 300 ms.
+Pointer inactivity hides it at 3 seconds. Changing app/window, Stop and EOF hide
+it immediately. The cursor is clipped to the target bounds; windowless/menu-bar
+AX actions or elements without an exact visible window/usable centre cannot show
+a cursor. Hidden, resized or moved targets suppress it until a fresh pointer event.
+
+The transparent borderless nonactivating panel ignores mouse events, cannot be
+key/main, has no window shadow, and never calls activation or real-cursor APIs.
+Its tiny clipped frame avoids an overlay the size of the entire target. Its
+level matches the target, and it is ordered immediately above that window with
+[NSWindow.order(_:relativeTo:)](https://developer.apple.com/documentation/appkit/nswindow/order(_:relativeto:)).
+The relationship is refreshed while visible so covering windows stay above it.
+No child-window relationship is established with the other process.
+
+The overlay has `sharingType = .none`. OpenCU additionally captures only the exact
+foreign target via `SCContentFilter(desktopIndependentWindow:)`, with child windows
+disabled on macOS 14.2+, so exclusion does not rely solely on sharingType. OpenCU
+processes are excluded from its app inventory and cannot be targeted; window
+identity and presentation checks continue to use the target's exact PID/window
+ID, never the overlay. There is no new generic coverage heuristic. Actual capture
+exclusion and cross-process ordering remain live reviewer checks, not established
+by offscreen rendering.
+
+The setup window uses standard AppKit controls and the same original monitor
+glyph as the menu item and generated AppIcon.icns. English and Simplified Chinese
+resources follow the system language. Both grants refresh once per second while
+open. Each Allow button requests its own OS permission and opens the matching
+Privacy & Security pane. No TCC grant is reset or modified directly. Because
+Screen Recording preflight may remain stale, a grant/request in a process that
+started without it conservatively asks for reconnection instead of claiming ready.
+The Done button appears only when both grants report allowed.
+
+`opencu setup` and Permissions activate the normal-level, centered setup window;
+an automatic permission failure orders it without activating OpenCU. It opens
+automatically at most once per process. Missing Screen Recording is now a tool
+error (rather than text-only degradation); its message, like missing Accessibility,
+says whether the setup window is still open and asks the agent to wait for the
+person. Closing setup hides OpenCU if it is frontmost, without reactivating a
+previously used app. Menu tracking and setup opening cancel the focus guard;
+OpenCU becoming frontmost also cancels it, and the guard never restores OpenCU
+as a foreground destination. Tool calls never activate OpenCU.
+
+Offline review: `python3 scripts/render-presence.py` produces
+`.cache/presence-review/` from the actual setup controls, glyph and cursor drawing
+code, with no ordered windows, status items, capture or permission requests.
+The menu images are layout previews from the actual NSMenu items, not screenshots
+of a tracked system menu. Both languages and appearances include neither grant,
+each individual grant, ready and reconnect states. `npm run build` generates the
+icon before signing; release verification requires icon and both localization
+resources in the extracted bundle.
+
+Reviewer-only live acceptance (not run on an occupied Mac): verify no foreground
+change during background calls; 1x/2x and multi-display cursor alignment, click/
+drag/scroll/indexed centres, clipping, covering windows and the 3-second timeout;
+capture while the cursor is visible and confirm absence; 15-second status timeout,
+menu tracking and language; Stop during a long hold/typing/capture and all subsequent
+methods including batches; EOF cleanup; setup's exact Settings links, live statuses,
+reconnect guidance and closing focus. Use only disposable fixtures and follow the
+project's desktop authorization rules. Offscreen/native logic checks do not prove
+OS compositing, TCC prompting or real input delivery.

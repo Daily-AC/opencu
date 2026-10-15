@@ -29,12 +29,35 @@ npm run build
 ./bin/opencu doctor
 ```
 
-Grant macOS Accessibility permission for input and interface text, and Screen
-Recording permission for screenshots, to OpenCU itself. These are ordinary OS
-permissions, with no account or agent-brand restriction. The engine runs as its
-own responsible process, so the same grants apply whichever terminal or agent app
-starts it; `opencu doctor` reports `ownPermissions: true`. Reconnect the MCP client
-after changing permissions. Text-only observations do not require Screen Recording.
+### First run on macOS
+
+Run `bin/opencu setup`. The guided window follows your system language (English
+or Simplified Chinese) and shows live Accessibility and Screen Recording status.
+Choose **Allow…** beside each permission to request it and open its exact System
+Settings pane. Accessibility reads and operates app controls; Screen Recording
+sees app windows. Grant these to **OpenCU**, whose purple monitor icon also appears
+in System Settings. No account is needed, and the same grants apply whichever
+agent starts OpenCU (`opencu doctor` reports `ownPermissions: true`).
+
+A first missing-permission error also opens setup once, without taking foreground
+focus. Follow the window on the Mac, then reconnect if it says **Reconnect your
+agent to finish**. Screen Recording may not take effect until a new connection;
+text-only observations do not need it.
+
+While an app is being used, a purple OpenCU menu bar item identifies the last
+target. Its **Stop** command immediately latches this connection: further input,
+app activation and screenshots return `STOPPED_BY_PERSON`. Text-only reads remain
+available. The agent must wait for your explicit permission and must never retry
+or reconnect by itself. **Permissions…** reopens setup. The item disappears after
+15 seconds without app calls or on disconnect.
+
+Pointer actions display a purple agent cursor above the target window, beneath
+windows covering it. It glides between points, pulses on clicks, and disappears
+after three seconds of pointer inactivity, a target change, Stop or disconnect.
+It does not move or hide your cursor, take input, or become the foreground app.
+OpenCU's single-window captures exclude its presence UI. Live macOS acceptance
+of layering and capture exclusion is still pending; see the
+[engine contract](docs/independent-engine-contract.md#macos-presence-and-person-stop).
 
 Configure a stdio MCP server in your agent:
 
@@ -92,8 +115,9 @@ With Stage Manager, an app that is not on the stage is shown as a thumbnail or
 hidden. macOS then provides no full screenshot, Chromium-based apps stop rendering
 their pages, and the window cannot run commands such as Save or Close. OpenCU
 reports this in the returned state; reading and indexed actions still work, and
-`activate_app` covers the rest. A requested screenshot that cannot be taken is
-replaced by its reason instead of failing the call.
+`activate_app` covers the rest. Most unavailable screenshots are replaced by their reason. Missing Screen
+Recording permission and a person’s Stop are errors, so the agent receives the
+setup guidance or stop instruction directly.
 
 Chromium browsers and Electron apps expose their web content to OpenCU: Electron
 through `AXManualAccessibility`, Chrome-family browsers through

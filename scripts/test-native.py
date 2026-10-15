@@ -23,6 +23,7 @@ def main() -> int:
             "xcrun", "swiftc", "-parse-as-library", "-module-name", "OpenCULogicTests",
             "-target", f"{platform.machine()}-apple-macos14.0",
             str(sources / "Types.swift"),
+            str(sources / "PresenceModel.swift"),
             str(sources / "Keyboard.swift"),
             str(sources / "BackgroundFocus.swift"),
             str(sources / "InputController.swift"),

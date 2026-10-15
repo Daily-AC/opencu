@@ -137,3 +137,25 @@ test('unchanged observations can be expanded again with disableDiff', async t =>
   const third = await f.call('get_app_state', { app: 'Fixture', disableDiff: true });
   assert.equal(third.content[0].text, state.text);
 });
+
+
+test('person stop preserves its code, halts the batch and never retries a screenshot', async t => {
+  const stop = { error: { code: 'STOPPED_BY_PERSON', message: 'The person stopped OpenCU. Do not reconnect or retry on your own.' } };
+  const f = await fixture(t, [stop, { result: state }]);
+  const result = await f.call('run_actions', { app: 'Fixture', actions: [
+    { method: 'press_key', key: 'Tab' }, { method: 'press_key', key: 'Return' },
+  ] });
+  assert.equal(result._meta['opencu/error'], 'STOPPED_BY_PERSON');
+  assert.doesNotMatch(result.content[0].text, /Read state before retrying/);
+  const screenshot = await f.call('get_app_state', { app: 'Fixture', includeScreenshot: true });
+  assert.equal(screenshot._meta['opencu/error'], 'STOPPED_BY_PERSON');
+  for (const [method, args] of [
+    ['click', { x: 10, y: 10 }], ['paste', { text: 'fixture', format: 'text' }], ['activate_app', {}],
+  ]) {
+    const refused = await f.call(method, { app: 'Fixture', ...args });
+    assert.equal(refused._meta['opencu/error'], 'STOPPED_BY_PERSON');
+  }
+  const text = await f.call('get_app_state', { app: 'Fixture' });
+  assert.equal(text.isError ?? false, false);
+  assert.deepEqual((await f.calls()).map(x => x.method), ['press_key', 'get_app_state']);
+});
