@@ -1,9 +1,10 @@
 # Experimental agent display probe
 
 This is a feasibility experiment, not a claim that macOS offers an invisible or
-isolated desktop. Reviewer runs on 2026-10-16 reached relocation and full capture,
-but exposed a stage change, a capture prompt and stale removal observation.
-The fixes below have offline checks only; live revalidation is left to the reviewer.
+isolated desktop. Reviewer run 7 on 2026-10-16 passed all window/input checks and preserved the
+foreground and pointer; only display-removal observation failed (the subsequent
+idempotence check did not run). The fresh-process removal fix below has offline
+checks only; live revalidation is left to the reviewer.
 It does not introduce MCP tools or consent UI.
 
 ## Direct engine API
@@ -112,28 +113,50 @@ The controller holds the sole owning reference to the `CGVirtualDisplay`; no
 termination block captures it. Objective-C ownership releases its display resource
 when the object is deallocated, as demonstrated by Chromium's strong-map erase
 followed by waiting for display removal. Normal `destroy` drops that reference
-inside an autorelease pool and polls the online display list for up to ten seconds. `lastRemoval` reports display ID,
-measured elapsed milliseconds, timeout and whether removal was observed.
-A timeout preserves the display ID for subsequent cleanup/status; it is not success.
+inside an autorelease pool, then confirms disappearance using a **fresh process
+for every query**, for up to ten seconds. `lastRemoval` includes the display ID,
+`elapsedMs`, `checks`, `timeoutMs`, `removed`, the observation mechanism and
+reconfiguration events retained for diagnostics only. A timeout or query failure
+preserves the display ID for later cleanup; it is not success.
 
-Run 6's owner process still listed its display after 10 seconds, while the
-reviewer's external process saw removal roughly 0.2 seconds after release.
-That is evidence of stale in-process state, not evidence that the display lived
-for 10 seconds. The engine now explicitly runs the main CFRunLoop throughout
-stdio service and subscribes with `CGDisplayRegisterReconfigurationCallback`
-**before creation**. The same run loop remains active during creation, AX settle,
-restoration and removal `Task.sleep` waits. Apple's `CGDisplayConfiguration.h`
-documents that CoreGraphics state is current at completion callbacks.
-`displayReconfigurationEvents` and `lastRemoval.reconfigurationEvents` preserve
-add/remove/begin flags and monotonic timestamps; `elapsedMs` still measures the
-query-observed removal. Cleanup diagnostics no longer dump the entire app inventory.
+The hidden `opencu-engine --online-displays` mode emits one versioned JSON object
+with display IDs, frames, main/mirror flags and pixel dimensions. It branches
+before `NSApplication.shared`, responsibility respawn, AX, capture, permission
+preflight/request and setup. It does not create a window or display. `destroy()`
+uses `posix_spawn` of the same signed executable with a stdout pipe and `/dev/null`
+stdin/stderr, never LaunchServices or `open`. Other client/engine descriptors are
+closed on exec. Each query has at most two seconds, bounded by the remaining
+removal deadline, and output is limited to 64 KiB. A timed-out/invalid child is
+killed and reaped. JSON schema, identities and geometry are validated; a query
+error cannot masquerade as an empty display list.
 
-An offline timer test verifies main-run-loop delivery while requests sleep. A
-control with the old async-main shape also delivered a timer, so a blanket claim
-that async main or `Task.sleep` cannot process a run loop is **not established**.
-The fix makes subscription and run-loop lifetime explicit; only the reviewer can
-verify the actual CoreGraphics cache update and removal latency. No display was
-created or removed during this round's investigation.
+Queries run off the main actor with a 250 ms interval while the removed ID is
+still present. Once a fresh process confirms absence, the returned cleanup status
+uses that same fresh display snapshot. All later inventory reads in this engine
+connection (including status and repeated destroy) also use fresh processes, so
+they cannot reintroduce the stale display through the owner's cache. Explicit
+destroy, failure cleanup, EOF and signal cleanup share this path. There is no
+other wait-for-display-disappearance path. A fresh process still listing the ID
+at the ten-second deadline is a real failure. No extra display is created as a
+removal workaround.
+
+**Reviewer run 7**, `.cache/agent-display/run-407s2d/report.json`, 2026-10-16
+04:14 local: Stage Manager, background fixture launch, display creation/layout,
+move from the strip, full screenshot and pixels, indexed click, coordinate click,
+shortcut/Unicode, menu, original-frame restoration, fixture exit, foreground and
+pointer checks all passed. Display removal alone timed out at about 10030 ms;
+the second-destroy check was not run. `lastRemoval.reconfigurationEvents` was
+empty, despite main-thread begin/added callbacks during creation. The reviewer’s
+external sampler saw two displays from 04:14:37 and one at 04:14:41, immediately
+after restore at 20:14:41.042Z. The owning process never learned about its own
+released virtual display. Run 6 had shown the same stale-view behavior.
+
+Keeping a main CFRunLoop and registering display callbacks did not solve that
+owner-specific cache behavior. They remain for normal event delivery and
+diagnostics, not as removal evidence. Offline checks inject display sequences,
+clock and sleep into the actual polling policy, and cover immediate/delayed
+removal, a real timeout, invalid/failed/late queries, and bounded child transport.
+The transport tests spawn a fake metadata child only, with no live enumeration.
 
 ## Capture boundary and the private-picker prompt
 

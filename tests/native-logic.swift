@@ -6,15 +6,110 @@ import ApplicationServices
 // NSPasteboard.general and the production CLI entry point are never accessed.
 struct OpenCUInputLogicChecks {
     @MainActor static func main() {
+        // Fake metadata child for offline posix_spawn transport checks. Never
+        // execute OnlineDisplays.current(), which would query the real desktop.
+        if CommandLine.arguments.dropFirst().first == "--fake-online-displays" {
+            switch CommandLine.arguments.last {
+            case "valid": print("{\"schemaVersion\":1,\"displays\":[]}")
+            case "failure": exit(23)
+            case "hang": Thread.sleep(forTimeInterval: 5)
+            case "oversized": print(String(repeating: "x", count: 70_000))
+            default: print("not JSON")
+            }
+            return
+        }
         EngineRunLoop.run {
             do {
                 try run()
                 try await checkRunLoop()
+                try await checkDisplayRemoval()
             } catch {
                 FileHandle.standardError.write(Data("FAIL: \(error)\n".utf8))
                 exit(1)
             }
         }
+    }
+
+    @MainActor static func checkDisplayRemoval() async throws {
+        var checked = 0
+        func expect(_ value: Bool, _ message: String) throws {
+            guard value else { throw OpenCUError("TEST_FAILED", message) }
+            checked += 1
+        }
+        let main = OnlineDisplay(id: 1, frame: CGRect(x: 0, y: 0, width: 1728, height: 1117),
+                                 main: true, mirrored: false, pixelWidth: 3456, pixelHeight: 2234)
+        let agent = OnlineDisplay(id: 8, frame: CGRect(x: 1728, y: 1117, width: 1728, height: 1117),
+                                  main: false, mirrored: false, pixelWidth: 3456, pixelHeight: 2234)
+        let decoded = try OnlineDisplays.parse(OnlineDisplays.encode([agent, main]))
+        try expect(decoded == [main, agent], "Fresh display JSON preserves IDs, frames, flags and pixels and sorts by ID")
+        try expect(try OnlineDisplays.parse(Data("{\"schemaVersion\":1,\"displays\":[]}".utf8)).isEmpty, "Valid empty list is accepted")
+        let validJSON = String(decoding: try OnlineDisplays.encode([main]), as: UTF8.self)
+        let invalid = ["", "not JSON", "{\"error\":\"query failed\"}",
+                       validJSON.replacingOccurrences(of: "\"schemaVersion\":1", with: "\"schemaVersion\":2"),
+                       validJSON.replacingOccurrences(of: "\"id\":1", with: "\"id\":true"),
+                       validJSON.replacingOccurrences(of: "\"id\":1", with: "\"id\":4294967296"),
+                       validJSON.replacingOccurrences(of: "\"width\":1728", with: "\"width\":-1"),
+                       validJSON.replacingOccurrences(of: "\"main\":true", with: "\"main\":1"),
+                       validJSON + "garbage", String(repeating: " ", count: 65_537)]
+        for value in invalid {
+            do { _ = try OnlineDisplays.parse(Data(value.utf8)); throw OpenCUError("TEST_FAILED", "Invalid fresh list was accepted") }
+            catch let error as OpenCUError { try expect(error.code == "AGENT_DISPLAY_LIST_INVALID", "Reject malformed fresh lists") }
+        }
+        do { _ = try OnlineDisplays.parse(OnlineDisplays.encode([main, main])); throw OpenCUError("TEST_FAILED", "Duplicate IDs accepted") }
+        catch let error as OpenCUError { try expect(error.code == "AGENT_DISPLAY_LIST_INVALID", "Duplicate IDs refused") }
+
+        var time = 10.0, calls = 0, budgets: [Double] = []
+        let delayed = await DisplayRemovalPoll.wait(for: 8, started: time, now: { time }, sleep: { time += $0 }) { budget in
+            calls += 1; budgets.append(budget); time += 0.02
+            return calls < 3 ? [main, agent] : [main]
+        }
+        try expect(delayed.removed && delayed.checks == 3 && delayed.displays == [main], "Poll uses each injected fresh result, not the owner's stale list")
+        try expect(abs(delayed.elapsedMs - 560) < 0.01 && delayed.error == nil, "Measured time includes child-query latency and polling intervals")
+        try expect(budgets.allSatisfy { $0 > 0 && $0 <= 2 }, "Each child gets a bounded deadline")
+
+        time = 0; calls = 0
+        let gone = await DisplayRemovalPoll.wait(for: 8, started: 0, now: { time }, sleep: { _ in
+            throw OpenCUError("TEST_FAILED", "Should not sleep after confirmation")
+        }) { _ in calls += 1; return [main] }
+        try expect(gone.removed && gone.checks == 1 && calls == 1, "Immediate/duplicate removal completes in one check")
+
+        time = 0; budgets = []
+        let timeout = await DisplayRemovalPoll.wait(for: 8, started: 0, now: { time }, sleep: { time += $0 }) { budget in
+            budgets.append(budget); return [main, agent]
+        }
+        try expect(!timeout.removed && timeout.checks == 40 && abs(timeout.elapsedMs - 10_000) < 0.01,
+                   "Display still listed by fresh processes is a real ten-second failure")
+        try expect(timeout.displays == [main, agent] && timeout.error?.contains("still list display 8") == true, "Timeout keeps last fresh evidence")
+        try expect(budgets.last == 0.25, "Final process cannot exceed the overall deadline")
+
+        time = 0
+        let failed = await DisplayRemovalPoll.wait(for: 8, started: 0, now: { time }, sleep: { time += $0 }) { _ in
+            throw OpenCUError("AGENT_DISPLAY_LIST_INVALID", "malformed child JSON")
+        }
+        try expect(!failed.removed && failed.checks == 1 && failed.displays == nil && failed.error != nil,
+                   "Query/parsing failure cannot falsely confirm removal")
+        let expired = await DisplayRemovalPoll.wait(for: 8, started: 0, now: { 10 }, sleep: { _ in }) { _ in
+            throw OpenCUError("TEST_FAILED", "Must not launch a child after deadline")
+        }
+        try expect(!expired.removed && expired.checks == 0, "Expired budget launches no children")
+        time = 0
+        let late = await DisplayRemovalPoll.wait(for: 8, started: 0, now: { time }, sleep: { time += $0 }) { _ in
+            time = 11; return [main]
+        }
+        try expect(!late.removed && late.error?.contains("deadline") == true, "An over-budget lister cannot report timely removal")
+
+        let executable = CommandLine.arguments[0]
+        let bytes = try FreshOnlineDisplays.run(executable: executable, arguments: ["--fake-online-displays", "valid"], timeout: 2)
+        try expect(try OnlineDisplays.parse(bytes).isEmpty, "Actual posix_spawn pipe transports fake metadata without GUI access")
+        for mode in ["failure", "hang", "oversized"] {
+            do {
+                _ = try FreshOnlineDisplays.run(executable: executable, arguments: ["--fake-online-displays", mode], timeout: mode == "hang" ? 0.1 : 2)
+                throw OpenCUError("TEST_FAILED", "Child failure was ignored")
+            } catch let error as OpenCUError {
+                try expect(error.code == "AGENT_DISPLAY_LIST_FAILED", "Child exit, timeout and output limit fail closed and reap the child")
+            }
+        }
+        print("\(checked) fresh-display parsing, injected removal polling and fake-child transport checks passed; no display enumeration or GUI access")
     }
 
     @MainActor static func checkRunLoop() async throws {
