@@ -116,12 +116,15 @@ accepted by this change either.
 ## Implemented rule and compatibility limits
 
 The [contract](independent-engine-contract.md#macos-windows-exposing-only-decorations)
-uses the live window's exact AX decoration identities. A separate application
-menu bar and a decoration's own child groups do not establish accessible window
-content. The filtered printed tree is not used as evidence. Ordinary empty
-AppKit windows with the same AX shape are deliberately refused too. Unknown or
-unreadable AX children are not proof of an empty window; content-bearing custom
-canvases are outside this rule. This is not a general proof-of-effect mechanism.
+uses the indexed elements, paths and saved role/label/action traits from the
+normal filtered observation. Every printed descendant must be an unlabelled
+direct AXButton with AXPress (optionally AXZoomWindow), or beneath such a button,
+for the window to be opaque. Nested zoom-button groups are decorations. Labelled
+empty content, ordinary labelled buttons and a single text field are content.
+The root's own title/AXRaise and the separate menu bar do not count as content.
+This is a conservative visible-tree rule, not a general proof of input effects;
+filtering/truncation and indistinguishable unlabelled content buttons limit it.
+The input guards and state warning share the same snapshot classification.
 
 The rule covers physical pointer fallbacks and all three keyboard methods before
 focus notifications, held modifiers, events or clipboard writes. Direct AX
@@ -180,11 +183,43 @@ These are reviewer observations, not new trials by this implementation job:
 - Keynote outline rows do not allow setting AXSelectedTextRange. `select_text`
   now returns `TEXT_SELECTION_UNSUPPORTED` with fresh-screenshot/click guidance.
 
+## Reviewer refusal failure and observation-based correction (15:3x)
+
+The reviewer launched Blender through the engine without activation; the
+person's app stayed frontmost. Nevertheless `press_key Tab` and `type_text "x"`
+returned success on the previous build. The observed window was exactly:
+
+```text
+[1] Window title="未命名 - Blender 5.2.0 LTS" focused Secondary Actions: AXRaise
+  [2] Button Secondary Actions: AXPress
+  [3] Button Secondary Actions: AXPress, AXZoomWindow
+    [4] Group kind="group"
+      [5] Group kind="group"
+  [6] Button Secondary Actions: AXPress
+```
+
+Raw AXChildren/decoration-attribute identity matching did not identify this
+window. The replacement pure classifier uses the already indexed observation
+and the same saved traits used for the listing. This exact six-node tree is now
+a native regression fixture, including its title, actions and both nested groups,
+and the test verifies `BACKGROUND_INPUT_UNSUPPORTED` in the background. No
+additional live test was run for this correction; installed-build acceptance
+remains the reviewer's check.
+
+Key named checks in `tests/native-logic.swift`:
+
+- `blender_observed_chrome_tree_is_opaque`
+- `ordinary_labelled_button_window_is_not_opaque`
+- `empty_but_labelled_content_window_is_not_opaque`
+- `single_unlabelled_text_field_window_is_not_opaque`
+- `separate_menu_bar_does_not_make_window_content`
+- `filtered_wrappers_do_not_change_visible_chrome_classification`
+
 ## Verification and reviewer checks
 
-`npm test`: 36 passed. `python3 scripts/test-native.py`: 128 checks passed.
+`npm test`: 36 passed. `python3 scripts/test-native.py`: 134 checks passed.
 `npm run build` passed with the local signing identity. Native checks cover
-window-decoration identity, foreground/refusal policy, panel point/segment
+filtered window-content classification, foreground/refusal policy, panel point/segment
 intersection, -25204 versus other AX errors, unknown-result metadata and
 non-settable text selection. MCP transport tests verify the non-error notice,
 stopping a batch, no automatic observation/replay and a full explicit next read.

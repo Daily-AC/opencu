@@ -162,6 +162,7 @@ final class MacObserver {
                                screenshot: nil,
                                snapshot: WindowSnapshot(app: app, window: nil, bounds: .zero, windowID: nil,
                                                         elements: tree.elements, elementPaths: tree.paths,
+                                                        elementTraits: tree.traits,
                                                         screenshotWidth: nil, screenshotHeight: nil))
         }
         guard let bounds = axRect(window), usableBounds(bounds) else {
@@ -175,9 +176,6 @@ final class MacObserver {
                      "Window: \(quoted(windowTitle))",
                      "Window bounds: x=\(bounds.minX), y=\(bounds.minY), width=\(bounds.width), height=\(bounds.height) points."]
         lines.append(contentsOf: tree.lines)
-        if !app.isFrontmost, axWindowHasOnlyDecorations(window) {
-            lines.append("Background pointer and keyboard input is unsupported for this custom-drawn window (BACKGROUND_INPUT_UNSUPPORTED). Only title-bar decorations are accessible, so the engine cannot verify where input lands. Use activate_app explicitly, then read the state before input. Exposed AX actions remain available.")
-        }
         var windowID = inputWindowID(app: app, window: window)
         let presentation = windowID.flatMap(windowPresentation)
         // Visibility is not a capture capability test: Blender can retain a
@@ -212,9 +210,13 @@ final class MacObserver {
               (axString(window, kAXTitleAttribute) ?? "") == windowTitle else {
             throw OpenCUError("WINDOW_CHANGED", "The selected window changed while it was being observed. Read the application state again before interacting.")
         }
-        return Observation(text: lines.joined(separator: "\n"), screenshot: screenshot,
-                           snapshot: WindowSnapshot(app: app, window: window, bounds: bounds, windowID: windowID,
-                                                    elements: tree.elements, elementPaths: tree.paths, screenshotWidth: width, screenshotHeight: height))
+        let snapshot = WindowSnapshot(app: app, window: window, bounds: bounds, windowID: windowID,
+                                      elements: tree.elements, elementPaths: tree.paths, elementTraits: tree.traits,
+                                      screenshotWidth: width, screenshotHeight: height)
+        if !app.isFrontmost, snapshot.isOpaque {
+            lines.append("Background pointer and keyboard input is unsupported for this custom-drawn window (BACKGROUND_INPUT_UNSUPPORTED). Only title-bar decorations are accessible, so the engine cannot verify where input lands. Use activate_app explicitly, then read the state before input. Exposed AX actions remain available.")
+        }
+        return Observation(text: lines.joined(separator: "\n"), screenshot: screenshot, snapshot: snapshot)
     }
 
     private func resolveURL(_ url: URL, running: [NSRunningApplication], launch: Bool) async throws -> TargetApp {
@@ -361,10 +363,11 @@ final class MacObserver {
     }
 
     private func accessibilityTree(window: AXUIElement?, bounds: CGRect, application: AXUIElement, focused: AXUIElement?,
-                                   expanded: Set<AXIdentity>) -> (lines: [String], elements: [Int: AXUIElement], paths: [Int: [AXUIElement]], webContent: Bool) {
+                                   expanded: Set<AXIdentity>) -> (lines: [String], elements: [Int: AXUIElement], paths: [Int: [AXUIElement]], traits: [Int: ObservedElementTraits], webContent: Bool) {
         var lines: [String] = []
         var elements: [Int: AXUIElement] = [:]
         var paths: [Int: [AXUIElement]] = [:]
+        var traits: [Int: ObservedElementTraits] = [:]
         var indexes: [AXIdentity: Int] = [:]
         var webContent = false
         var inspected = Set<AXIdentity>()
@@ -404,6 +407,9 @@ final class MacObserver {
                 if characters + line.count > maximumTextCharacters { stopReason = "\(maximumTextCharacters) character limit"; break }
                 elements[index] = element
                 paths[index] = path
+                traits[index] = ObservedElementTraits(role: node.role,
+                    hasLabel: [node.title, node.description, node.identifier, node.placeholder, node.valueText, node.kind].contains { $0 != nil },
+                    actions: node.actions.filter { !AXNode.passiveActions.contains($0) }.map(axActionLabel))
                 indexes[identity] = index
                 lines.append(line)
                 characters += line.count + 1
@@ -439,7 +445,7 @@ final class MacObserver {
         if let focusedIdentity, let index = indexes[focusedIdentity] {
             lines.append("Focused element: [\(index)].")
         } else { lines.append("Focused element: unavailable within the observed window/menu bar.") }
-        return (lines, elements, paths, webContent)
+        return (lines, elements, paths, traits, webContent)
     }
 
     private func describe(_ element: AXUIElement, _ node: AXNode, focused: AXIdentity?) -> String {

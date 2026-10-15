@@ -137,13 +137,12 @@ final class InputController {
     }
 
     private func validateBackgroundDelivery(_ snapshot: WindowSnapshot) throws {
-        // Re-read the selected window, not the printed (filtered/truncated) tree.
-        // In GHOST, inactive clicks re-read the real cursor; making the window
-        // key calls orderFrontRegardless. Synthetic AppKit focus is not proof
-        // of safe delivery. See docs/opencu-blender-2026-10-15.md.
-        guard !snapshot.app.isFrontmost, let window = snapshot.window else { return }
+        // Use the same indexed observation that the caller saw, including its
+        // filtered paths and saved traits. Live raw AXChildren/decoration
+        // identities failed to classify the measured Blender window.
+        guard !snapshot.app.isFrontmost, snapshot.window != nil else { return }
         try Self.requireBackgroundDelivery(isFrontmost: false,
-                                            unsupportedWindow: axWindowHasOnlyDecorations(window))
+                                            unsupportedWindow: snapshot.isOpaque)
     }
 
     // On macOS 26 a remote file panel's AX proxy can report the host PID. The
@@ -259,7 +258,7 @@ final class InputController {
         // Direct AX actions do not need GHOST-style event delivery. Do not send
         // synthetic activation to an opaque window even for a menu-bar action.
         guard snapshot.windowID != nil else { return }
-        if let window = snapshot.window, axWindowHasOnlyDecorations(window) { return }
+        if snapshot.isOpaque { return }
         try await prepareFocus(snapshot)
     }
 

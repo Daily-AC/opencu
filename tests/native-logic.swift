@@ -26,21 +26,58 @@ struct OpenCUInputLogicChecks {
             catch let error as OpenCUError { expect(error.code == code, "\(error.code) != \(code)") }
             catch { expect(false, "Unexpected error: \(error)") }
         }
-        // Opaque window detection uses the window's actual decoration elements,
-        // not every AXButton, a localized title, or the application's menu bar.
-        let decorations = ["close", "minimize", "zoom"]
-        expect(windowHasOnlyDecorations(children: decorations, decorations: decorations, equal: ==),
-               "Window with only its own title-bar buttons is opaque")
-        expect(windowHasOnlyDecorations(children: [String](), decorations: [], equal: ==),
-               "An empty accessible window has no accessible content")
-        expect(!windowHasOnlyDecorations(children: nil as [String]?, decorations: decorations, equal: ==),
-               "An unreadable child list is not evidence of an empty window")
-        for content in ["textField", "webArea", "customButton", "canvas", "otherWindowClose"] {
-            expect(!windowHasOnlyDecorations(children: decorations + [content], decorations: decorations, equal: ==),
-                   "Content or another window's decoration must not match the shell")
+        // The exact indexed tree reported by the reviewer; no AX reads or window
+        // decoration attribute identities are involved in these regressions.
+        typealias ObservedRow = (index: Int, trait: ObservedElementTraits, path: [Int])
+        func opaque(_ rows: [ObservedRow], window: Int? = 1) -> Bool {
+            observedWindowIsOpaque(window: window,
+                elements: Dictionary(uniqueKeysWithValues: rows.map { ($0.index, $0.index) }),
+                paths: Dictionary(uniqueKeysWithValues: rows.map { ($0.index, $0.path) }),
+                traits: Dictionary(uniqueKeysWithValues: rows.map { ($0.index, $0.trait) }))
         }
-        expect(!windowHasOnlyDecorations(children: ["close"], decorations: [String](), equal: ==),
-               "A button is not a decoration without window-owned identity")
+        let reviewerWindow: [ObservedRow] = [
+            (1, .init(role: kAXWindowRole, hasLabel: true, actions: [kAXRaiseAction]), [1]),
+            (2, .init(role: kAXButtonRole, actions: [kAXPressAction]), [1, 2]),
+            (3, .init(role: kAXButtonRole, actions: [kAXPressAction, "AXZoomWindow"]), [1, 3]),
+            (4, .init(role: kAXGroupRole, hasLabel: true), [1, 3, 4]), // kind="group"
+            (5, .init(role: kAXGroupRole, hasLabel: true), [1, 3, 4, 5]), // kind="group"
+            (6, .init(role: kAXButtonRole, actions: [kAXPressAction]), [1, 6]),
+        ]
+        expect(opaque(reviewerWindow), "blender_observed_chrome_tree_is_opaque")
+        fails("BACKGROUND_INPUT_UNSUPPORTED") {
+            try InputController.requireBackgroundDelivery(isFrontmost: false, unsupportedWindow: opaque(reviewerWindow))
+        }
+        let observedMenu: [ObservedRow] = [
+            (7, .init(role: kAXMenuBarRole), [7]),
+            (8, .init(role: kAXMenuBarItemRole, hasLabel: true, actions: [kAXPressAction]), [7, 8]),
+        ]
+        expect(opaque(reviewerWindow + observedMenu), "separate_menu_bar_does_not_make_window_content")
+        expect(!opaque(reviewerWindow + [(9, .init(role: kAXButtonRole, hasLabel: true, actions: [kAXPressAction]), [1, 9])]),
+               "ordinary_labelled_button_window_is_not_opaque")
+        expect(!opaque(reviewerWindow + [(9, .init(role: kAXStaticTextRole, hasLabel: true), [1, 9])]),
+               "ordinary_static_text_window_is_not_opaque")
+        let root = [reviewerWindow[0]]
+        expect(!opaque(root + [(9, .init(role: kAXGroupRole, hasLabel: true), [1, 9])]),
+               "empty_but_labelled_content_window_is_not_opaque")
+        expect(!opaque(root + [(9, .init(role: kAXTextFieldRole), [1, 9])]),
+               "single_unlabelled_text_field_window_is_not_opaque")
+        expect(!opaque(root + [(9, .init(role: "AXWebArea"), [1, 9])]),
+               "ordinary_web_content_window_is_not_opaque")
+        expect(!opaque(root + [(9, .init(role: kAXButtonRole, actions: [kAXPressAction, kAXIncrementAction]), [1, 9])]),
+               "button_with_content_action_is_not_title_bar_chrome")
+        expect(!opaque(root + [(9, .init(role: kAXGroupRole, hasLabel: true), [1, 9]),
+                               (10, .init(role: kAXButtonRole, actions: [kAXPressAction]), [1, 9, 10])]),
+               "button_inside_content_group_is_not_title_bar_chrome")
+        expect(opaque(root), "window_title_and_raise_action_alone_are_not_content")
+        expect(!opaque(observedMenu, window: nil), "windowless_menu_shortcuts_remain_supported")
+        expect(!opaque(observedMenu), "missing_observed_window_is_not_classified_as_opaque")
+        // Unindexed layout wrappers were removed by the normal observation filter.
+        let wrapped = reviewerWindow.map { row -> ObservedRow in
+            (row.index, row.trait, row.path.count > 1 ? [1, 99] + row.path.dropFirst() : row.path)
+        }
+        expect(opaque(wrapped), "filtered_wrappers_do_not_change_visible_chrome_classification")
+        expect(!opaque(root + [(9, .init(role: kAXTextFieldRole), [1, 99, 9])]),
+               "content_below_filtered_wrapper_is_not_opaque")
         for frontmost in [false, true] {
             for unsupportedWindow in [false, true] {
                 let delivery = {

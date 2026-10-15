@@ -28,8 +28,16 @@ struct WindowSnapshot {
     let windowID: CGWindowID?
     let elements: [Int: AXUIElement]
     let elementPaths: [Int: [AXUIElement]]
+    let elementTraits: [Int: ObservedElementTraits]
     let screenshotWidth: Int?
     let screenshotHeight: Int?
+
+    var isOpaque: Bool {
+        observedWindowIsOpaque(window: window.map(AXIdentity.init),
+                               elements: elements.mapValues(AXIdentity.init),
+                               paths: elementPaths.mapValues { $0.map(AXIdentity.init) },
+                               traits: elementTraits)
+    }
 }
 
 struct Observation {
@@ -153,22 +161,39 @@ func axChildren(_ element: AXUIElement) -> [AXUIElement] {
     return values as? [AXUIElement] ?? []
 }
 
-/// A positively observed window shell, not a toolkit/name heuristic. Standard
-/// title-bar buttons can contain their own groups (for example the zoom menu).
-/// Unreadable children are unknown, not evidence of an empty content view.
-func windowHasOnlyDecorations<Node>(children: [Node]?, decorations: [Node],
-                                    equal: (Node, Node) -> Bool) -> Bool {
-    guard let children else { return false }
-    return children.allSatisfy { child in decorations.contains { equal(child, $0) } }
+/// Captured only for indexed nodes, using the same labels/actions as the listing.
+/// No live AX reads or title-bar attribute identity matching in this policy.
+struct ObservedElementTraits {
+    let role: String
+    var hasLabel = false
+    var actions: [String] = []
+
+    var isTitleBarButton: Bool {
+        role == kAXButtonRole && !hasLabel && actions.contains(kAXPressAction)
+            && actions.allSatisfy { $0 == kAXPressAction || $0 == "AXZoomWindow" }
+    }
 }
 
-func axWindowHasOnlyDecorations(_ window: AXUIElement) -> Bool {
-    let children = axValue(window, kAXChildrenAttribute) as? [AXUIElement]
-    let decorations = [kAXCloseButtonAttribute, kAXMinimizeButtonAttribute,
-                       kAXZoomButtonAttribute, "AXFullScreenButton"]
-        .compactMap { axElement(window, $0) }
-    return windowHasOnlyDecorations(children: children, decorations: decorations,
-                                    equal: { CFEqual($0, $1) })
+/// Apply the policy to the filtered observation, not to unprinted AX children.
+/// A button must be a direct child in the *printed* tree to count as chrome;
+/// all of its descendants, including the zoom button's groups, remain chrome.
+func observedWindowIsOpaque<Node: Hashable>(window: Node?, elements: [Int: Node],
+                                            paths: [Int: [Node]], traits: [Int: ObservedElementTraits]) -> Bool {
+    guard let window, elements.values.contains(window) else { return false }
+    var byNode: [Node: ObservedElementTraits] = [:]
+    for (index, element) in elements {
+        guard let trait = traits[index] else { return false }
+        byNode[element] = trait
+    }
+    for (index, element) in elements {
+        guard let path = paths[index], path.last == element else { return false }
+        guard path.first == window, element != window else { continue }
+        // Filtered layout wrappers are absent from byNode, just as in the listing.
+        guard let firstChild = path.dropFirst().first(where: { byNode[$0] != nil }),
+              byNode[firstChild]?.isTitleBarButton == true else { return false }
+    }
+    // Root title / AXRaise and the separate menu bar are not window content.
+    return true
 }
 
 /// AppKit custom actions report their AX action name as

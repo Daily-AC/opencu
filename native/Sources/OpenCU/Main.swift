@@ -50,6 +50,7 @@ final class Engine {
         // An action may change geometry even when it ultimately reports failure.
         snapshot = WindowSnapshot(app: current.app, window: current.window, bounds: current.bounds,
                                   windowID: current.windowID, elements: current.elements, elementPaths: current.elementPaths,
+                                  elementTraits: current.elementTraits,
                                   screenshotWidth: nil, screenshotHeight: nil)
         focusGuard.protect(target: app.pid)
         let effect = try await input.perform(method: method, args: args, snapshot: current)
