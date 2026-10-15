@@ -29,12 +29,43 @@ npm run build
 ./bin/opencu doctor
 ```
 
-Grant macOS Accessibility permission for input and interface text, and Screen
-Recording permission for screenshots, to OpenCU itself. These are ordinary OS
-permissions, with no account or agent-brand restriction. The engine runs as its
-own responsible process, so the same grants apply whichever terminal or agent app
-starts it; `opencu doctor` reports `ownPermissions: true`. Reconnect the MCP client
-after changing permissions. Text-only observations do not require Screen Recording.
+### First run on macOS
+
+Run `bin/opencu setup`. The guided window follows your system language (English
+or Simplified Chinese) and shows live Accessibility and Screen Recording status.
+Choose **Allow…** beside each permission to request it and open its exact System
+Settings pane. Accessibility reads and operates app controls; Screen Recording
+sees app windows. Grant these to **OpenCU**, whose V-shaped pointer icon also appears
+in System Settings. No account is needed, and the same grants apply whichever
+agent starts OpenCU (`opencu doctor` reports `ownPermissions: true`).
+
+A first missing-permission error also opens setup once, without taking foreground
+focus. Follow the window on the Mac, then reconnect if it says **Reconnect your
+agent to finish**. Screen Recording may not take effect until a new connection;
+text-only observations do not need it.
+
+While an app is being used, a monochrome V in the menu bar identifies the last
+target. Its **Stop** command immediately latches this connection: further input,
+app activation and screenshots return `STOPPED_BY_PERSON`. Text-only reads remain
+available. The agent must wait for your explicit permission and must never retry
+or reconnect by itself. **Permissions…** reopens setup. The item disappears after
+15 seconds without app calls or on disconnect.
+
+Pointer actions display a V-shaped agent cursor (ink with a white rim) above the target window, beneath
+windows covering it. It glides between points, presses in on clicks, and disappears
+after three seconds of pointer inactivity, a target change, Stop or disconnect.
+It does not move or hide your cursor, take input, or become the foreground app.
+A small V badge inside the target title bar describes the current call, including
+reads, clicks, typing and shortcuts. It fades after three seconds without a call;
+Stop changes it to **Stopped by you** for three seconds. Secure or unverified text
+focus shows only a character count; ordinary input previews use at most 16
+characters from the submitted text, never the existing clipboard. Narrow windows
+show the V alone. Both overlays pass your clicks through to the target.
+
+The owner reports two 18/18 GUI runs, a smooth visible cursor, working menu Stop,
+and a post-click engine screenshot without the cursor on 2026-10-15. The new badge
+still requires live layering, focus and capture-exclusion checks; see the
+[engine contract](docs/independent-engine-contract.md#macos-title-bar-badge).
 
 Configure a stdio MCP server in your agent:
 
@@ -65,6 +96,11 @@ it never reconnects automatically after a disconnect or a person's Escape stop.
 Print and RPC modes are supported. See the [pi adapter guide](adapters/pi/README.md)
 for persistent loading, Windows use and command overrides.
 
+Tool errors begin with their stable code in the text the agent sees, for example
+`STOPPED_BY_PERSON: The person stopped OpenCU on this Mac…`. The same code remains
+in `_meta["opencu/error"]`. Batch failures and failed final observations retain
+that prefix; a wait timeout puts `WAIT_TIMEOUT:` before the last observed state.
+
 ## Tools
 
 OpenCU exposes `list_apps`, `get_app_state`, `activate_app`, `click`, `drag`,
@@ -92,8 +128,9 @@ With Stage Manager, an app that is not on the stage is shown as a thumbnail or
 hidden. macOS then provides no full screenshot, Chromium-based apps stop rendering
 their pages, and the window cannot run commands such as Save or Close. OpenCU
 reports this in the returned state; reading and indexed actions still work, and
-`activate_app` covers the rest. A requested screenshot that cannot be taken is
-replaced by its reason instead of failing the call.
+`activate_app` covers the rest. Most unavailable screenshots are replaced by their reason. Missing Screen
+Recording permission and a person’s Stop are errors, so the agent receives the
+setup guidance or stop instruction directly.
 
 Chromium browsers and Electron apps expose their web content to OpenCU: Electron
 through `AXManualAccessibility`, Chrome-family browsers through
