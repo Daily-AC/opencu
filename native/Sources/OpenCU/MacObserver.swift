@@ -6,6 +6,7 @@ import ScreenCaptureKit
 
 @MainActor
 final class MacObserver {
+    var willObserveWindow: ((WindowSnapshot) -> Void)?
     var requireCaptureAllowed: (() throws -> Void)?
     private let workspace = NSWorkspace.shared
     private let maximumElements = 800
@@ -170,6 +171,9 @@ final class MacObserver {
         guard let bounds = axRect(window), usableBounds(bounds) else {
             throw OpenCUError("WINDOW_BOUNDS_UNAVAILABLE", "The selected window does not expose usable Accessibility bounds. Select a visible window and try again.")
         }
+        var windowID = inputWindowID(app: app, window: window)
+        willObserveWindow?(WindowSnapshot(app: app, window: window, bounds: bounds, windowID: windowID,
+                                          elements: [:], elementPaths: [:], screenshotWidth: nil, screenshotHeight: nil))
         let windowTitle = axString(window, kAXTitleAttribute) ?? ""
         let focused = elementAttribute(application, kAXFocusedUIElementAttribute)
         let tree = accessibilityTree(window: window, bounds: bounds, application: application, focused: focused,
@@ -178,7 +182,6 @@ final class MacObserver {
                      "Window: \(quoted(windowTitle))",
                      "Window bounds: x=\(bounds.minX), y=\(bounds.minY), width=\(bounds.width), height=\(bounds.height) points."]
         lines.append(contentsOf: tree.lines)
-        var windowID = inputWindowID(app: app, window: window)
         let presentation = windowID.flatMap(windowPresentation)
         // Measured on macOS 26: such a window cannot become key, so window
         // commands are disabled; Chromium stops rendering it; captures fail.

@@ -26,6 +26,90 @@ struct OpenCUInputLogicChecks {
             catch let error as OpenCUError { expect(error.code == code, "\(error.code) != \(code)") }
             catch { expect(false, "Unexpected error: \(error)") }
         }
+        let resources = Bundle(path: CommandLine.arguments[1])!
+        func badgeText(_ action: BadgeAction, _ language: String) -> String {
+            let localized = Bundle(path: resources.path(forResource: language, ofType: "lproj")!)!
+            return action.localized { localized.localizedString(forKey: $0, value: $0, table: "Presence") }
+        }
+        let wording: [(BadgeAction, String, String)] = [
+            (BadgeAction(method: "get_app_state"), "Reading", "读取界面"),
+            (BadgeAction(method: "click"), "Click", "点击"),
+            (BadgeAction(method: "click", label: "Save"), "Click \"Save\"", "点击「Save」"),
+            (BadgeAction(method: "click", doubleClick: true), "Double-click", "双击"),
+            (BadgeAction(method: "click", label: "Save", doubleClick: true), "Double-click \"Save\"", "双击「Save」"),
+            (BadgeAction(method: "click", rightClick: true), "Right-click", "右键点击"),
+            (BadgeAction(method: "click", label: "Save", rightClick: true), "Right-click \"Save\"", "右键点击「Save」"),
+            (BadgeAction(method: "click", menuPath: ["File", "Save"]), "Choose \"File › Save\"", "选择菜单「File › Save」"),
+            (BadgeAction(method: "type_text", text: "hello", secure: false), "Type \"hello\"", "输入「hello」"),
+            (BadgeAction(method: "paste", text: "hello", secure: false), "Type \"hello\"", "输入「hello」"),
+            (BadgeAction(method: "press_key", key: "super+a"), "Press ⌘A", "按下 ⌘A"),
+            (BadgeAction(method: "scroll"), "Scroll", "滚动"),
+            (BadgeAction(method: "drag"), "Drag", "拖动"),
+            (BadgeAction(method: "set_value", label: "Filename"), "Set \"Filename\"", "设置「Filename」"),
+            (BadgeAction(method: "select_text", text: "never display selection"), "Select text", "选中文字"),
+            (BadgeAction(method: "perform_secondary_action", label: "Show Menu"), "Perform \"Show Menu\"", "执行「Show Menu」"),
+            (BadgeAction(method: "activate_app"), "Bring to front", "切到前台"),
+            (BadgeAction(method: "stopped"), "Stopped by you", "已被你停止")]
+        for (action, english, chinese) in wording {
+            expect(badgeText(action, "en") == english, "English badge wording: \(english)")
+            expect(badgeText(action, "zh-Hans") == chinese, "Chinese badge wording: \(chinese)")
+        }
+        for method in ["type_text", "paste"] {
+            for secure: Bool? in [true, nil] {
+                let action = BadgeAction(method: method, text: "secret👨‍👩‍👧‍👦", secure: secure)
+                expect(action.argument == "7", "Secure or unknown focus stores count only, counted as composed characters")
+                expect(badgeText(action, "en") == "Type 7 characters", "Secure text never reaches English display")
+                expect(badgeText(action, "zh-Hans") == "输入 7 个字符", "Secure text never reaches Chinese display")
+            }
+            let sixteen = String(repeating: "👨‍👩‍👧‍👦", count: 16)
+            expect(BadgeAction(method: method, text: sixteen, secure: false).argument == sixteen, "16 characters have no ellipsis")
+            expect(BadgeAction(method: method, text: sixteen + "secret", secure: false).argument == sixteen + "…", "Long input retains only first 16 composed characters")
+        }
+        expect(BadgeAction.isSecure(role: "AXSecureTextField", subrole: nil), "Secure role recognized")
+        expect(BadgeAction.isSecure(role: "AXTextField", subrole: "AXSecureTextField"), "Secure subrole recognized")
+        expect(!BadgeAction.isSecure(role: "AXTextField", subrole: "AXSearchField"), "Search field is not secure")
+        expect(BadgeAction(method: "set_value", text: "secret", secure: true).argument == nil, "Set value never previews its value")
+        expect(BadgeAction.singleLine("line1\nline2\tend") == "line1 line2 end", "Badge is always single line")
+        for (key, symbol) in [("shift+super+s", "⇧⌘S"), ("Cmd+Shift+s", "⇧⌘S"), ("Return", "↩︎"),
+                              ("Tab", "⇥"), ("Escape", "⎋"), ("ctrl+alt+delete", "⌃⌥⌦"),
+                              ("super++", "⌘+"), ("ISO_Left_Tab", "⇧⇥"), ("super+super+a", "⌘A")] {
+            expect(BadgeAction.keySymbols(key) == symbol, "Mac key notation: \(key)")
+        }
+        let badgeWindow = CGRect(x: -500, y: -300, width: 720, height: 500)
+        let badge = BadgeLayout(window: badgeWindow, titleBarHeight: nil, textWidth: 60)
+        expect(badge.frame.height == 22 && badge.frame.width == 95, "Badge height and exact padding/gap/glyph budget")
+        expect(badge.frame.maxX == badgeWindow.maxX - 10 && badge.frame.minY == badgeWindow.minY + 3, "Fallback 28pt title bar; 10pt right inset")
+        expect(BadgeLayout(window: badgeWindow, titleBarHeight: 52, textWidth: 60).frame.minY == badgeWindow.minY + 15, "AX toolbar vertical centering")
+        expect(BadgeLayout(window: badgeWindow, titleBarHeight: nil, textWidth: 1000).frame.width == 324, "Long label capped to 45 percent")
+        for width: CGFloat in [259, 260] {
+            let layout = BadgeLayout(window: CGRect(x: 0, y: 0, width: width, height: 200), titleBarHeight: nil, textWidth: 100)
+            expect(layout.glyphOnly == (width < 260), "Glyph-only threshold is strictly below 260pt")
+            if width < 260 { expect(layout.frame.width == 29, "Glyph only keeps 8pt left and 10pt right padding") }
+        }
+        expect(BadgeLayout.titleHeight(window: badgeWindow, toolbar: CGRect(x: -500, y: -300, width: 720, height: 52), title: nil) == 52,
+               "AX toolbar measures title region")
+        expect(BadgeLayout.titleHeight(window: badgeWindow, toolbar: nil, title: CGRect(x: -300, y: -292, width: 100, height: 12)) == 28,
+               "AX title centre measures title region")
+        expect(BadgeLayout.titleHeight(window: badgeWindow, toolbar: CGRect(x: 0, y: 100, width: 100, height: 200), title: nil) == nil,
+               "Content toolbar cannot masquerade as window title bar")
+        var lifetime = BadgeLifetime()
+        expect(lifetime.opacity(at: 0) == 0, "No badge before a window call")
+        lifetime.call(target: "1:2", now: 10)
+        expect(lifetime.opacity(at: 13) == 1, "Badge holds for exactly 3 seconds")
+        expect(abs(lifetime.opacity(at: 13.1) - 0.5) < 0.0001, "Fade halfway at 100ms")
+        expect(lifetime.opacity(at: 13.201) == 0, "Fade completes after 200ms")
+        lifetime.call(target: "1:2", now: 20)
+        expect(lifetime.opacity(at: 22.99) == 1, "Next call renews lifetime")
+        lifetime.hide()
+        expect(lifetime.opacity(at: 21) == 0, "Target change hides without fading")
+        lifetime.call(target: "2:3", now: 30); lifetime.stop(now: 40)
+        expect(lifetime.opacity(at: 42.999) == 1 && lifetime.opacity(at: 43) == 0, "Stop shows for 3 seconds then hides")
+        lifetime.call(target: "2:3", now: 42)
+        expect(lifetime.stopped && lifetime.opacity(at: 43) == 0, "Reads after Stop cannot overwrite or prolong it")
+        lifetime.disconnect()
+        expect(lifetime.opacity(at: 41) == 0, "Disconnect immediately removes stopped badge")
+        lifetime.call(target: "3:4", now: 44)
+        expect(lifetime.opacity(at: 44) == 0, "Disconnected callbacks cannot reshow badge")
         expect(FocusGuard.isPresenceProcess(pid: getpid(), bundleID: nil), "Own process is never a foreground restoration target")
         expect(FocusGuard.isPresenceProcess(pid: -1, bundleID: "dev.opencu.engine"), "Separate setup process is a person's focus choice")
         expect(!FocusGuard.isPresenceProcess(pid: -1, bundleID: "dev.opencu.fixture"), "Ordinary target remains guarded")
