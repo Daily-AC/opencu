@@ -273,11 +273,8 @@ final class MacObserver {
     }
 
     private func applicationMetadata(_ url: URL) -> (id: String, name: String) {
-        let bundle = Bundle(url: url)
-        let name = bundle?.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String
-            ?? bundle?.object(forInfoDictionaryKey: "CFBundleName") as? String
-            ?? url.deletingPathExtension().lastPathComponent
-        return (bundle?.bundleIdentifier ?? url.path, name)
+        let info = Bundle(url: url)?.infoDictionary ?? [:]
+        return (info["CFBundleIdentifier"] as? String ?? url.path, AppNames.name(appURL: url, info: info))
     }
 
     private func canonicalURL(_ url: URL) -> URL { url.standardizedFileURL.resolvingSymlinksInPath() }

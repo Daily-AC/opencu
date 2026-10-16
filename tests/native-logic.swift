@@ -22,6 +22,7 @@ struct OpenCUInputLogicChecks {
             do {
                 try run()
                 try await checkDisplayRemoval()
+                try checkAppNames()
                 exit(0)
             } catch {
                 FileHandle.standardError.write(Data("FAIL: \(error)\n".utf8))
@@ -29,6 +30,48 @@ struct OpenCUInputLogicChecks {
             }
         }
         RunLoop.main.run()
+    }
+
+    // Synthetic bundles in a temporary directory; no installed app is read.
+    static func checkAppNames() throws {
+        var checked = 0
+        func expect(_ value: Bool, _ message: String) throws {
+            guard value else { throw OpenCUError("TEST_FAILED", message) }
+            checked += 1
+        }
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("opencu-appnames-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        func app(_ name: String, files: [String: Any]) throws -> URL {
+            let url = root.appendingPathComponent("\(name).app")
+            for (path, value) in files {
+                let file = url.appendingPathComponent("Contents/Resources/\(path)")
+                try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+                if let table = value as? [String: Any] {
+                    try PropertyListSerialization.data(fromPropertyList: table, format: .binary, options: 0).write(to: file)
+                }
+            }
+            try FileManager.default.createDirectory(at: url.appendingPathComponent("Contents/Resources"), withIntermediateDirectories: true)
+            return url
+        }
+        let zh = ["zh-Hans"], en = ["en"]
+        let table = try app("Table", files: ["InfoPlist.loctable": ["en": ["CFBundleName": "Table"], "zh_CN": ["CFBundleName": "表格"],
+                                                                     "LocProvenance": ["en": 1]],
+                                             "InfoPlist.strings": ["CFBundleDisplayName": "Unlocalized"]])
+        try expect(AppNames.name(appURL: table, info: [:], preferences: zh) == "表格", "Loctable picks the preferred localization")
+        try expect(AppNames.name(appURL: table, info: [:], preferences: en) == "Table", "Loctable falls back by preference")
+        let lproj = try app("Lproj", files: ["zh-Hans.lproj/InfoPlist.strings": ["CFBundleDisplayName": "本地化"],
+                                             "en.lproj/InfoPlist.strings": ["CFBundleDisplayName": "Localized"]])
+        try expect(AppNames.name(appURL: lproj, info: ["CFBundleName": "Plain"], preferences: zh) == "本地化", "Best .lproj strings win")
+        try expect(AppNames.name(appURL: lproj, info: ["CFBundleName": "Plain"], preferences: en) == "Localized", "English .lproj strings")
+        let fallback = try app("Fallback", files: ["InfoPlist.strings": ["CFBundleDisplayName": "Wi-Fi"]])
+        try FileManager.default.createDirectory(at: fallback.appendingPathComponent("Contents/Resources/zh_CN.lproj"), withIntermediateDirectories: true)
+        try expect(AppNames.name(appURL: fallback, info: ["CFBundleName": "WiFiAgent"], preferences: zh) == "Wi-Fi",
+                   "Unlocalized InfoPlist.strings applies when no localization has strings")
+        let plain = try app("Plain", files: [:])
+        try expect(AppNames.name(appURL: plain, info: ["CFBundleDisplayName": "Display", "CFBundleName": "Name"], preferences: zh) == "Display",
+                   "Info.plist display name without localizations")
+        try expect(AppNames.name(appURL: plain, info: [:], preferences: zh) == "Plain", "File name is the last resort")
+        print("\(checked) application name checks passed on synthetic bundles; no installed app was read")
     }
 
     @MainActor static func checkDisplayRemoval() async throws {
