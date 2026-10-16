@@ -25,8 +25,11 @@ struct PresenceState {
     mutating func disconnect() { connected = false; lastCall = nil; hideCursor() }
     func menuVisible(at now: TimeInterval) -> Bool { connected && (callInFlight || lastCall.map { now - $0 < 15 } == true) }
     func cursorVisible(at now: TimeInterval) -> Bool { connected && !stopped && lastPointer.map { now - $0 < 3 } == true }
+    // Creating a display or moving a window onto it rearranges the person's screen.
+    // Restore and destroy undo that work and stay allowed after a stop.
+    static let screenChangingMethods: Set<String> = ["experimental_agent_display_create", "experimental_agent_display_move_window"]
     static func requiresPermissionToContinue(_ method: String, screenshot: Bool) -> Bool {
-        inputMethods.contains(method) || (method == "get_app_state" && screenshot)
+        inputMethods.contains(method) || screenChangingMethods.contains(method) || (method == "get_app_state" && screenshot)
     }
     func requireAllowed(_ method: String, screenshot: Bool = false) throws {
         if stopped && Self.requiresPermissionToContinue(method, screenshot: screenshot) { throw Self.stopError }

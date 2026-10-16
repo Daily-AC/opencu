@@ -489,9 +489,7 @@ final class MacObserver {
     private func capture(app: TargetApp, window: AXUIElement, windowID: CGWindowID?, bounds: CGRect) async throws -> (image: [String: Any], windowID: CGWindowID, width: Int, height: Int) {
         try requireCaptureAllowed?()
         try Task.checkCancellation()
-        guard CGPreflightScreenCaptureAccess() else {
-            throw OpenCUError("SCREEN_RECORDING_PERMISSION_REQUIRED", "Screenshots need macOS Screen Recording permission. Run opencu setup, grant access in System Settings, then reconnect. Text-only observations do not require Screen Recording.")
-        }
+        try EngineResponsibility.requireCapture()
         guard let windowID else {
             throw OpenCUError("WINDOW_ID_UNAVAILABLE", "The selected Accessibility window could not be linked to a WindowServer window. This macOS version may not support the required window identity lookup. Text-only observation remains available.")
         }
@@ -527,6 +525,7 @@ final class MacObserver {
         configuration.captureResolution = .best
         if #available(macOS 14.2, *) { configuration.includeChildWindows = false }
         let image: CGImage
+        try EngineResponsibility.requireCapture() // Recheck after asynchronous enumeration.
         do { image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration) }
         catch { throw OpenCUError("SCREENSHOT_FAILED", "Could not capture the selected window: \(error.localizedDescription)") }
         try requireCaptureAllowed?()

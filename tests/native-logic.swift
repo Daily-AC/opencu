@@ -6,12 +6,113 @@ import ApplicationServices
 // NSPasteboard.general and the production CLI entry point are never accessed.
 struct OpenCUInputLogicChecks {
     @MainActor static func main() {
-        do { try run() }
-        catch {
-            FileHandle.standardError.write(Data("FAIL: \(error)\n".utf8))
-            exit(1)
+        // Fake metadata child for offline posix_spawn transport checks. Never
+        // execute OnlineDisplays.current(), which would query the real desktop.
+        if CommandLine.arguments.dropFirst().first == "--fake-online-displays" {
+            switch CommandLine.arguments.last {
+            case "valid": print("{\"schemaVersion\":1,\"displays\":[]}")
+            case "failure": exit(23)
+            case "hang": Thread.sleep(forTimeInterval: 5)
+            case "oversized": print(String(repeating: "x", count: 70_000))
+            default: print("not JSON")
+            }
+            return
         }
+        Task { @MainActor in
+            do {
+                try run()
+                try await checkDisplayRemoval()
+                exit(0)
+            } catch {
+                FileHandle.standardError.write(Data("FAIL: \(error)\n".utf8))
+                exit(1)
+            }
+        }
+        RunLoop.main.run()
     }
+
+    @MainActor static func checkDisplayRemoval() async throws {
+        var checked = 0
+        func expect(_ value: Bool, _ message: String) throws {
+            guard value else { throw OpenCUError("TEST_FAILED", message) }
+            checked += 1
+        }
+        let main = OnlineDisplay(id: 1, frame: CGRect(x: 0, y: 0, width: 1728, height: 1117),
+                                 main: true, mirrored: false, pixelWidth: 3456, pixelHeight: 2234)
+        let agent = OnlineDisplay(id: 8, frame: CGRect(x: 1728, y: 1117, width: 1728, height: 1117),
+                                  main: false, mirrored: false, pixelWidth: 3456, pixelHeight: 2234)
+        let decoded = try OnlineDisplays.parse(OnlineDisplays.encode([agent, main]))
+        try expect(decoded == [main, agent], "Fresh display JSON preserves IDs, frames, flags and pixels and sorts by ID")
+        try expect(try OnlineDisplays.parse(Data("{\"schemaVersion\":1,\"displays\":[]}".utf8)).isEmpty, "Valid empty list is accepted")
+        let validJSON = String(decoding: try OnlineDisplays.encode([main]), as: UTF8.self)
+        let invalid = ["", "not JSON", "{\"error\":\"query failed\"}",
+                       validJSON.replacingOccurrences(of: "\"schemaVersion\":1", with: "\"schemaVersion\":2"),
+                       validJSON.replacingOccurrences(of: "\"id\":1", with: "\"id\":true"),
+                       validJSON.replacingOccurrences(of: "\"id\":1", with: "\"id\":4294967296"),
+                       validJSON.replacingOccurrences(of: "\"width\":1728", with: "\"width\":-1"),
+                       validJSON.replacingOccurrences(of: "\"main\":true", with: "\"main\":1"),
+                       validJSON + "garbage", String(repeating: " ", count: 65_537)]
+        for value in invalid {
+            do { _ = try OnlineDisplays.parse(Data(value.utf8)); throw OpenCUError("TEST_FAILED", "Invalid fresh list was accepted") }
+            catch let error as OpenCUError { try expect(error.code == "AGENT_DISPLAY_LIST_INVALID", "Reject malformed fresh lists") }
+        }
+        do { _ = try OnlineDisplays.parse(OnlineDisplays.encode([main, main])); throw OpenCUError("TEST_FAILED", "Duplicate IDs accepted") }
+        catch let error as OpenCUError { try expect(error.code == "AGENT_DISPLAY_LIST_INVALID", "Duplicate IDs refused") }
+
+        var time = 10.0, calls = 0, budgets: [Double] = []
+        let delayed = await DisplayRemovalPoll.wait(for: 8, started: time, now: { time }, sleep: { time += $0 }) { budget in
+            calls += 1; budgets.append(budget); time += 0.02
+            return calls < 3 ? [main, agent] : [main]
+        }
+        try expect(delayed.removed && delayed.checks == 3 && delayed.displays == [main], "Poll uses each injected fresh result, not the owner's stale list")
+        try expect(abs(delayed.elapsedMs - 560) < 0.01 && delayed.error == nil, "Measured time includes child-query latency and polling intervals")
+        try expect(budgets.allSatisfy { $0 > 0 && $0 <= 2 }, "Each child gets a bounded deadline")
+
+        time = 0; calls = 0
+        let gone = await DisplayRemovalPoll.wait(for: 8, started: 0, now: { time }, sleep: { _ in
+            throw OpenCUError("TEST_FAILED", "Should not sleep after confirmation")
+        }) { _ in calls += 1; return [main] }
+        try expect(gone.removed && gone.checks == 1 && calls == 1, "Immediate/duplicate removal completes in one check")
+
+        time = 0; budgets = []
+        let timeout = await DisplayRemovalPoll.wait(for: 8, started: 0, now: { time }, sleep: { time += $0 }) { budget in
+            budgets.append(budget); return [main, agent]
+        }
+        try expect(!timeout.removed && timeout.checks == 40 && abs(timeout.elapsedMs - 10_000) < 0.01,
+                   "Display still listed by fresh processes is a real ten-second failure")
+        try expect(timeout.displays == [main, agent] && timeout.error?.contains("still list display 8") == true, "Timeout keeps last fresh evidence")
+        try expect(budgets.last == 0.25, "Final process cannot exceed the overall deadline")
+
+        time = 0
+        let failed = await DisplayRemovalPoll.wait(for: 8, started: 0, now: { time }, sleep: { time += $0 }) { _ in
+            throw OpenCUError("AGENT_DISPLAY_LIST_INVALID", "malformed child JSON")
+        }
+        try expect(!failed.removed && failed.checks == 1 && failed.displays == nil && failed.error != nil,
+                   "Query/parsing failure cannot falsely confirm removal")
+        let expired = await DisplayRemovalPoll.wait(for: 8, started: 0, now: { 10 }, sleep: { _ in }) { _ in
+            throw OpenCUError("TEST_FAILED", "Must not launch a child after deadline")
+        }
+        try expect(!expired.removed && expired.checks == 0, "Expired budget launches no children")
+        time = 0
+        let late = await DisplayRemovalPoll.wait(for: 8, started: 0, now: { time }, sleep: { time += $0 }) { _ in
+            time = 11; return [main]
+        }
+        try expect(!late.removed && late.error?.contains("deadline") == true, "An over-budget lister cannot report timely removal")
+
+        let executable = CommandLine.arguments[0]
+        let bytes = try FreshOnlineDisplays.run(executable: executable, arguments: ["--fake-online-displays", "valid"], timeout: 2)
+        try expect(try OnlineDisplays.parse(bytes).isEmpty, "Actual posix_spawn pipe transports fake metadata without GUI access")
+        for mode in ["failure", "hang", "oversized"] {
+            do {
+                _ = try FreshOnlineDisplays.run(executable: executable, arguments: ["--fake-online-displays", mode], timeout: mode == "hang" ? 0.1 : 2)
+                throw OpenCUError("TEST_FAILED", "Child failure was ignored")
+            } catch let error as OpenCUError {
+                try expect(error.code == "AGENT_DISPLAY_LIST_FAILED", "Child exit, timeout and output limit fail closed and reap the child")
+            }
+        }
+        print("\(checked) fresh-display parsing, injected removal polling and fake-child transport checks passed; no display enumeration or GUI access")
+    }
+
     @MainActor static func run() throws {
         var checked = 0
         func expect(_ condition: @autoclosure () -> Bool, _ note: String) {
@@ -253,7 +354,11 @@ struct OpenCUInputLogicChecks {
             fails("STOPPED_BY_PERSON") { try presence.requireAllowed(method) }
         }
         fails("STOPPED_BY_PERSON") { try presence.requireAllowed("get_app_state", screenshot: true) }
-        for method in ["get_app_state", "doctor", "list_apps"] { try presence.requireAllowed(method) }
+        for method in ["experimental_agent_display_create", "experimental_agent_display_move_window"] {
+            fails("STOPPED_BY_PERSON") { try presence.requireAllowed(method) }
+        }
+        for method in ["get_app_state", "doctor", "list_apps", "experimental_agent_display_status",
+                       "experimental_agent_display_restore", "experimental_agent_display_destroy"] { try presence.requireAllowed(method) }
         presence.call(target: "other", now: 30); presence.pointer(now: 30)
         expect(presence.stopped && !presence.cursorVisible(at: 30), "Calls cannot clear the stop latch")
         presence.disconnect()
@@ -282,6 +387,96 @@ struct OpenCUInputLogicChecks {
             expect(PermissionStatus(accessibility: ax, screenRecording: screen, reconnect: reconnect).ready == (ax && screen && !reconnect),
                    "Ready requires both grants and no restart")
         } } }
+        for responsible: Int32? in [nil, -1, 0, 20] {
+            fails("CAPTURE_RESPONSIBILITY_UNVERIFIED") {
+                try CaptureSafety.requireVerifiedEngine(respawned: true, pid: 10, responsiblePID: responsible)
+            }
+        }
+        fails("CAPTURE_RESPONSIBILITY_UNVERIFIED") {
+            try CaptureSafety.requireVerifiedEngine(respawned: false, pid: 10, responsiblePID: 10)
+        }
+        try CaptureSafety.requireVerifiedEngine(respawned: true, pid: 10, responsiblePID: 10)
+        expect(true, "Only a respawned and OS-verified self-responsible engine qualifies")
+        fails("SCREEN_RECORDING_PERMISSION_REQUIRED") { try CaptureSafety.requireScreenRecordingGrant(false) }
+        try CaptureSafety.requireScreenRecordingGrant(true)
+        expect(true, "An existing grant allows capture by a verified engine")
+        let mainDisplay = CGRect(x: 0, y: 0, width: 1728, height: 1117)
+        let offstageFrame = CGRect(x: 160, y: 255, width: 700, height: 782)
+        typealias Candidate = AgentDisplayWindowIdentity.Candidate
+        let hidden = Candidate(id: 71, pid: 10, title: "Fixture", frame: offstageFrame, onScreen: false)
+        let hiddenMatch = try AgentDisplayWindowIdentity.resolve(pid: 10, title: "Fixture", frame: offstageFrame,
+            exactID: nil, candidates: [hidden])
+        expect(hiddenMatch.id == 71, "Offscreen windows remain eligible for identity matching")
+        let thumbnail = Candidate(id: 71, pid: 10, title: "Fixture", frame: CGRect(x: 16, y: 300, width: 80, height: 90), onScreen: true)
+        let transformed = try AgentDisplayWindowIdentity.resolve(pid: 10, title: "Fixture", frame: offstageFrame,
+            exactID: nil, candidates: [thumbnail])
+        expect(transformed.id == 71 && transformed.source.contains("unique-title"), "Unique PID/title bridges Stage Manager transformed geometry")
+        let unnamed = Candidate(id: 72, pid: 10, title: nil, frame: offstageFrame, onScreen: false)
+        let unnamedMatch = try AgentDisplayWindowIdentity.resolve(pid: 10, title: "Fixture", frame: offstageFrame,
+            exactID: nil, candidates: [unnamed])
+        expect(unnamedMatch.id == 72, "Unique bounds match when CG hides window title")
+        fails("AGENT_DISPLAY_WINDOW_ID_UNAVAILABLE") {
+            _ = try AgentDisplayWindowIdentity.resolve(pid: 11, title: "Fixture", frame: offstageFrame, exactID: 71, candidates: [hidden])
+        }
+        fails("AGENT_DISPLAY_AMBIGUOUS_WINDOW") {
+            _ = try AgentDisplayWindowIdentity.resolve(pid: 10, title: "Fixture", frame: offstageFrame, exactID: nil,
+                candidates: [hidden, Candidate(id: 72, pid: 10, title: "Fixture", frame: offstageFrame, onScreen: true)])
+        }
+        fails("AGENT_DISPLAY_WINDOW_ID_UNAVAILABLE") {
+            _ = try AgentDisplayWindowIdentity.resolve(pid: 10, title: "Other", frame: offstageFrame, exactID: nil, candidates: [hidden])
+        }
+        let exactMatch = try AgentDisplayWindowIdentity.resolve(pid: 10, title: "Other", frame: offstageFrame,
+            exactID: 71, candidates: [hidden])
+        expect(exactMatch.id == 71, "Exact AX identity wins over stale title")
+        let agentSize = CGSize(width: 1728, height: 1117)
+        let bottomRight = try AgentDisplayGeometry.placement(main: mainDisplay, others: [], size: agentSize)
+        expect(bottomRight.origin == CGPoint(x: 1728, y: 1117), "Agent display touches the main display at one corner")
+        let alternate = try AgentDisplayGeometry.placement(main: mainDisplay, others: [bottomRight], size: agentSize)
+        expect(alternate.origin == CGPoint(x: -1728, y: 1117), "Occupied corner uses a free corner without translating existing displays")
+        let edgeBlocked = try AgentDisplayGeometry.placement(main: mainDisplay,
+            others: [CGRect(x: 1728, y: 0, width: 1728, height: 1117)], size: agentSize)
+        expect(edgeBlocked.origin == CGPoint(x: -1728, y: 1117), "Do not expose a wide pointer crossing from another display")
+        let offset = try AgentDisplayGeometry.placement(main: CGRect(x: -100, y: -200, width: 1000, height: 700), others: [], size: agentSize)
+        expect(offset.origin == CGPoint(x: 900, y: 500), "Placement handles negative Quartz coordinates")
+        fails("AGENT_DISPLAY_GEOMETRY") {
+            _ = try AgentDisplayGeometry.placement(main: mainDisplay,
+                others: [CGRect(x: -2000, y: -2000, width: 6000, height: 6000)], size: agentSize)
+        }
+        fails("AGENT_DISPLAY_GEOMETRY") {
+            _ = try AgentDisplayGeometry.placement(main: mainDisplay, others: [], size: CGSize(width: 0, height: 20))
+        }
+        fails("AGENT_DISPLAY_GEOMETRY") {
+            _ = try AgentDisplayGeometry.placement(main: CGRect(x: Double.infinity, y: 0, width: 10, height: 10), others: [], size: agentSize)
+        }
+        let originalFrame = CGRect(x: 120, y: 80, width: 700, height: 782)
+        let movedFrame = try AgentDisplayGeometry.destination(original: originalFrame, display: bottomRight)
+        expect(movedFrame.size == originalFrame.size && bottomRight.contains(movedFrame), "Move preserves a fitting window's size")
+        let clamped = try AgentDisplayGeometry.destination(original: CGRect(x: 0, y: 0, width: 4000, height: 2000), display: bottomRight)
+        expect(bottomRight.contains(clamped) && clamped.width == 1600, "Oversized target is fitted within display margins")
+        var ledger = AgentDisplayLedger()
+        expect(ledger.cleanupSteps.isEmpty, "Cleanup before creation is idempotent")
+        try ledger.created(42)
+        expect(ledger.cleanupSteps == [.releaseDisplay], "Created display alone needs release")
+        fails("AGENT_DISPLAY_BUSY") { try ledger.created(43) }
+        let savedFrame = AgentDisplayLedger.SavedFrame(windowID: 21, displayID: 1, frame: originalFrame)
+        try ledger.remember(savedFrame)
+        expect(ledger.saved == savedFrame && ledger.restorePending, "Frame committed before any AX mutation")
+        fails("AGENT_DISPLAY_BUSY") {
+            try ledger.remember(.init(windowID: 22, displayID: 42, frame: movedFrame))
+        }
+        expect(ledger.saved == savedFrame, "Repeated/other-window move cannot overwrite original frame")
+        expect(ledger.cleanupSteps == [.restore, .releaseDisplay], "Disconnect and failure restore before release")
+        ledger.released() // Simulated failed restore: still release the display.
+        expect(ledger.restorePending && ledger.saved == savedFrame && ledger.cleanupSteps == [.restore], "Failed restoration retains recovery state after release")
+        fails("AGENT_DISPLAY_BUSY") { try ledger.created(43) }
+        ledger.restored()
+        ledger.released()
+        expect(ledger.cleanupSteps.isEmpty, "Successful restoration plus repeated destroy is idempotent")
+        try ledger.created(43)
+        expect(ledger.saved == nil, "Fresh display clears completed bookkeeping")
+        try ledger.remember(savedFrame)
+        ledger.restored()
+        expect(ledger.cleanupSteps == [.releaseDisplay], "Explicit restore prevents duplicate window writes at shutdown")
         // The same remote focus works in the foreground and must be refused in
         // the background. A host-PID panel proxy must also be refused; unknown
         // focus in ordinary apps keeps the existing PID-targeted path.
@@ -406,6 +601,6 @@ struct OpenCUInputLogicChecks {
         expect(NSFontManager.shared.traits(of: boldFont).contains(.boldFontMask), "Markdown RTF bold survives decode")
         expect(NSFontManager.shared.traits(of: italicFont).contains(.italicFontMask), "Markdown RTF italic survives decode")
         expect(String(data: markdown.html, encoding: .utf8)?.contains("https://example.com") == true, "Markdown HTML link")
-        print("\(checked) presence, stop policy, geometry, attachment identity, input parsing, UTF-16, AX type, and rich Markdown checks passed; no input or clipboard writes")
+        print("\(checked) presence, stop policy, agent-display geometry/cleanup, attachment identity, input parsing, UTF-16, AX type, and rich Markdown checks passed; no input, GUI actions or clipboard writes")
     }
 }
