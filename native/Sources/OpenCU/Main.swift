@@ -8,6 +8,7 @@ final class Engine {
     private let input = InputController()
     private var snapshot: WindowSnapshot?
     private let focusGuard = FocusGuard()
+    private let agentDisplay = AgentDisplay()
 
     private let presence = PresenceController()
     private var activeTask: Task<Any, Error>?
@@ -31,7 +32,15 @@ final class Engine {
         if activeSensitive { activeTask?.cancel() }
         focusGuard.cancel()
     }
-    func shutdown() { disconnected(); input.releaseFocus(); observer.restoreAccessibilityModes() }
+    func shutdown() async {
+        disconnected()
+        input.releaseFocus()
+        observer.restoreAccessibilityModes()
+        let cleanup = await agentDisplay.destroy()
+        if cleanup["ok"] as? Bool == false {
+            FileHandle.standardError.write(Data("Agent display cleanup errors: \(cleanup["cleanupErrors"] ?? []); removal: \(cleanup["lastRemoval"] ?? [:])\n".utf8))
+        }
+    }
 
     func dispatch(_ method: String, _ args: Arguments) async throws -> Any {
         let screenshot = args["includeScreenshot"] as? Bool ?? false
@@ -59,6 +68,24 @@ final class Engine {
     private func perform(_ method: String, _ args: Arguments) async throws -> Any {
         if method == "doctor" { return permissions() }
         if method == "list_apps" { return observer.listApps() }
+        if method.hasPrefix("experimental_agent_display_") {
+            if method == "experimental_agent_display_status" { return try agentDisplay.status() }
+            // Any attempted geometry mutation invalidates prior indexes and
+            // screenshot coordinates, including on partial failure.
+            snapshot = nil
+            input.releaseFocus()
+            focusGuard.cancel()
+            switch method {
+            case "experimental_agent_display_create": return try await agentDisplay.create()
+            case "experimental_agent_display_move_window":
+                try requireAccessibility()
+                let app = try await observer.resolveApp(requiredString(args, "app"), launch: false)
+                return try await agentDisplay.moveWindow(app)
+            case "experimental_agent_display_restore": return try await agentDisplay.restore()
+            case "experimental_agent_display_destroy": return await agentDisplay.destroy()
+            default: throw OpenCUError("METHOD_NOT_FOUND", "Unknown experimental agent display operation: \(method)")
+            }
+        }
         let actions = ["click", "drag", "press_key", "type_text", "paste", "scroll", "set_value", "select_text", "perform_secondary_action"]
         guard actions.contains(method) || ["get_app_state", "activate_app"].contains(method) else {
             throw OpenCUError("METHOD_NOT_FOUND", "Unknown OpenCU operation: \(method)")
@@ -123,7 +150,6 @@ final class Engine {
     }
 }
 
-private var ownsPermissions = false
 private var disclaimedChild: pid_t = 0
 
 /// macOS attributes privacy grants to the responsible process, normally the app
@@ -135,7 +161,7 @@ func runAsResponsibleProcess() -> Int32? {
     let marker = "OPENCU_RESPONSIBLE_PROCESS"
     if getenv(marker) != nil {
         unsetenv(marker)
-        ownsPermissions = true
+        EngineResponsibility.respawned = true
         return nil
     }
     typealias Disclaim = @convention(c) (UnsafeMutablePointer<posix_spawnattr_t?>, Int32) -> Int32
@@ -161,17 +187,19 @@ func runAsResponsibleProcess() -> Int32? {
 func permissions() -> [String: Any] {
     ["engine": "opencu", "version": "0.2.0", "platform": "macos",
      "accessibility": AXIsProcessTrusted(), "screenRecording": CGPreflightScreenCaptureAccess(), "screenLocked": desktopLocked(),
-     "ownPermissions": ownsPermissions,
+     "ownPermissions": EngineResponsibility.verified, "captureContext": EngineResponsibility.json,
      "transport": "stdio", "requiresAccount": false, "requiresOfficialRuntime": false]
 }
 
-func emit(_ value: Any) {
+@discardableResult
+func emit(_ value: Any) -> Bool {
     do {
         let data = try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys, .fragmentsAllowed])
-        FileHandle.standardOutput.write(data)
-        FileHandle.standardOutput.write(Data([10]))
+        try FileHandle.standardOutput.write(contentsOf: data + Data([10]))
+        return true
     } catch {
-        FileHandle.standardError.write(Data("OpenCU could not encode a response.\n".utf8))
+        try? FileHandle.standardError.write(contentsOf: Data("OpenCU could not encode or deliver a response; closing the connection.\n".utf8))
+        return false
     }
 }
 
@@ -179,6 +207,18 @@ func emit(_ value: Any) {
 struct OpenCUMain {
     @MainActor
     static func main() {
+        // Hidden one-shot metadata mode. Must precede NSApplication creation,
+        // responsibility respawn, doctor/setup, and all permission/AX calls.
+        if CommandLine.arguments.dropFirst() == ["--online-displays"] {
+            do {
+                let data = try OnlineDisplays.encode(OnlineDisplays.current())
+                try FileHandle.standardOutput.write(contentsOf: data + Data([10]))
+            } catch {
+                emit(["error": error.localizedDescription])
+                exit(1)
+            }
+            return
+        }
         if CommandLine.arguments.contains("--version") { print("opencu-engine 0.2.0"); return }
         // `opencu setup` already launches through LaunchServices with its own
         // responsibility. Only stdio/doctor need the disclaimed respawn.
@@ -204,7 +244,21 @@ struct OpenCUMain {
     }
 
     @MainActor private static func serve(_ engine: Engine) async {
+        // Run cleanup on the main actor, never inside a POSIX signal handler.
+        // Signals stop accepting queued work; an in-flight action unwinds first.
+        signal(SIGPIPE, SIG_IGN)
+        var stopping = false
+        var finishInput: (() -> Void)?
+        var signalSources: [DispatchSourceSignal] = []
+        for number in [SIGINT, SIGTERM, SIGHUP] {
+            signal(number, SIG_IGN)
+            let source = DispatchSource.makeSignalSource(signal: number, queue: .main)
+            source.setEventHandler { stopping = true; finishInput?() }
+            source.resume()
+            signalSources.append(source)
+        }
         let lines = AsyncStream<String> { continuation in
+            finishInput = { continuation.finish() }
             Task.detached {
                 while let line = readLine() { continuation.yield(line) }
                 continuation.finish()
@@ -212,6 +266,7 @@ struct OpenCUMain {
             }
         }
         for await line in lines {
+            if stopping { break }
             var id: Any = NSNull()
             do {
                 guard line.utf8.count <= 4_194_304,
@@ -223,13 +278,16 @@ struct OpenCUMain {
                 }
                 id = requestID
                 let result = try await engine.dispatch(method, args)
-                emit(["id": id, "result": result])
+                if !emit(["id": id, "result": result]) { break }
             } catch {
                 let failure = error as? OpenCUError ?? OpenCUError("ENGINE_ERROR", error.localizedDescription)
-                emit(["id": id, "error": ["code": failure.code, "message": failure.message]])
+                var errorJSON: Arguments = ["code": failure.code, "message": failure.message]
+                if let details = failure.details { errorJSON["data"] = details }
+                if !emit(["id": id, "error": errorJSON]) { break }
             }
         }
-        engine.shutdown()
+        await engine.shutdown()
+        for source in signalSources { source.cancel() }
     }
 }
 

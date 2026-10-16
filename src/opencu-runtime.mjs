@@ -9,7 +9,10 @@ const inputs = new Set(['click', 'drag', 'paste', 'press_key', 'type_text', 'scr
 
 export function toolError(error) {
   const code = error.code ?? 'RUNTIME_ERROR';
-  return { isError: true, content: [{ type: 'text', text: `${code}: ${error.message}` }], _meta: { 'opencu/error': code } };
+  return { isError: true, content: [{ type: 'text', text: `${code}: ${error.message}` }], _meta: {
+    'opencu/error': code,
+    ...(error.details ? { 'opencu/errorDetails': error.details } : {}),
+  } };
 }
 
 export function defaultEnginePath(root, platform = process.platform) {
@@ -57,7 +60,7 @@ export class OpenCURuntime {
           if (message.error.code === 'STOPPED_BY_PERSON') {
             this.#personStop ??= Object.assign(new Error(message.error.message), { code: message.error.code });
           }
-          request.reject(Object.assign(new Error(message.error.message), { code: message.error.code }));
+          request.reject(Object.assign(new Error(message.error.message), { code: message.error.code, details: message.error.data }));
         } else request.resolve(message.result);
       } catch { this.#fail(new Error('OpenCU returned invalid JSON.')); }
     });

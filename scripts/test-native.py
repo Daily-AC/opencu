@@ -28,6 +28,9 @@ def main() -> int:
             str(sources / "Keyboard.swift"),
             str(sources / "BackgroundFocus.swift"),
             str(sources / "InputController.swift"),
+            str(sources / "AgentDisplayLogic.swift"),
+            str(sources / "CaptureSafety.swift"),
+            str(sources / "OnlineDisplays.swift"),
             str(root / "tests" / "native-logic.swift"),
             "-o", str(executable),
         ], cwd=root)
