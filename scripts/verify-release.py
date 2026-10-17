@@ -234,9 +234,9 @@ def verify(archive, evidence):
                 capture_output=True, text=True, timeout=5)
             require(worker_environment.returncode == 0
                     and "HOME=" + str(isolated_home) in worker_environment.stdout.split(),
-                    "Empty HOME did not reach the LaunchServices worker")
+                    "Empty HOME did not reach the launchd worker")
             require(worker_environment.stdout.strip().startswith(str(engine) + " worker serve "),
-                    "LaunchServices started a different bundle than the extracted release")
+                    "launchd started a different executable than the extracted release")
             evidence["worker_received_empty_home"] = True
             evidence["worker_used_extracted_bundle"] = True
         finally:
@@ -252,7 +252,7 @@ def verify(archive, evidence):
         result = reply["result"]
         require(reply["id"] == 1 and result["engine"] == "opencu" and result["requiresAccount"] is False
                 and result["requiresOfficialRuntime"] is False, "Native doctor returned an unexpected result")
-        require(result["launchedBy"] == "LaunchServices" and result["workerPID"] == result["responsiblePID"]
+        require(result["launchedBy"] == "launchd" and result["workerPID"] == result["responsiblePID"]
                 and result["captureContext"]["verifiedSelfResponsible"] is True,
                 "Release worker is not independently self-responsible")
         evidence["native_doctor"] = {key: result[key] for key in ["engine", "version", "transport", "requiresAccount", "requiresOfficialRuntime", "launchedBy"]}

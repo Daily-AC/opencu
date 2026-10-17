@@ -36,7 +36,7 @@ enum EngineResponsibility {
     static var verified: Bool { worker && responsiblePID() == getpid() }
     static var json: Arguments {
         ["pid": getpid(), "responsiblePID": responsiblePID().map { $0 as Any } ?? NSNull(),
-         "workerMarkerSeen": worker, "launchedBy": worker ? "LaunchServices" : "direct", "verifiedSelfResponsible": verified,
+         "workerMarkerSeen": worker, "launchedBy": worker ? "launchd" : "direct", "verifiedSelfResponsible": verified,
          "capturePolicy": "verified-engine-and-existing-grant"]
     }
 

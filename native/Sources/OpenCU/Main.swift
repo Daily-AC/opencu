@@ -155,7 +155,7 @@ func permissions() -> [String: Any] {
      "accessibility": AXIsProcessTrusted(), "screenRecording": CGPreflightScreenCaptureAccess(), "screenLocked": desktopLocked(),
      "ownPermissions": EngineResponsibility.verified, "captureContext": EngineResponsibility.json,
      "workerPID": getpid(), "responsiblePID": EngineResponsibility.responsiblePID().map { $0 as Any } ?? NSNull(),
-     "launchedBy": EngineResponsibility.worker ? "LaunchServices" : "direct",
+     "launchedBy": EngineResponsibility.worker ? "launchd" : "direct",
      "transport": "stdio", "requiresAccount": false, "requiresOfficialRuntime": false]
 }
 
