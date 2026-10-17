@@ -3,14 +3,16 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import path from 'node:path';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { OpenCURuntime, toolError } from './opencu-runtime.mjs';
 import { normalizeArguments } from './tool-arguments.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const { version } = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'));
 const server = new McpServer(
-  { name: 'opencu', version: '0.2.0' },
-  { instructions: 'Control desktop applications with the independent OpenCU engine. Read get_app_state before input. Use observed element indexes; request screenshots before coordinate input. Actions normally return updated state, and run_actions executes a short known sequence before one final read. An unconfirmed AX action instead returns an unknown-outcome notice and stops the batch; explicitly read get_app_state before continuing. Use paste for Unicode or multiline text. Verify the actual result before reporting success. Activate an app only when foreground focus is needed. Do not operate the same app concurrently from different sessions. Respect user authorization and your host approval rules. Input is never automatically replayed. On STOPPED_BY_PERSON the person stopped this macOS connection: never reconnect or retry on your own; wait for explicit permission. Text-only state may continue. On macOS, input normally runs in the background. On Windows, every input requires foreground focus; stop on PERSON_ACTIVE and never retry it. Windows phase 1 supports plain-text paste, but not drag or select_text. OpenCU runs locally, respects OS permissions, and requires no account or particular agent identity.' },
+  { name: 'opencu', version },
+  { instructions: 'Control desktop applications with the independent OpenCU engine. Read get_app_state before input. Use observed element indexes; request screenshots before coordinate input. Actions normally return updated state, and run_actions executes a short known sequence before one final read. An unconfirmed AX action instead returns an unknown-outcome notice and stops the batch; explicitly read get_app_state before continuing. Use paste for Unicode or multiline text. Verify the actual result before reporting success. Activate an app only when foreground focus is needed. Do not operate the same app concurrently from different sessions. Respect user authorization and your host approval rules. Input is never automatically replayed. On STOPPED_BY_PERSON the person stopped this macOS connection: never reconnect or retry on your own; wait for explicit permission. Text-only state may continue. On macOS, input normally runs in the background. On Windows, every input requires foreground focus; stop on PERSON_ACTIVE and never retry it. Windows supports drag and plain-text paste, but not select_text. Physical Escape latches USER_STOPPED on Windows: never reconnect or retry without explicit permission. OpenCU runs locally, respects OS permissions, and requires no account or particular agent identity.' },
 );
 const runtime = new OpenCURuntime({ root });
 
@@ -38,7 +40,7 @@ const definitions = {
     schema: { app, ...point, mouse_button: z.enum(['left', 'right', 'middle', 'l', 'r', 'm']).optional(), click_count: z.number().int().min(1).max(3).optional(), key: z.string().trim().min(1).optional().describe('Modifier chord held during the click, such as Shift or super.'), duration },
   },
   drag: {
-    description: 'Not yet supported on Windows. Drag inside the fresh app-window screenshot and return a new screenshot and state. To crop a side while preserving height: zoom out for margins, Select All, then move only the middle left/right selection handle horizontally. Keep the existing top/bottom selection edges; verify dimensions in Inspector. Window borders resize the window.',
+    description: 'Drag inside the fresh app-window screenshot and return a new screenshot and state. To crop a side while preserving height: zoom out for margins, Select All, then move only the middle left/right selection handle horizontally. Keep the existing top/bottom selection edges; verify dimensions in Inspector. Window borders resize the window.',
     schema: { app, from_x: z.number().finite(), from_y: z.number().finite(), to_x: z.number().finite(), to_y: z.number().finite() },
   },
   paste: {

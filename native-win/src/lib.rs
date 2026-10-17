@@ -95,6 +95,33 @@ pub struct Screenshot {
     pub height: u32,
     pub dpi: u32,
 }
+/// A left-button drag in the current screenshot's pixel coordinates.
+#[derive(Debug, Clone, Copy)]
+pub struct Drag {
+    pub from: (f64, f64),
+    pub to: (f64, f64),
+}
+impl Drag {
+    pub fn parse(args: &Value) -> Result<Self> {
+        if ["element_index", "x", "y", "mouse_button", "key", "duration"]
+            .iter().any(|key| args.get(key).is_some())
+        {
+            return Err(Error::new("INVALID_ARGUMENT", "drag takes only from_x, from_y, to_x and to_y coordinates"));
+        }
+        Ok(Self {
+            from: (number(args, "from_x")?, number(args, "from_y")?),
+            to: (number(args, "to_x")?, number(args, "to_y")?),
+        })
+    }
+    pub fn points(self, image: Option<Screenshot>, bounds: Rect, dpi: u32)
+        -> Result<[(i32, i32); 2]>
+    {
+        let shot = image.ok_or_else(|| Error::new("SCREENSHOT_REQUIRED",
+            "Drag requires the latest successful screenshot from this engine connection"))?;
+        Ok([shot.point(bounds, dpi, self.from.0, self.from.1)?,
+            shot.point(bounds, dpi, self.to.0, self.to.1)?])
+    }
+}
 impl Screenshot {
     pub fn point(self, current: Rect, dpi: u32, x: f64, y: f64) -> Result<(i32, i32)> {
         if current != self.bounds || dpi != self.dpi {
@@ -608,3 +635,54 @@ mod clipboard_tests {
 
 #[cfg(test)]
 mod observation_tests;
+
+#[cfg(test)]
+mod drag_tests {
+    use super::*;
+
+    fn args() -> Value {
+        json!({"from_x":0.0,"from_y":1.0,"to_x":99.9,"to_y":79.0})
+    }
+    fn image() -> Screenshot {
+        Screenshot { bounds: Rect { x: -200, y: 40, width: 100, height: 80 },
+            width: 100, height: 80, dpi: 120 }
+    }
+    #[test]
+    fn drag_validates_both_endpoints_and_physical_pixels() {
+        let shot = image();
+        assert_eq!(Drag::parse(&args()).unwrap().points(Some(shot), shot.bounds, 120).unwrap(),
+            [(-200, 41), (-101, 119)]);
+        for (key, value) in [("from_x", -1.0), ("from_y", 80.0),
+            ("to_x", 100.0), ("to_y", -0.1)] {
+            let mut a = args(); a[key] = json!(value);
+            assert_eq!(Drag::parse(&a).unwrap().points(Some(shot), shot.bounds, 120).unwrap_err().code,
+                "INVALID_COORDINATE");
+        }
+        let invalid = Drag { from: (0.0, 1.0), to: (f64::INFINITY, f64::NAN) };
+        assert_eq!(invalid.points(Some(shot), shot.bounds, 120).unwrap_err().code, "INVALID_COORDINATE");
+    }
+    #[test]
+    fn drag_rejects_missing_wrong_types_and_incompatible_arguments() {
+        for key in ["from_x", "from_y", "to_x", "to_y"] {
+            for value in [Value::Null, json!("5"), json!(true)] {
+                let mut a = args(); a[key] = value;
+                assert_eq!(Drag::parse(&a).unwrap_err().code, "INVALID_ARGUMENT");
+            }
+            let mut a = args(); a.as_object_mut().unwrap().remove(key);
+            assert_eq!(Drag::parse(&a).unwrap_err().code, "INVALID_ARGUMENT");
+        }
+        for key in ["element_index", "x", "y", "mouse_button", "key", "duration"] {
+            let mut a = args(); a[key] = json!(1);
+            assert_eq!(Drag::parse(&a).unwrap_err().code, "INVALID_ARGUMENT");
+        }
+    }
+    #[test]
+    fn drag_requires_fresh_unchanged_screenshot() {
+        let drag = Drag::parse(&args()).unwrap(); let shot = image();
+        assert_eq!(drag.points(None, shot.bounds, 120).unwrap_err().code, "SCREENSHOT_REQUIRED");
+        assert_eq!(drag.points(Some(shot), shot.bounds, 144).unwrap_err().code, "STALE_SCREENSHOT");
+        for bounds in [Rect { x: -199, ..shot.bounds }, Rect { width: 101, ..shot.bounds }] {
+            assert_eq!(drag.points(Some(shot), bounds, 120).unwrap_err().code, "STALE_SCREENSHOT");
+        }
+    }
+}

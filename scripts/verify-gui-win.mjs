@@ -183,8 +183,21 @@ try {
   assert.equal((await fixtureState()).clicks, 2);
   checks.push('engine refuses moved-window coordinates before input');
   await imageState(title);
-  await call('drag', title, { from_x: 1, from_y: 1, to_x: 2, to_y: 2 }, 'UNSUPPORTED_ON_WINDOWS');
-  checks.push('unsupported operation refused');
+  const dragPoint = await fixtureState();
+  const dragged = await call('drag', title, { from_x: dragPoint.dragFromX, from_y: dragPoint.dragFromY,
+    to_x: dragPoint.dragToX, to_y: dragPoint.dragToY });
+  assert.ok(dragged.content.some(c => c.type === 'image'), 'Drag returns a fresh screenshot');
+  await waitFor(async () => (await fixtureState()).drags === 1, 'fixture received drag release');
+  const dragResult = await fixtureState();
+  assert.equal(dragResult.dragDownX, 20);
+  assert.equal(dragResult.dragUpX - dragResult.dragDownX, dragPoint.dragDistance);
+  assert.equal(dragResult.dragUpY, dragResult.dragDownY);
+  assert.equal(dragResult.dragHeld, true);
+  assert.ok(dragResult.dragMoves > 1, 'Multiple moves while the left button was held');
+  checks.push('fresh screenshot drag holds left button along path and releases at endpoint');
+  await imageState(title);
+  await call('select_text', title, { element_index: index('Fixture notes'), text: 'fixture' }, 'UNSUPPORTED_ON_WINDOWS');
+  checks.push('unsupported text selection refused');
 
   await fixtureCommand('owned');
   const family = await fixtureState();
