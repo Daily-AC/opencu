@@ -290,10 +290,14 @@ steps: the open panel's identity was missing from the tree; `press_key` after
 cancelling the panel reported STALE_APPLICATION for the unchanged target PID; the
 target became frontmost after AXPress Save on the save sheet. The previous
 disclaimed-child model passed 18/18 in the same session, external display
-attached. An app that LaunchServices launches holds activation rights that the
-panel service honoured when returning focus; that turned OpenCU's background
-focus into real activation. The worker is now a per-connection Interactive
-launchd job instead: responsible PID itself, its own coalition, main thread at
+attached, so LaunchServices activation rights were suspected. Later the previous
+model run unclamped (as an Interactive launchd job) failed at the save sheet too:
+the activation was a pre-existing race hidden by the caller's utility throttling.
+The host kept the synthetic activation from the file-name click; when the panel
+closed AppKit restored it as the active app. Panel controls now release and send
+no synthetic activation (9 of 10 GUI runs passed afterwards). The LaunchServices
+worker was not re-tested after that fix. The worker is a per-connection Interactive
+launchd job: responsible PID itself, its own coalition, main thread at
 priority 31 with the caller clamped to 20, worker exit 0.13 s after relay
 SIGKILL, ten starts without a foreground change, release check 3/3.
 
