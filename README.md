@@ -7,7 +7,7 @@ one in front. It needs no account, model credentials or proprietary runtime: any
 MCP client can start it, and the calling agent supplies the model and decides
 what to do.
 
-**Status (v0.2.0):** the first macOS release, built from source on Apple silicon.
+**Status (v0.3.0):** macOS source builds and an unsigned Windows x64 package.
 On the development Mac, 9 of the last 10 runs of its 18-check background GUI
 suite passed, and it has completed a handful of real tasks. It has not been
 benchmarked at scale. Read [Limitations](#limitations) before relying on it.
@@ -44,7 +44,7 @@ npm run build
 ./bin/opencu doctor
 ```
 
-There is no prebuilt download. OpenCU is not notarized, so Gatekeeper would
+There is no prebuilt macOS download. OpenCU is not notarized, so Gatekeeper would
 block a downloaded build. The first `npm run build` creates a signing identity
 for this Mac in `~/Library/Application Support/OpenCU/signing`, in its own
 keychain; the login keychain is not modified. Every build is signed with it, so
@@ -201,14 +201,14 @@ setups with external monitors are untested. See the [agent display probe](docs/a
 ## Windows preview
 
 The Rust engine in `native-win/` implements UI Automation trees, window capture,
-indexed and coordinate clicks, Unicode typing, plain-text paste, keys, scroll,
+indexed and coordinate clicks, drag, Unicode typing, plain-text paste, keys, scroll,
 values and secondary actions. Unlike macOS, it works in the foreground: input
 brings the target window to the front, and Windows can refuse that activation.
 Human keyboard or mouse activity stops the current call, physical Esc disables
 input for the rest of the connection, and a banner excluded from capture shows
 that OpenCU is operating.
 
-Missing: drag, text selection and an installer. Elevated windows, UAC prompts
+Missing: text selection. Elevated windows, UAC prompts
 and secure desktops are refused (`ELEVATED_TARGET`, `SCREEN_LOCKED`); these
 refusals have not been checked on a real desktop yet. Controls without accessible
 names, common in media players, are listed with an index and bounds but need a
@@ -216,18 +216,59 @@ screenshot to tell apart. Acceptance so far is disposable
 WinForms and Chrome fixtures on Windows 11 x64
 ([evidence](evidence/opencu-windows-gui-2026-10-13.json)).
 
+### Install
+
+In Windows PowerShell 5.1 or PowerShell 7, as the signed-in user:
+
+```powershell
+irm https://github.com/Daily-AC/opencu/releases/latest/download/install.ps1 | iex
+```
+
+Installs the engine, Node.js 22 and MCP dependencies into
+`%LOCALAPPDATA%\OpenCU`, without administrator rights or a separate Node install.
+The installer verifies the release's SHA-256, replaces an existing install and
+writes `opencu.json` last for hosts to discover. Close agent sessions using OpenCU
+before updating. It prints the installed version, manifest path and desktop status.
+The package is unsigned; SmartScreen or Defender may warn or block it. Check the
+release source and your local policy; the installer does not disable protection.
+To uninstall, close OpenCU sessions and delete `%LOCALAPPDATA%\OpenCU`.
+
+### Build and verify
+
 The executable is cross-compiled on a Mac with Rust's `x86_64-pc-windows-gnu`
 target and MinGW-w64 (`x86_64-w64-mingw32-gcc` on PATH):
 
 ```sh
 npm ci --ignore-scripts
 npm run build:win
+npm run package:win
 ```
 
-Copy `.build/win/opencu-engine.exe` to the same path in a Windows checkout with
-Node 22+ and its npm dependencies, then run `bin\opencu.cmd doctor` or
-`bin\opencu.cmd mcp`. Programs that start OpenCU on an agent's behalf, such as
-remote-control services, follow the [host integration contract](docs/host-integration.md). Error codes, embedding and safety behavior are in the
+`npm run package:win` produces `dist/opencu-win-x64.zip`, its `.sha256` and
+`dist/install.ps1`. It requires a fresh engine build, Python 3.11+, npm, Cargo,
+Rust's standard-library copyright file (rust-docs) and MinGW-w64's `COPYING` in its
+installation prefix (or the parent of a Homebrew toolchain prefix). It downloads pinned official Node v22.22.0 and installs only
+locked production npm dependencies; downloads and installs fail without retries.
+The resulting package needs no checkout, npm, compiler, git or network at runtime.
+
+On Windows, with the zip and generated installer together:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify-package-win.ps1 -Zip .\dist\opencu-win-x64.zip
+& ([ScriptBlock]::Create((Get-Content .\dist\install.ps1 -Raw))) -LocalZip (Resolve-Path .\dist\opencu-win-x64.zip).Path
+& "$env:LOCALAPPDATA\OpenCU\bin\opencu.cmd" doctor
+```
+
+The verifier installs into temporary `LOCALAPPDATA`, launches the manifest's MCP
+command without a shell, checks its version and 13 tools, and calls only
+`list_apps`. It also accepts `-InstallDirectory "$env:LOCALAPPDATA\OpenCU"`.
+The next command installs for the current user using the same script as `irm | iex`,
+with a local zip and no download. Drag has unit and cross-compile coverage; its
+new GUI fixture check still needs Windows acceptance.
+
+Programs that start OpenCU on an agent's behalf, such as remote-control services,
+follow the [host integration contract](docs/host-integration.md). Error codes,
+embedding and safety behavior are in the
 [Windows contract](docs/windows-engine-contract.md).
 
 ## Development
