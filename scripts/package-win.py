@@ -127,6 +127,10 @@ def dependency_files(deps, packages):
             if any((Path(base) / d).is_symlink() for d in dirs):
                 raise ValueError(f'Symlink in dependency: {name}')
             for file in sorted(files):
+                # TypeScript sources, typings and source maps are not loaded at runtime;
+                # they double the file count and push paths toward MAX_PATH.
+                if file.endswith(('.ts', '.mts', '.cts', '.map')):
+                    continue
                 path = Path(base) / file
                 if path.is_symlink() or not path.is_file():
                     raise ValueError(f'Non-regular dependency file: {path}')
