@@ -544,3 +544,9 @@ cross-process stacking beneath covering windows, real AX title/toolbar placement
 secure-focus metadata, click-through behavior, fade/Stop timing and no-activation
 behavior still require reviewer checks on disposable fixtures. These new checks
 must not be inferred from the earlier cursor evidence.
+
+Reviewer live check, 2026-10-15 16:3x, on a temporary TextEdit document: the badge
+appeared at the right of the title bar during clicks and typing, turned grey with
+the stopped text after Stop, and the engine's own screenshot contained neither the
+cursor nor the badge. Stacking beneath covering windows and click-through were
+not checked.
