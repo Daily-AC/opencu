@@ -1,0 +1,125 @@
+param([string]$LocalZip)
+
+# This script also runs through Invoke-Expression in Windows PowerShell 5.1.
+# Keep it ASCII and scope preferences/cleanup to this scriptblock. Never exit.
+& {
+    param([string]$LocalZip)
+    $ErrorActionPreference = 'Stop'
+    $ProgressPreference = 'SilentlyContinue'
+    $version = '@@VERSION@@'
+    $assetUrl = '@@ASSET_URL@@'
+    $expectedHash = '@@SHA256@@'
+    if ($env:OS -ne 'Windows_NT' -or -not [Environment]::Is64BitOperatingSystem) {
+        throw 'OpenCU requires Windows x64.'
+    }
+    if (-not $env:LOCALAPPDATA -or -not [IO.Path]::IsPathRooted($env:LOCALAPPDATA)) {
+        throw 'LOCALAPPDATA must be an absolute path for the signed-in user.'
+    }
+    $install = [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'OpenCU'))
+    $token = [Guid]::NewGuid().ToString('N')
+    $download = Join-Path ([IO.Path]::GetTempPath()) "opencu-$token.zip"
+    $stage = Join-Path $env:LOCALAPPDATA "OpenCU-stage-$token"
+    $backup = Join-Path $env:LOCALAPPDATA "OpenCU-previous-$token"
+    $oldMoved = $false
+    $newMoved = $false
+    $committed = $false
+    $locks = New-Object 'System.Collections.Generic.List[System.IDisposable]'
+    $oldTls = [Net.ServicePointManager]::SecurityProtocol
+    # Serialize updates within the user's session, including verification runs.
+    $mutex = New-Object Threading.Mutex($false, 'Local\OpenCU-Package-Installer')
+    $acquired = $false
+    try {
+        try { $acquired = $mutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $acquired = $true }
+        if (-not $acquired) { throw 'Another OpenCU installation is running. Try again after it finishes.' }
+        if ($LocalZip) {
+            Copy-Item -LiteralPath $LocalZip -Destination $download
+        } else {
+            [Net.ServicePointManager]::SecurityProtocol = $oldTls -bor [Net.SecurityProtocolType]::Tls12
+            Invoke-WebRequest -UseBasicParsing -Uri $assetUrl -OutFile $download
+        }
+        $actualHash = (Get-FileHash -LiteralPath $download -Algorithm SHA256).Hash
+        if ($actualHash -ne $expectedHash) {
+            throw "OpenCU SHA-256 mismatch. Nothing was installed. Expected $expectedHash; got $actualHash."
+        }
+        New-Item -ItemType Directory -Path $stage -Force | Out-Null
+        Expand-Archive -LiteralPath $download -DestinationPath $stage
+        foreach ($name in @('node\node.exe', 'node\LICENSE', 'src\server.mjs', 'package.json', '.build\win\opencu-engine.exe', 'bin\opencu.cmd')) {
+            if (-not (Test-Path -LiteralPath (Join-Path $stage $name) -PathType Leaf)) {
+                throw "OpenCU package is incomplete: $name. Nothing was installed."
+            }
+        }
+        $package = Get-Content -LiteralPath (Join-Path $stage 'package.json') -Raw | ConvertFrom-Json
+        if ($package.name -ne 'opencu' -or $package.version -ne $version -or (Test-Path -LiteralPath (Join-Path $stage 'opencu.json'))) {
+            throw 'OpenCU package metadata does not match this installer. Nothing was installed.'
+        }
+        try {
+            if (Test-Path -LiteralPath $install) {
+                # Deny new readers/writers until commit, but permit our directory rename.
+                # Loaded executables cannot be opened for writing, so active sessions fail here.
+                foreach ($file in Get-ChildItem -LiteralPath $install -File -Recurse -Force) {
+                    $locks.Add([IO.File]::Open($file.FullName, [IO.FileMode]::Open, [IO.FileAccess]::ReadWrite, [IO.FileShare]::Delete))
+                }
+                [IO.Directory]::Move($install, $backup)
+                $oldMoved = $true
+            }
+            [IO.Directory]::Move($stage, $install)
+            $newMoved = $true
+            $manifest = '@@MANIFEST_JSON@@' | ConvertFrom-Json
+            $manifest.mcp.command = Join-Path $install $manifest.mcp.command
+            $manifest.mcp.args = @((Join-Path $install $manifest.mcp.args[0]))
+            $manifestPath = Join-Path $install 'opencu.json'
+            # The discovery marker is the final write, atomically renamed into place.
+            $manifestTemp = Join-Path $install 'opencu.json.tmp'
+            [IO.File]::WriteAllText($manifestTemp, ($manifest | ConvertTo-Json -Depth 4), (New-Object Text.UTF8Encoding($false)))
+            [IO.File]::Move($manifestTemp, $manifestPath)
+            $committed = $true
+        } catch {
+            foreach ($handle in $locks) { $handle.Dispose() }; $locks.Clear()
+            if ($newMoved) { [IO.Directory]::Move($install, $stage) }
+            if ($oldMoved) { [IO.Directory]::Move($backup, $install); $oldMoved = $false }
+            throw "OpenCU could not replace the installation; the previous install was preserved. Close agent sessions that use OpenCU and try again. $($_.Exception.Message)"
+        } finally {
+            foreach ($handle in $locks) { $handle.Dispose() }; $locks.Clear()
+        }
+        if ($oldMoved) {
+            try { Remove-Item -LiteralPath $backup -Recurse -Force } catch {
+                Write-Warning "OpenCU is installed. The previous files remain at $backup and can be deleted after closing old sessions."
+            }
+        }
+        Write-Host "Installed OpenCU $version"
+        Write-Host "Manifest: $manifestPath"
+        # Read-only doctor, with redirected handles for the GUI-subsystem engine.
+        $doctorProcess = New-Object Diagnostics.Process
+        try {
+            $doctorProcess.StartInfo.FileName = Join-Path $install '.build\win\opencu-engine.exe'
+            $doctorProcess.StartInfo.Arguments = '--doctor'
+            $doctorProcess.StartInfo.UseShellExecute = $false
+            $doctorProcess.StartInfo.CreateNoWindow = $true
+            $doctorProcess.StartInfo.RedirectStandardOutput = $true
+            $doctorProcess.StartInfo.RedirectStandardError = $true
+            $doctorProcess.StartInfo.StandardOutputEncoding = New-Object Text.UTF8Encoding($false)
+            [void]$doctorProcess.Start()
+            $stdout = $doctorProcess.StandardOutput.ReadToEndAsync()
+            $stderr = $doctorProcess.StandardError.ReadToEndAsync()
+            if (-not $doctorProcess.WaitForExit(15000)) { $doctorProcess.Kill(); throw 'Doctor timed out.' }
+            $doctor = $stdout.GetAwaiter().GetResult() | ConvertFrom-Json
+            if ($doctorProcess.ExitCode -ne 0 -or $doctor.version -ne $version) { throw 'Doctor failed or returned a different engine version.' }
+            if ($doctor.desktopAccessible) { Write-Host 'Desktop accessible: yes' }
+            else { Write-Host ('Desktop accessible: no - ' + ($doctor.desktopError | ConvertTo-Json -Compress)) }
+        } catch {
+            Write-Warning "OpenCU is installed, but desktop accessibility could not be checked: $($_.Exception.Message)"
+        } finally { $doctorProcess.Dispose() }
+    } finally {
+        [Net.ServicePointManager]::SecurityProtocol = $oldTls
+        foreach ($handle in $locks) { $handle.Dispose() }
+        foreach ($temporary in @($download, $stage)) {
+            if (Test-Path -LiteralPath $temporary) { Remove-Item -LiteralPath $temporary -Recurse -Force -ErrorAction SilentlyContinue }
+        }
+        # Never delete the backup on a failed rollback.
+        if (-not $committed -and (Test-Path -LiteralPath $backup)) {
+            Write-Warning "Previous installation retained at $backup. Restore it before using OpenCU."
+        }
+        if ($acquired) { $mutex.ReleaseMutex() }
+        $mutex.Dispose()
+    }
+} $LocalZip

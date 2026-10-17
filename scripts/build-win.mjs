@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process';
-import { mkdir, copyFile } from 'node:fs/promises';
+import { mkdir, copyFile, readFile, readdir, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -15,4 +16,14 @@ if (result.error) throw result.error;
 if (result.status !== 0) process.exit(result.status ?? 1);
 await mkdir(path.join(root, '.build/win'), { recursive: true });
 await copyFile(path.join(root, 'native-win/target', target, 'release/opencu-engine.exe'), path.join(root, '.build/win/opencu-engine.exe'));
+const sources = ['native-win/Cargo.toml', 'native-win/Cargo.lock', 'scripts/build-win.mjs',
+  ...(await readdir(path.join(root, 'native-win/src'), { recursive: true }))
+    .filter(name => name.endsWith('.rs')).map(name => `native-win/src/${name.replaceAll('\\', '/')}`)];
+const hash = async name => createHash('sha256').update(await readFile(path.join(root, name))).digest('hex');
+const sourceFiles = {};
+for (const name of sources.sort()) sourceFiles[name] = await hash(name);
+await writeFile(path.join(root, '.build/win/engine-manifest.json'), JSON.stringify({
+  version: JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version,
+  executable_sha256: await hash('.build/win/opencu-engine.exe'), source_files: sourceFiles,
+}, null, 2) + '\n');
 console.log('Built .build/win/opencu-engine.exe');
