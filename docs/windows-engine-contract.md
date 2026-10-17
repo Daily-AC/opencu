@@ -34,7 +34,7 @@ Example requests (send one line, await its reply before sending the next):
 shared engine contract. An input response is `{ok:true, app}`; it is not a new
 observation. The MCP server supplies post-action observation, diffs, waits and
 `run_actions` batching. A non-Node host must implement those conveniences itself.
-`doctor` (or `--doctor`) reports platform, executable path, desktop accessibility,
+`doctor` (or `--doctor`) reports version, platform, executable path, desktop accessibility,
 foreground-only operation, and no account/proprietary-runtime requirement.
 
 ## Observations and targeting
@@ -260,12 +260,24 @@ character; use `press_key` for key-event semantics. Native Edit and Chrome input
 acceptance cover this distinction.
 
 Supported inputs: click (Invoke, Toggle, SelectionItem or Legacy default action,
-then centre-click fallback), Unicode typing, plain-text paste, xdotool-style keys,
+then centre-click fallback), coordinate drag, Unicode typing, plain-text paste, xdotool-style keys,
 vertical/horizontal wheel, Value/RangeValue and exposed secondary actions. `super`
 means Windows, `ctrl` means Control; modifiers use the target keyboard layout.
 `click.key` accepts modifiers only. Scroll approximates a page with three wheel
 detents (user wheel settings still apply), limited to 100 pages per request.
-`drag`, `select_text`, HTML and Markdown paste return UNSUPPORTED_ON_WINDOWS.
+`select_text`, HTML and Markdown paste return UNSUPPORTED_ON_WINDOWS.
+
+`drag` takes `app`, `from_x`, `from_y`, `to_x`, `to_y`: finite pixel coordinates
+inside the latest fresh screenshot of the same window. Both endpoints are checked
+before and after activation and during the path; a move, resize or DPI change
+returns `STALE_SCREENSHOT`. It moves to the start, holds the left button through
+20 linear steps (about 300 ms), then releases at the destination. Every move checks
+foreground ownership, point ownership and the same safety guard as coordinate
+click. No duration, button or modifier options are added. All early returns attempt
+to release the held button, including `PERSON_ACTIVE` and `USER_STOPPED`; completed
+input is never replayed. The MCP layer returns a new screenshot after success.
+The disposable WinForms fixture records both endpoints and held-button movement;
+this new check still requires Windows desktop acceptance for v0.3.0.
 
 Paste snapshots every copyable HGLOBAL clipboard format before mutation. Temporary
 paste content is marked ExcludeClipboardContentFromMonitorProcessing so Windows

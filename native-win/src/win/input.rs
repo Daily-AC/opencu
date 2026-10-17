@@ -4,7 +4,7 @@ use super::{
     safety::{Guard, INPUT_TAG},
 };
 use opencu_engine::{
-    absolute_point, duration, number, parse_key, string, Chord, Error, Key, Rect, Result,
+    absolute_point, duration, number, parse_key, string, Chord, Drag, Error, Key, Rect, Result,
     Screenshot,
 };
 use serde_json::Value;
@@ -305,8 +305,9 @@ pub unsafe fn perform(
     image: Option<Screenshot>,
     g: &mut Guard<'_>,
 ) -> Result<()> {
+    let drag = if method == "drag" { Some(Drag::parse(args)?) } else { None };
     let indexed_arg = args.get("element_index").is_some();
-    let coordinate = args.get("x").is_some() || args.get("y").is_some();
+    let coordinate = drag.is_some() || args.get("x").is_some() || args.get("y").is_some();
     if ["click", "scroll"].contains(&method) && indexed_arg == coordinate {
         return Err(invalid("Supply either element_index or both x and y"));
     }
@@ -332,6 +333,9 @@ pub unsafe fn perform(
     let window = &target;
     // Validate before activation (which may move/restore the window), and again after.
     let screenshot_point = || -> Result<Option<(i32, i32)>> {
+        if let Some(drag) = drag {
+            return Ok(Some(drag.points(image, window.capture_rect()?, window.dpi())?[0]));
+        }
         if coordinate {
             let shot=image.ok_or_else(||Error::new("SCREENSHOT_REQUIRED","Coordinate input requires the latest successful screenshot from this engine connection"))?;
             Ok(Some(shot.point(
@@ -409,6 +413,30 @@ pub unsafe fn perform(
     screenshot_point()?;
     g.check()?;
     match method {
+        "drag" => {
+            let drag = drag.unwrap();
+            let [start, end] = drag.points(image, window.capture_rect()?, window.dpi())?;
+            pointer(start, window, g)?;
+            screenshot_point()?;
+            let mut held = Held::new();
+            held.down(mouse(MOUSEEVENTF_LEFTDOWN, 0, 0, 0),
+                mouse(MOUSEEVENTF_LEFTUP, 0, 0, 0), g)?;
+            // Match the shared drag's 20-step, approximately 300 ms path.
+            // Held's destructor releases on every early return, even after Stop.
+            for step in 1..=20 {
+                g.pause(0.015)?;
+                screenshot_point()?; // Both endpoints, position, size and DPI.
+                let fraction = step as f64 / 20.0;
+                let point = (
+                    (start.0 as f64 + (end.0 as f64 - start.0 as f64) * fraction).round() as i32,
+                    (start.1 as f64 + (end.1 as f64 - start.1 as f64) * fraction).round() as i32,
+                );
+                pointer(point, window, g)?; // Includes live hit testing and safety fence.
+            }
+            screenshot_point()?;
+            g.check()?;
+            held.release()?;
+        }
         "click" => {
             if let Some(e) = &e {
                 if down == MOUSEEVENTF_LEFTDOWN

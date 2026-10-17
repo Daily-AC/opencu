@@ -43,6 +43,8 @@ public class OpenCUFixture : Form {
     readonly CheckBox check = new CheckBox();
     readonly TextBox password = new TextBox();
     readonly Panel marker = new Panel();
+    readonly Panel dragPanel = new Panel();
+    Point dragDown, dragUp; bool dragging, dragHeld = true; int dragMoves, drags;
     Form cover, overlay; TextBox overlayNotes;
     readonly bool background;
     protected override bool ShowWithoutActivation { get { return background; } }
@@ -66,13 +68,17 @@ public class OpenCUFixture : Form {
         counter.SetBounds(20,20,220,45); counter.Click += delegate { clicks++; Save(); };
         notes.Name="notes"; notes.AccessibleName="Fixture notes"; notes.Multiline=true; notes.SetBounds(20,90,620,100); notes.TextChanged += delegate { Save(); };notes.KeyPress += delegate(object sender,KeyPressEventArgs e) {received.Append(((int)e.KeyChar).ToString("x4")+",");};
         password.Name="password";password.AccessibleName="Fixture password";password.UseSystemPasswordChar=true;password.Text="OpenCU-Fixture-Secret-7391";password.SetBounds(320,215,250,30);
+        dragPanel.AccessibleName="Fixture drag area";dragPanel.BackColor=Color.LightBlue;dragPanel.SetBounds(260,20,300,45);
+        dragPanel.MouseDown += delegate(object sender,MouseEventArgs e) { if(e.Button==MouseButtons.Left){dragDown=e.Location;dragging=true;dragHeld=true;dragMoves=0;dragPanel.Capture=true;} };
+        dragPanel.MouseMove += delegate(object sender,MouseEventArgs e) { if(dragging){dragMoves++;dragHeld &= (e.Button & MouseButtons.Left)!=0;} };
+        dragPanel.MouseUp += delegate(object sender,MouseEventArgs e) { if(dragging && e.Button==MouseButtons.Left){dragUp=e.Location;dragging=false;dragPanel.Capture=false;drags++;Save();} };
         marker.BackColor=Color.Magenta;marker.SetBounds(590,20,50,45);
         check.Name="checkbox"; check.AccessibleName="Fixture checkbox"; check.Text="Fixture checkbox";check.SetBounds(20,215,260,40);check.CheckedChanged += delegate { Save(); };
         slider.Name="slider"; slider.AccessibleName="Fixture slider";slider.Minimum=0;slider.Maximum=100;slider.SetBounds(20,275,620,50);slider.ValueChanged += delegate { Save(); };
         scrolling.Name="scrollArea";scrolling.AccessibleName="Fixture scroll area";scrolling.SetBounds(20,355,620,170);scrolling.AutoScroll=true;
         var content=new Label();content.Text="Fixture scroll content";content.SetBounds(10,10,500,1500);scrolling.Controls.Add(content);
         scrolling.MouseWheel += delegate { wheel++; }; content.MouseWheel += delegate { wheel++; };
-        Controls.AddRange(new Control[]{counter,notes,check,password,marker,slider,scrolling});
+        Controls.AddRange(new Control[]{counter,notes,check,password,marker,slider,scrolling,dragPanel});
         timer.Interval=100;timer.Tick += delegate {
             if(File.Exists(command)) { var cmd=File.ReadAllText(command).Trim();File.Delete(command);
                 if(cmd=="move") { Location=new Point(Location.X+40,Location.Y+30);moves++; }
@@ -103,7 +109,9 @@ public class OpenCUFixture : Form {
         if(!ready || !IsHandleCreated || !IsWindowVisible(Handle))return;
         RECT r;DwmGetWindowAttribute(Handle,9,out r,16);var foreground=GetForegroundWindow();uint foregroundPid;GetWindowThreadProcessId(foreground,out foregroundPid);Point p=counter.PointToScreen(new Point(counter.Width/2,counter.Height/2));Point m=marker.PointToScreen(new Point(marker.Width/2,marker.Height/2));
         var family="\"foregroundOwner\":"+Q(GetWindow(foreground,4).ToInt64().ToString())+","+"\"mainHwnd\":"+Q(Handle.ToInt64().ToString())+",\"foregroundHwnd\":"+Q(foreground.ToInt64().ToString())+",\"foregroundPid\":"+foregroundPid+",\"mainRootOwner\":"+Q(GetAncestor(Handle,3).ToInt64().ToString())+",\"foregroundRootOwner\":"+Q(GetAncestor(foreground,3).ToInt64().ToString())+",\"overlayClicks\":"+overlayClicks+",\"overlayNotes\":"+Q(overlayNotes==null?"":overlayNotes.Text)+",";
-        var json="{"+family+"\"pid\":"+System.Diagnostics.Process.GetCurrentProcess().Id+",\"clicks\":"+clicks+",\"notes\":"+Q(notes.Text)+",\"checked\":"+(check.Checked?"true":"false")+",\"slider\":"+slider.Value+",\"scroll\":"+(-scrolling.AutoScrollPosition.Y)+",\"wheel\":"+wheel+",\"moves\":"+moves+",\"x\":"+(p.X-r.Left)+",\"y\":"+(p.Y-r.Top)+",\"markerX\":"+(m.X-r.Left)+",\"markerY\":"+(m.Y-r.Top)+",\"width\":"+(r.Right-r.Left)+",\"height\":"+(r.Bottom-r.Top)+",\"indicatorVisible\":"+(indicatorVisible?"true":"false")+",\"indicatorReadable\":"+(indicatorReadable?"true":"false")+",\"indicatorAffinity\":"+indicatorAffinity+",\"keyChars\":"+Q(received.ToString())+",\"inputLanguage\":"+Q(InputLanguage.CurrentInputLanguage.LayoutName)+",\"clipboardDigest\":"+Q(digest)+",\"error\":"+Q(error)+"}";
+        var a=dragPanel.PointToScreen(new Point(20,dragPanel.Height/2));var b=dragPanel.PointToScreen(new Point(dragPanel.Width-20,dragPanel.Height/2));
+        var drag="\"dragFromX\":"+(a.X-r.Left)+",\"dragFromY\":"+(a.Y-r.Top)+",\"dragToX\":"+(b.X-r.Left)+",\"dragToY\":"+(b.Y-r.Top)+",\"dragDistance\":"+(b.X-a.X)+",\"dragDownX\":"+dragDown.X+",\"dragDownY\":"+dragDown.Y+",\"dragUpX\":"+dragUp.X+",\"dragUpY\":"+dragUp.Y+",\"dragHeld\":"+(dragHeld?"true":"false")+",\"dragMoves\":"+dragMoves+",\"drags\":"+drags+",";
+        var json="{"+drag+family+"\"pid\":"+System.Diagnostics.Process.GetCurrentProcess().Id+",\"clicks\":"+clicks+",\"notes\":"+Q(notes.Text)+",\"checked\":"+(check.Checked?"true":"false")+",\"slider\":"+slider.Value+",\"scroll\":"+(-scrolling.AutoScrollPosition.Y)+",\"wheel\":"+wheel+",\"moves\":"+moves+",\"x\":"+(p.X-r.Left)+",\"y\":"+(p.Y-r.Top)+",\"markerX\":"+(m.X-r.Left)+",\"markerY\":"+(m.Y-r.Top)+",\"width\":"+(r.Right-r.Left)+",\"height\":"+(r.Bottom-r.Top)+",\"indicatorVisible\":"+(indicatorVisible?"true":"false")+",\"indicatorReadable\":"+(indicatorReadable?"true":"false")+",\"indicatorAffinity\":"+indicatorAffinity+",\"keyChars\":"+Q(received.ToString())+",\"inputLanguage\":"+Q(InputLanguage.CurrentInputLanguage.LayoutName)+",\"clipboardDigest\":"+Q(digest)+",\"error\":"+Q(error)+"}";
         try{File.WriteAllText(output,json,new UTF8Encoding(false));}catch(IOException){}
     }
     static string ClipboardDigest(){

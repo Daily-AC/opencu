@@ -16,7 +16,7 @@ async function fixture(t, results = []) {
   t.after(async () => { await client?.close(); await rm(dir, { recursive: true, force: true }); });
   await cp(path.join(root, 'src'), path.join(dir, 'src'), { recursive: true });
   await symlink(path.join(root, 'node_modules'), path.join(dir, 'node_modules'), 'dir');
-  await writeFile(path.join(dir, 'package.json'), '{"type":"module"}');
+  await writeFile(path.join(dir, 'package.json'), '{"type":"module","version":"9.8.7-test"}');
   const binary = path.join(dir, '.build/OpenCU.app/Contents/MacOS/opencu-engine');
   await mkdir(path.dirname(binary), { recursive: true });
   await writeFile(path.join(dir, 'results.json'), JSON.stringify(results));
@@ -44,7 +44,7 @@ lines.on('line',line=>{
   await client.connect(transport);
   return {
     call: (name, args = {}, meta) => client.callTool({ name, arguments: args, ...(meta ? { _meta: meta } : {}) }, undefined, { timeout: 10000 }),
-    tools: () => client.listTools(), close: () => client.close(),
+    tools: () => client.listTools(), version: () => client.getServerVersion().version, close: () => client.close(),
     calls: async () => (await readFile(callsFile, 'utf8').catch(() => '')).trim().split('\n').filter(Boolean).map(JSON.parse),
     pid: async () => Number(await readFile(pidFile, 'utf8')),
   };
@@ -53,6 +53,7 @@ lines.on('line',line=>{
 test('an arbitrary MCP client works with no account, turn metadata or official installation', async t => {
   const f = await fixture(t);
   assert.equal((await f.tools()).tools.length, 13);
+  assert.equal(f.version(), '9.8.7-test', 'MCP version comes from the installed package.json');
   const result = await f.call('get_app_state', { app: 'Fixture' }, { 'example.test/caller': 'ordinary-client' });
   assert.equal(result.isError ?? false, false);
   assert.equal(result._meta['opencu/app'].id, state.app.id);

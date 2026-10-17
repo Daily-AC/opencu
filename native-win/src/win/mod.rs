@@ -87,7 +87,7 @@ impl Engine {
         }
         // Invalidate screenshot even when validation/target resolution subsequently fails.
         let previous_image = self.snapshot.as_mut().and_then(|s| s.image.take());
-        if ["drag", "select_text"].contains(&method) {
+        if method == "select_text" {
             return Err(Error::new(
                 "UNSUPPORTED_ON_WINDOWS",
                 format!("{method} is not supported on Windows in phase 1"),
@@ -165,7 +165,7 @@ impl Engine {
 }
 fn doctor() -> Value {
     let status = unsafe { safety::desktop() };
-    json!({"engine":"independent","platform":"win32","desktopAccessible":status.is_ok(),"desktopError":status.err().map(|e| e.json()),"accountRequired":false,"proprietaryRuntimeRequired":false,"foregroundOnly":true,"executable":std::env::current_exe().ok()})
+    json!({"engine":"independent","version":env!("CARGO_PKG_VERSION"),"platform":"win32","desktopAccessible":status.is_ok(),"desktopError":status.err().map(|e| e.json()),"accountRequired":false,"proprietaryRuntimeRequired":false,"foregroundOnly":true,"executable":std::env::current_exe().ok()})
 }
 pub fn main() {
     // The GUI subsystem suppresses a console window; inherited standard handles
