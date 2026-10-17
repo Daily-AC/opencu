@@ -15,9 +15,9 @@ Capture and guarded foreground input; it intentionally has different focus seman
 - The stdio executable is a relay; a per-connection Interactive launchd job in
   the person's GUI domain runs the OpenCU worker with its own responsibility,
   resource coalition and scheduling class. A private Unix socket authenticates
-  its token and OS peer PID. Do not launch the worker through LaunchServices: an
-  app it launches holds activation rights that turned background focus on system
-  Open/Save panels into real activation. The worker runs outside the caller's
+  its token and OS peer PID. A LaunchServices worker was tried first; its GUI
+  failures were later traced to a pre-existing panel-focus race, so it was not
+  proven wrong, but it was not re-tested after that fix. The worker runs outside the caller's
   sandbox, as `opencu setup` already does. Never use LaunchServices with
   redirected streams (`open --stdin/--stdout` FIFOs): a vanished reader left
   launchd's xpcproxy blocked and stopped every GUI launch on the Mac.

@@ -60,10 +60,11 @@ launchd owns the worker's job, responsibility and resource coalition. The relay
 boots the job out when it exits; the next relay removes jobs whose relay died
 (including an unreaped zombie). There is no responsibility-disclaimed respawn or
 fallback. LaunchServices (`NSWorkspace.openApplication`, new instance, no
-activation) was tried first and rejected: it fixed attribution and the reminder
-name, but three of three GUI acceptance runs then failed at different Open/Save
-panel steps (panel identity missing, a stale application, the target activated
-after AXPress Save), while the previous model passed 18/18 in the same session. Setup is unchanged; hidden
+activation) was tried first: it fixed attribution and the reminder name, but
+three GUI acceptance runs failed at Open/Save panel steps. The previous model run
+unclamped failed the same way, so at least the save-sheet activation was a
+pre-existing race (fixed in the same branch); the LaunchServices worker was not
+re-tested after that fix, and its STALE_APPLICATION failure stays unexplained. Setup is unchanged; hidden
 `--online-displays` stays a direct, metadata-only child of the worker.
 
 The relay creates a 0700 `mkdtemp` directory under `/tmp`, with a short AF_UNIX
