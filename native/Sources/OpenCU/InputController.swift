@@ -80,6 +80,7 @@ final class InputController {
             guard let action = axResolveAction(requested, in: try actionNames(element)) else {
                 throw OpenCUError("UNSUPPORTED_ACTION", "The element does not expose \(requested); read the current state for its available actions")
             }
+            if inFilePanel(element, snapshot) { releaseFocus() }
             return try await perform(action, on: element)
         default: throw OpenCUError("UNKNOWN_METHOD", "Unknown input method: \(method)")
         }
@@ -259,12 +260,31 @@ final class InputController {
         try validate(snapshot)
     }
 
-    private func prepareAXFocus(_ snapshot: WindowSnapshot) async throws {
+    private func prepareAXFocus(_ snapshot: WindowSnapshot, element: AXUIElement? = nil) async throws {
         // Direct AX actions do not need GHOST-style event delivery. Do not send
         // synthetic activation to an opaque window even for a menu-bar action.
         guard snapshot.windowID != nil else { return }
         if snapshot.isOpaque { return }
+        // A system Open/Save panel is a remote view driven through AX. If the host
+        // still holds synthetic activation when the panel closes, AppKit restores
+        // its key window as the active app and macOS activates it for real. The
+        // engine at normal priority hit this every time; a utility-throttled one
+        // only by chance. Release synthetic focus and send none for panel controls.
+        if let element, inFilePanel(element, snapshot) {
+            releaseFocus()
+            try validate(snapshot)
+            return
+        }
         try await prepareFocus(snapshot)
+    }
+
+    private func inFilePanel(_ element: AXUIElement, _ snapshot: WindowSnapshot) -> Bool {
+        func panel(_ candidate: AXUIElement) -> Bool {
+            Self.isFilePanel(role: axString(candidate, kAXRoleAttribute), identifier: axString(candidate, kAXIdentifierAttribute))
+        }
+        if let window = snapshot.window, panel(window) { return true }
+        guard let path = snapshot.elementPaths.values.first(where: { $0.last.map { CFEqual($0, element) } == true }) else { return false }
+        return path.contains(where: panel)
     }
 
     private func indexedElement(_ args: Arguments, _ snapshot: WindowSnapshot) throws -> AXUIElement {
@@ -352,7 +372,7 @@ final class InputController {
            try actionNames(element).contains(kAXPressAction) {
             // AX actions need no WindowServer ID. For a real background window,
             // retain key-window activation so AppKit validates window commands.
-            try await prepareAXFocus(snapshot)
+            try await prepareAXFocus(snapshot, element: element)
             _ = try indexedElement(args, snapshot)
             let location = try? elementPoint(element)
             let effect = try await perform(kAXPressAction, on: element)
@@ -361,7 +381,7 @@ final class InputController {
         }
         if let element, button == .left,
            [kAXTextFieldRole, kAXTextAreaRole, kAXComboBoxRole].contains(axString(element, kAXRoleAttribute) ?? "") {
-            try await prepareAXFocus(snapshot)
+            try await prepareAXFocus(snapshot, element: element)
             _ = try indexedElement(args, snapshot)
             var focusSettable = DarwinBoolean(false)
             if AXUIElementIsAttributeSettable(element, kAXFocusedAttribute as CFString, &focusSettable) == .success,

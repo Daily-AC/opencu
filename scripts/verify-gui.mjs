@@ -20,6 +20,8 @@ const checks = [];
 let client;
 let sequence = 0;
 let tree = '';
+// Call timing is reported on failure to locate intermittent focus changes.
+const trace = [];
 const report = { timestamp: new Date().toISOString(), test: 'independent-background-gui', checks };
 const engine = path.join(root, '.build/OpenCU.app/Contents/MacOS/opencu-engine');
 report.engine_sha256 = createHash('sha256').update(await readFile(engine)).digest('hex');
@@ -115,7 +117,12 @@ try {
   };
 
   async function call(name, args = {}) {
-    const result = await client.callTool({ name, arguments: { app, ...args } }, undefined, { timeout: 90000 });
+    // Monotonic seconds on the same clock as the fixtures' activation times.
+    const entry = { name, args: JSON.stringify(args).slice(0, 80), started: Number(process.hrtime.bigint()) / 1e9 };
+    trace.push(entry);
+    let result;
+    try { result = await client.callTool({ name, arguments: { app, ...args } }, undefined, { timeout: 90000 }); }
+    finally { entry.ended = Number(process.hrtime.bigint()) / 1e9; }
     const text = result.content.filter(c => c.type === 'text').map(c => c.text).join('\n');
     const image = result.content.find(c => c.type === 'image');
     sequence++;
@@ -352,6 +359,8 @@ try {
   report.ok = false;
   report.error = error.message;
   process.exitCode = 1;
+  report.trace = trace;
+  try { report.targetActivations = (await readState(targetFile)).activations; } catch {}
 } finally {
   await client?.close();
   for (const child of owned.reverse()) await stop(child);
