@@ -7,7 +7,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $previousLocalAppData = $env:LOCALAPPDATA
-$temporary = Join-Path ([IO.Path]::GetTempPath()) ('opencu-package-check-' + [Guid]::NewGuid().ToString('N'))
+$temporary = Join-Path ([IO.Path]::GetTempPath()) ('ocu-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
 $process = $null
 $summary = [ordered]@{ test = 'windows-package-read-only'; ok = $false; networkUsed = $false; inputCalls = 0 }
 $failure = $null
@@ -29,8 +29,13 @@ function Read-McpResponse([int]$Id) {
     }
 }
 function Send-Mcp($Message) {
-    $process.StandardInput.WriteLine(($Message | ConvertTo-Json -Depth 12 -Compress))
-    $process.StandardInput.Flush()
+    # Process.StandardInput follows the console code page; under UTF-8 (chcp 65001)
+    # Windows PowerShell would prefix a BOM that makes the first JSON line invalid.
+    if (-not $script:mcpInput) {
+        $script:mcpInput = New-Object IO.StreamWriter($process.StandardInput.BaseStream, (New-Object Text.UTF8Encoding($false)))
+    }
+    $script:mcpInput.WriteLine(($Message | ConvertTo-Json -Depth 12 -Compress))
+    $script:mcpInput.Flush()
 }
 function Assert-Keys($Object, [string[]]$Expected) {
     $actual = @($Object.PSObject.Properties.Name | Sort-Object)

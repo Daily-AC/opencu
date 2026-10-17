@@ -51,11 +51,16 @@ param([string]$LocalZip)
         if ($package.name -ne 'opencu' -or $package.version -ne $version -or (Test-Path -LiteralPath (Join-Path $stage 'opencu.json'))) {
             throw 'OpenCU package metadata does not match this installer. Nothing was installed.'
         }
+        # Windows lets a running program's directory be renamed, so check for
+        # processes started from the install before replacing it.
+        $prefix = $install.TrimEnd('\') + '\'
+        $running = @(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($prefix, [StringComparison]::OrdinalIgnoreCase) })
+        if ($running.Count) {
+            throw "OpenCU is in use (process IDs $(($running | ForEach-Object ProcessId) -join ', ')). Close agent sessions that use OpenCU and try again. Nothing was changed."
+        }
         try {
             if (Test-Path -LiteralPath $install) {
-                # Windows refuses to rename a directory while any file inside is open,
-                # so a running OpenCU makes this fail. Retry briefly for handles that
-                # close just after a session ends.
+                # Retry briefly for handles that close just after a session ends.
                 for ($attempt = 1; ; $attempt++) {
                     try { [IO.Directory]::Move($install, $backup); break }
                     catch { if ($attempt -ge 20) { throw }; Start-Sleep -Milliseconds 250 }
