@@ -226,8 +226,8 @@ npm run build:win
 
 Copy `.build/win/opencu-engine.exe` to the same path in a Windows checkout with
 Node 22+ and its npm dependencies, then run `bin\opencu.cmd doctor` or
-`bin\opencu.cmd mcp`. Other hosts can spawn `opencu-engine.exe serve` with pipes
-directly. Error codes, embedding and safety behavior are in the
+`bin\opencu.cmd mcp`. Programs that start OpenCU on an agent's behalf, such as
+remote-control services, follow the [host integration contract](docs/host-integration.md). Error codes, embedding and safety behavior are in the
 [Windows contract](docs/windows-engine-contract.md).
 
 ## Development
