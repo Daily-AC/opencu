@@ -3,8 +3,11 @@
 This is a feasibility experiment, not a claim that macOS offers an invisible or
 isolated desktop. Reviewer run 7 on 2026-10-16 passed all window/input checks and preserved the
 foreground and pointer; only display-removal observation failed (the subsequent
-idempotence check did not run). The fresh-process removal fix below has offline
-checks only; live revalidation is left to the reviewer.
+idempotence check did not run). After the fresh-process removal fix below and the
+merge into main, reviewer run 8 confirmed removal from a fresh process (one check,
+105 ms) but stopped at the click step when the macOS private-picker reminder took
+the foreground; run 9 passed all 15 checks. In runs 6 and 7, creating the display
+moved a window from the person's stage into the Stage Manager strip.
 It does not introduce MCP tools or consent UI.
 
 ## Direct engine API

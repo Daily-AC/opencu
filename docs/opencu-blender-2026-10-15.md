@@ -259,3 +259,28 @@ controls only on a reviewer-authorized idle desktop.
    `TEXT_SELECTION_UNSUPPORTED`, leave selection unchanged, and recommend a
    fresh screenshot and click. In a supported AppKit text field, select_text
    must still select the exact requested UTF-16 range.
+
+## Real-use notes (reviewer, 2026-10-15)
+
+Observations from operating real apps through the MCP server on the reviewer's
+Mac (macOS 26.6.2, Stage Manager on). They are recorded here as observations, not
+fixture evidence.
+
+- **Keynote on its own Space.** With Keynote full screen on its own Space while
+  the person used another app, OpenCU built a five-slide deck through the outline
+  view in about 34 calls: coordinate clicks, Chinese typing, Cmd+A, Tab, Shift+Tab,
+  Return and menu commands. A 50 ms foreground sampler recorded no change. The
+  person performed the final Save. In the Stage Manager strip the same window
+  could not become key; most menus were disabled and the canvas was not readable.
+- **Blender in the foreground.** A mug model was built with Blender in front by
+  switching an area to the Python console (Shift+F4) and pasting `bpy` lines.
+  `paste` was reliable where long `type_text` lines dropped characters. Blender's
+  shortcuts act on the area under the real pointer, so the person must not move
+  the mouse meanwhile.
+- **Input method.** With a Chinese pinyin input source selected, the input method
+  consumed letter shortcuts; function keys and Escape still worked. Switching to a
+  Latin layout fixed it. OpenCU does not detect this.
+- **Several windows.** With Blender's main window and a render window open and no
+  focused or main Accessibility window, reads and input failed with
+  `AMBIGUOUS_WINDOW`. The tools have no parameter for choosing a window.
+- A state read once failed with no accessible window and succeeded on the next call.

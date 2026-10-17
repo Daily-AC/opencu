@@ -202,8 +202,8 @@ identity (`responsibility_get_attribution_for_audittoken`, binary path to bundle
 which was already `dev.opencu.engine`. The displayed name instead comes from
 `RPClient.clientMainBundleID`, through `+[SCProcessUtility hostApplicationWithAuditToken:bundleID:]`
 and `+[AVCaptureDevice proprietaryDefaultsDomainForAuditToken:]`, an XPC query to
-the CMIO attribution service that resolves the host job. Under the Claude Reader
-LaunchAgent this displayed “node” (previously “bash”), alarmingly suggesting an
+the CMIO attribution service that resolves the host job. Under the agent host's
+Node-based LaunchAgent this displayed “node” (previously “bash”), alarmingly suggesting an
 arbitrary interpreter had screen access. The measured reminder interval is a
 hard-coded 30 days. Self responsibility alone does not fix that displayed name.
 
@@ -303,5 +303,9 @@ SIGKILL, ten starts without a foreground change, release check 3/3.
 
 Correction to the reminder analysis above: every observed reminder and absence
 fits replayd keying approval by the engine **executable path** (a new build
-location reminds once, the same location does not), not by bundle ID. A caller
+location reminds once, the same location does not), not by bundle ID. With the
+launchd worker the reminder also named **OpenCU**; the person compared the new,
+previous and new builds and read OpenCU, node, OpenCU. Choosing **Open System
+Settings** in the reminder does not acknowledge it: after that choice at 04:01 on
+2026-10-16 it returned at 23:37, and after **Allow** at 23:38 it did not return. A caller
 sandbox that denies networking also denies the relay's local socket.
