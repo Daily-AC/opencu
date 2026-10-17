@@ -29,8 +29,9 @@ MCP caller approvals remain the caller's responsibility. Local invocation is not
 restricted to Codex or any other agent. No proprietary lock-screen unlock path
 is carried over.
 
-macOS capture additionally requires an OS-verified self-responsible, disclaimed
-engine, rather than trusting its respawn environment marker. Attribution failure
+macOS capture additionally requires the attached worker marker and OS-verified
+self responsibility (`responsibility_get_pid_responsible_for_pid == getpid()`),
+rather than trusting a marker alone. Attribution failure
 returns `CAPTURE_RESPONSIBILITY_UNVERIFIED` before ScreenCaptureKit. Error
 `data.captureContext` is retained as MCP `_meta["opencu/errorDetails"]`; `doctor`
 reports that context too. On macOS 15 and later the system may show its periodic
@@ -47,6 +48,62 @@ public NSEvent/CGEvent creation. Actual received events showed that public
 creation alone left the window-relative point at an invalid sentinel. Resolve
 the system symbol locally, fail clearly if unavailable, and retain target-PID
 routing and all normal OS permissions. Do not add a global input fallback.
+
+## macOS independent worker transport
+
+`opencu-engine serve` and `--doctor` are thin stdio relays: they create no
+NSApplication, AX state or presence UI. `NSWorkspace.openApplication` launches
+`Bundle.main.bundleURL` with a new instance, activation and recent-items updates
+disabled. Arguments are `worker serve <socket>` or `worker doctor <socket>`.
+LaunchServices owns the worker's app job and resource coalition. There is no
+responsibility-disclaimed respawn or fallback. Setup is unchanged; hidden
+`--online-displays` stays a direct, metadata-only child of the worker.
+
+The relay creates a 0700 `mkdtemp` directory under `/tmp`, with a short AF_UNIX
+stream socket and a random 32-byte hex token. The launch environment contains the
+token and the caller's HOME, TMPDIR, PATH and LANG. Launch completion
+has a 20-second deadline, followed by a shared 20-second handshake deadline.
+Each channel starts with `<token> stdio\n` or `<token> stderr\n`. Acceptance
+requires constant-time token comparison and `LOCAL_PEERPID` matching the
+NSRunningApplication returned by LaunchServices. Wrong peers, tokens, channels,
+duplicate channels and malformed lines are closed. Doctor uses only stdio.
+After all channels authenticate, the socket path and directory are removed and
+the relay acknowledges each channel with byte 1. Workers wait for this before
+running: on macOS, querying the peer PID after a short-lived doctor has already
+exited returns ENOTCONN. The worker unsets OPENCU_WORKER_TOKEN,
+attaches socket fds with dup2 and completes AppKit check-in before awaiting the
+acknowledgement (LaunchServices waits for that check-in before returning its PID).
+It then enters the existing serve/disconnect/shutdown path.
+
+Relay queues are bounded and writes nonblocking. Stdin EOF half-closes the
+worker's input and still allows final responses. Worker stdout EOF drains output
+and exits successfully. SIGTERM, SIGINT and SIGHUP half-close input immediately,
+allow up to five seconds for cleanup/output, then exit 128+signal. Even SIGKILL
+of the relay closes its sockets, delivering worker stdin EOF. Launch/handshake
+failure produces one stderr line and a nonzero exit, without JSON-RPC framing.
+
+The worker holds a `userInitiatedAllowingIdleSystemSleep` ProcessInfo activity
+through shutdown to prevent App Nap without preventing system/display sleep.
+Doctor reads the worker's grants and reports `workerPID`, `responsiblePID`,
+`launchedBy: "LaunchServices"`, and the capture context's `workerMarkerSeen` and
+`verifiedSelfResponsible` fields.
+
+**Sandbox boundary:** the LaunchServices worker is an independent job and would
+run outside any caller sandbox, just as setup does. A caller sandbox cannot be
+relied on to confine it. On this Mac, LaunchServices strips both arguments and
+environment from sandboxed callers, so this argv/token launch protocol does not
+support sandbox-exec callers. A stripped/no-argument launch exits without setup
+UI; explicit `opencu setup` is unchanged. Supporting sandboxed callers would
+require a separate launch-message protocol.
+
+Release verification runs the extracted runtime outside sandbox-exec with an
+empty HOME, verifying that the actual worker received that HOME and runs from
+the extracted bundle. Separate capability probes verify sandbox network/source
+read denials; the receipt explicitly says those probes do **not** establish
+runtime confinement. This is an intentional validation boundary, not an engine
+sandbox guarantee. Caller approvals and macOS TCC still apply. Never use
+`open --stdin/--stdout` FIFOs: a vanished FIFO reader previously blocked launchd's
+xpcproxy and all GUI launches.
 
 ## MCP error text
 

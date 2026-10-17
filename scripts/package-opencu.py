@@ -27,7 +27,7 @@ FORBIDDEN_PARTS = {".runtime", "@oai", "@openai", "openai", "CodexCLI.app", "cua
 SOURCE_FILES = [
     "scripts/render-presence.py", "scripts/render-presence.swift", "docs/independent-engine-contract.md",
     "AGENTS.md", "native/Package.swift", "scripts/build-engine.py", "scripts/package-opencu.py",
-    "scripts/test-native.py", "scripts/verify-release.py", "scripts/verify-gui.mjs", "tests/native-logic.swift",
+    "scripts/test-native.py", "scripts/verify-release.py", "scripts/verify-gui.mjs", "tests/native-logic.swift", "tests/worker-transport.swift",
     "skills/opencu/SKILL.md", "docs/opencu-independent-2026-10-12.md",
     "evidence/opencu-independent-2026-10-12.json",
     "tests/fixtures/preview-window-response.json", "tests/fixtures/OpenCUFixture.swift",
@@ -158,7 +158,7 @@ def prepare_runtime_receipt(package_root):
     fingerprints = verifier["runtime_fingerprints"](package_root)
     dependencies = verifier["dependency_fingerprint"](package_root)
     receipt = {
-        "test": "independent-runtime-isolated-read-only",
+        "test": "independent-runtime-empty-home-read-only",
         "binding": "Runtime component and dependency hashes only; this is not a receipt for the containing archive",
         "runtime_component_sha256": fingerprints,
         "node_modules_integrity": dependencies,
@@ -182,8 +182,9 @@ def prepare_runtime_receipt(package_root):
         }
         for key in ["engine_sha256", "node_binary_sha256", "engine_version", "native_doctor",
                     "extracted_binary_hashes_match_manifest", "extracted_signatures_verified",
-                    "home_started_empty", "source_repository_reads_denied", "network_connections_denied",
-                    "additional_read_denials", "permission_status_not_used_as_standalone_authorization_evidence",
+                    "home_started_empty", "sandbox_probe_source_repository_reads_denied", "sandbox_probe_ip_network_connections_denied",
+                    "runtime_sandboxed", "isolation_scope", "worker_verified_self_responsible", "worker_received_empty_home", "worker_used_extracted_bundle",
+                    "sandbox_probe_read_denials", "permission_status_not_used_as_standalone_authorization_evidence",
                     "mcp_initialized", "tool_count", "list_apps_called", "app_count",
                     "inventory_recorded", "gui_calls", "input_calls", "permission_requests"]:
             if key in verified:

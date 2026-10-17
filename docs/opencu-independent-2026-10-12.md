@@ -18,7 +18,7 @@ is used. Any stdio MCP client can call the engine. There is no network listener.
 Targeted input, exact window identity, background focus and permission
 attribution use OS-exported SPI resolved at runtime: `CGEventSetWindowLocation`,
 `_AXUIElementGetWindow`, AppKit process notifications and
-`responsibility_spawnattrs_setdisclaim`. Their availability can change between
+`responsibility_get_pid_responsible_for_pid`. Their availability can change between
 macOS releases.
 
 ## Permission attribution
@@ -28,7 +28,7 @@ normally the app that started the MCP client. Without intervention, OpenCU would
 need each client's terminal or desktop app to be authorized, and the grant shown
 for OpenCU in System Settings would be ignored.
 
-`opencu-engine serve` and `--doctor` therefore respawn once with responsibility
+The original 2026-10-12 `serve` and `--doctor` implementation respawned once with responsibility
 disclaimed, inheriting the same stdin/stdout. The parent only relays SIGTERM,
 SIGINT and SIGHUP and returns the child's exit status. Measured from an
 unauthorized host: a direct start reported both permissions false; the disclaimed
@@ -42,8 +42,9 @@ not merely the respawn marker. See the [agent-display capture audit](agent-displ
 An earlier temporary test instead started the app through
 `open --stdin FIFO --stdout FIFO`. When the reading side vanished, launchd's
 `xpcproxy` blocked on the FIFO and every later GUI launch on the Mac queued behind
-it. Do not route the engine through LaunchServices; `bin/opencu setup` uses `open`
-only for the permission dialog, without redirected streams.
+it. Never use LaunchServices with redirected FIFO streams. The 2026-10-17
+worker uses authenticated Unix sockets after launch instead; `bin/opencu setup`
+continues to use `open` for the permission dialog without redirected streams.
 
 Builds are signed with a per-machine OpenCU identity that `scripts/build-engine.py`
 creates on first use in `~/Library/Application Support/OpenCU/signing`, in a
@@ -190,3 +191,91 @@ control) that the window-location fix resolved.
 - [AXUIElementCopyAttributeValue](https://developer.apple.com/documentation/applicationservices/1462085-axuielementcopyattributevalue)
 - [CGEvent.postToPid](https://developer.apple.com/documentation/coregraphics/cgevent/posttopid(_:))
 - [NSEvent mouse-event factory](https://developer.apple.com/documentation/appkit/nsevent/mouseevent(with:location:modifierflags:timestamp:windownumber:context:eventnumber:clickcount:pressure:))
+
+## 2026-10-17: independent LaunchServices worker
+
+The previous responsibility-disclaimed child fixed TCC responsibility but stayed
+inside its caller's launchd job and resource coalition. Measurements supplied for
+this Mac on 2026-10-17 established two separate attribution paths. ScreenCaptureKit's
+macOS 15+ private-window-picker reminder stores approval using replayd's attribution
+identity (`responsibility_get_attribution_for_audittoken`, binary path to bundle ID),
+which was already `dev.opencu.engine`. The displayed name instead comes from
+`RPClient.clientMainBundleID`, through `+[SCProcessUtility hostApplicationWithAuditToken:bundleID:]`
+and `+[AVCaptureDevice proprietaryDefaultsDomainForAuditToken:]`, an XPC query to
+the CMIO attribution service that resolves the host job. Under the Claude Reader
+LaunchAgent this displayed “node” (previously “bash”), alarmingly suggesting an
+arbitrary interpreter had screen access. The measured reminder interval is a
+hard-coded 30 days. Self responsibility alone does not fix that displayed name.
+
+The caller's LaunchAgent had no ProcessType. launchd clamped its entire tree to
+utility QoS: engine threads remained at priority 20 despite QoS raises, and cold
+list_apps took 35–75 seconds. A separate Interactive-job experiment reported the
+engine as its own responsible PID and attribution binary, in its own coalition,
+with priority 31 and successful screenshots. These are the supplied investigation
+results, not new capture tests in this change.
+
+The implementation now launches a new background OpenCU app instance through
+NSWorkspace/LaunchServices. The spawned executable only relays stdio over a
+private token-and-peer-PID-authenticated Unix socket. The worker uses its own job,
+permissions and coalition, holds a user-initiated activity that allows idle system
+sleep, and keeps the existing EOF cleanup for synthetic focus and agent display.
+It runs outside the caller's sandbox, like setup already does. No LaunchAgent,
+TCC, Spaces or Stage Manager configuration changes are needed. The historical
+FIFO launch failure remains prohibited; no LaunchServices stdio redirection is used.
+
+Validation and measured process values for this implementation are recorded below.
+GUI/capture/input and virtual-display acceptance are reserved for the reviewer.
+
+Measured read-only acceptance on this Mac (2026-10-17):
+
+| Measurement | Relay | Independent worker |
+| --- | --- | --- |
+| PID | 6268 | 6269 |
+| Responsible PID | 73007 (caller host) | 6269 (self) |
+| Parent PID | 6264 | 1 |
+| Resource coalition | 613048 | 682699 |
+| Jetsam coalition | 613049 | 682700 |
+| `ps -M` thread priorities | 20 | 31–46 (main thread 46) |
+| Attribution executable | caller's node host | OpenCU.app/Contents/MacOS/opencu-engine |
+
+The supplied `exitprobe/attr` and `exitprobe/coal` tools measured those attribution
+and coalition values. Doctor reported Accessibility and Screen Recording true,
+verifiedSelfResponsible true, and a worker PID different from the relay PID.
+The 295 list_apps IDs/display names matched the pre-change main implementation;
+the measured worker call took 0.481 seconds. This was a warm inventory comparison,
+not a repeat of the historical 35–75 second cold measurement.
+
+SIGKILL of the relay caused worker exit in 0.050 seconds. Closing stdin exited
+both processes. SIGTERM, SIGINT and SIGHUP also exited both, with relay statuses
+143, 130 and 129. These checks exercised disconnected idle workers, not real
+synthetic-focus/display cleanup (GUI acceptance remains for the reviewer).
+Ten consecutive serve starts produced 85 foreground samples at a requested
+50 ms interval with no change; all ten workers registered as UIElement, the
+LaunchServices policy that excludes Dock icons. No screenshots or other-app
+window operations were used for this check. Private inventories, foreground
+identities and full process output remain only in ignored `.cache/` files.
+
+Offline tests compile WorkerTransport.swift without AppKit and exercise real
+socketpairs/local sockets: token and peer-PID rejection, malformed/fragmented and
+duplicate handshakes, doctor-only transport, payload preservation, bounded byte
+forwarding, stderr, EOF in both directions, /dev/null descriptors, SIGTERM cleanup
+and its grace deadline. Short-lived worker acknowledgement is necessary because
+LOCAL_PEERPID fails with ENOTCONN after the peer exits. AppKit check-in must precede
+that acknowledgement wait, so LaunchServices can return the worker's PID.
+
+The release sandbox probe exposed an additional LaunchServices boundary: the
+AppKit SDK documents that sandboxed callers' `arguments` are ignored, and this
+Mac also stripped the configured environment. An environment-only duplication of
+the invocation was tested and removed because it did not work. Such launches
+initially entered the old no-argument setup path; those temporary instances were
+terminated without granting permissions or changing TCC. Setup now requires the
+explicit `--setup` argument used by `bin/opencu setup`, so a stripped worker
+invocation cannot create setup UI. Supporting sandboxed callers requires a
+separate launch-message protocol; the argv/environment protocol does not suffice.
+
+The chosen scope retains the specified argv/environment protocol. Release runtime
+checks therefore run outside sandbox-exec, with separate sandbox capability
+probes; receipts explicitly mark runtime_sandboxed false. They verify the actual
+worker's empty HOME and extracted-bundle executable. This does not establish
+sandbox confinement or sandboxed-caller support. No AppleEvent launch protocol
+was added.

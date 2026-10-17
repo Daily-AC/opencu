@@ -12,8 +12,10 @@ Capture and guarded foreground input; it intentionally has different focus seman
 - Do not add an agent-brand or signing-team allowlist. The engine uses an
   inherited stdio transport; macOS Accessibility/Screen Recording permissions
   and the caller's task approvals remain in force.
-- The engine respawns itself with responsibility disclaimed so OpenCU's own
-  permission grants apply under any client. Never start it through LaunchServices
+- The stdio executable is a relay; LaunchServices starts an independent OpenCU
+  app worker with its own responsibility and resource coalition. A private Unix
+  socket authenticates its token and OS peer PID. The worker runs outside the
+  caller's sandbox, as `opencu setup` already does. Never use LaunchServices
   with redirected streams (`open --stdin/--stdout` FIFOs): a vanished reader left
   launchd's xpcproxy blocked and stopped every GUI launch on the Mac.
 - Builds are signed with the per-machine identity created by
@@ -29,8 +31,9 @@ Capture and guarded foreground input; it intentionally has different focus seman
 - Do not operate the same app concurrently. Do not replay input automatically.
 - A probe started from an agent shell has the host's permissions, not OpenCU's.
   Drive the engine through `bin/opencu`. If a probe needs OpenCU's grants, sign it
-  as a bundle with the local identity, start it with responsibility disclaimed and
-  delete it afterwards: it holds those grants.
+  as a bundle with the local identity, launch it independently through
+  LaunchServices without redirected streams, and delete it afterwards: it holds
+  those grants.
 - With Stage Manager on, off-stage windows give no screenshot, cannot become key
   and stop Chromium rendering. To test background web content anyway, start
   Chrome for Testing with `--disable-backgrounding-occluded-windows
