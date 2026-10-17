@@ -52,28 +52,35 @@ routing and all normal OS permissions. Do not add a global input fallback.
 ## macOS independent worker transport
 
 `opencu-engine serve` and `--doctor` are thin stdio relays: they create no
-NSApplication, AX state or presence UI. `NSWorkspace.openApplication` launches
-`Bundle.main.bundleURL` with a new instance, activation and recent-items updates
-disabled. Arguments are `worker serve <socket>` or `worker doctor <socket>`.
-LaunchServices owns the worker's app job and resource coalition. There is no
-responsibility-disclaimed respawn or fallback. Setup is unchanged; hidden
+NSApplication, AX state or presence UI. The relay bootstraps a per-connection
+launchd job in `gui/<uid>`: label `dev.opencu.worker.<relay pid>.<random>`,
+ProcessType Interactive, RunAtLoad, no KeepAlive, stdio /dev/null, program the
+bundle executable with `worker serve <socket>` or `worker doctor <socket>`.
+launchd owns the worker's job, responsibility and resource coalition. The relay
+boots the job out when it exits; the next relay removes jobs whose relay died
+(including an unreaped zombie). There is no responsibility-disclaimed respawn or
+fallback. LaunchServices (`NSWorkspace.openApplication`, new instance, no
+activation) was tried first and rejected: it fixed attribution and the reminder
+name, but three of three GUI acceptance runs then failed at different Open/Save
+panel steps (panel identity missing, a stale application, the target activated
+after AXPress Save), while the previous model passed 18/18 in the same session. Setup is unchanged; hidden
 `--online-displays` stays a direct, metadata-only child of the worker.
 
 The relay creates a 0700 `mkdtemp` directory under `/tmp`, with a short AF_UNIX
 stream socket and a random 32-byte hex token. The launch environment contains the
-token and the caller's HOME, TMPDIR, PATH and LANG. Launch completion
-has a 20-second deadline, followed by a shared 20-second handshake deadline.
+token and the caller's HOME, TMPDIR, PATH and LANG; the job definition holding it
+is written 0600 into the 0700 directory and deleted right after bootstrap.
+launchd must report the worker PID within 10 seconds, followed by a shared
+20-second handshake deadline.
 Each channel starts with `<token> stdio\n` or `<token> stderr\n`. Acceptance
-requires constant-time token comparison and `LOCAL_PEERPID` matching the
-NSRunningApplication returned by LaunchServices. Wrong peers, tokens, channels,
+requires constant-time token comparison and `LOCAL_PEERPID` matching the PID
+launchd reports for the job. Wrong peers, tokens, channels,
 duplicate channels and malformed lines are closed. Doctor uses only stdio.
 After all channels authenticate, the socket path and directory are removed and
 the relay acknowledges each channel with byte 1. Workers wait for this before
 running: on macOS, querying the peer PID after a short-lived doctor has already
 exited returns ENOTCONN. The worker unsets OPENCU_WORKER_TOKEN,
-attaches socket fds with dup2 and completes AppKit check-in before awaiting the
-acknowledgement (LaunchServices waits for that check-in before returning its PID).
-It then enters the existing serve/disconnect/shutdown path.
+attaches socket fds with dup2 and awaits the acknowledgement. It then enters the existing serve/disconnect/shutdown path.
 
 Relay queues are bounded and writes nonblocking. Stdin EOF half-closes the
 worker's input and still allows final responses. Worker stdout EOF drains output
@@ -85,14 +92,13 @@ failure produces one stderr line and a nonzero exit, without JSON-RPC framing.
 The worker holds a `userInitiatedAllowingIdleSystemSleep` ProcessInfo activity
 through shutdown to prevent App Nap without preventing system/display sleep.
 Doctor reads the worker's grants and reports `workerPID`, `responsiblePID`,
-`launchedBy: "LaunchServices"`, and the capture context's `workerMarkerSeen` and
+`launchedBy: "launchd"`, and the capture context's `workerMarkerSeen` and
 `verifiedSelfResponsible` fields.
 
-**Sandbox boundary:** the LaunchServices worker is an independent job and would
-run outside any caller sandbox, just as setup does. A caller sandbox cannot be
-relied on to confine it. On this Mac, LaunchServices strips both arguments and
-environment from sandboxed callers, so this argv/token launch protocol does not
-support sandbox-exec callers. A stripped/no-argument launch exits without setup
+**Sandbox boundary:** the worker is an independent launchd job and runs outside
+any caller sandbox, just as setup does. A caller sandbox cannot be relied on to
+confine it. A caller sandbox that denies networking also denies the relay's local
+socket (`cannot listen on worker socket`), so such callers are not supported. A stripped/no-argument launch exits without setup
 UI; explicit `opencu setup` is unchanged. Supporting sandboxed callers would
 require a separate launch-message protocol.
 

@@ -192,7 +192,7 @@ control) that the window-location fix resolved.
 - [CGEvent.postToPid](https://developer.apple.com/documentation/coregraphics/cgevent/posttopid(_:))
 - [NSEvent mouse-event factory](https://developer.apple.com/documentation/appkit/nsevent/mouseevent(with:location:modifierflags:timestamp:windownumber:context:eventnumber:clickcount:pressure:))
 
-## 2026-10-17: independent LaunchServices worker
+## 2026-10-17: independent worker
 
 The previous responsibility-disclaimed child fixed TCC responsibility but stayed
 inside its caller's launchd job and resource coalition. Measurements supplied for
@@ -214,8 +214,9 @@ engine as its own responsible PID and attribution binary, in its own coalition,
 with priority 31 and successful screenshots. These are the supplied investigation
 results, not new capture tests in this change.
 
-The implementation now launches a new background OpenCU app instance through
-NSWorkspace/LaunchServices. The spawned executable only relays stdio over a
+The first implementation launched a new background OpenCU app instance through
+NSWorkspace/LaunchServices; the final one bootstraps an Interactive launchd job
+instead (see the end of this section). The spawned executable only relays stdio over a
 private token-and-peer-PID-authenticated Unix socket. The worker uses its own job,
 permissions and coalition, holds a user-initiated activity that allows idle system
 sleep, and keeps the existing EOF cleanup for synthetic focus and agent display.
@@ -279,3 +280,24 @@ probes; receipts explicitly mark runtime_sandboxed false. They verify the actual
 worker's empty HOME and extracted-bundle executable. This does not establish
 sandbox confinement or sandboxed-caller support. No AppleEvent launch protocol
 was added.
+
+### launchd instead of LaunchServices (reviewer, 2026-10-17)
+
+With the LaunchServices worker, the first capture from a new build path raised
+the reminder and the person read the name **OpenCU** in it (previously "node").
+But GUI acceptance failed three times out of three at different Open/Save panel
+steps: the open panel's identity was missing from the tree; `press_key` after
+cancelling the panel reported STALE_APPLICATION for the unchanged target PID; the
+target became frontmost after AXPress Save on the save sheet. The previous
+disclaimed-child model passed 18/18 in the same session, external display
+attached. An app that LaunchServices launches holds activation rights that the
+panel service honoured when returning focus; that turned OpenCU's background
+focus into real activation. The worker is now a per-connection Interactive
+launchd job instead: responsible PID itself, its own coalition, main thread at
+priority 31 with the caller clamped to 20, worker exit 0.13 s after relay
+SIGKILL, ten starts without a foreground change, release check 3/3.
+
+Correction to the reminder analysis above: every observed reminder and absence
+fits replayd keying approval by the engine **executable path** (a new build
+location reminds once, the same location does not), not by bundle ID. A caller
+sandbox that denies networking also denies the relay's local socket.
