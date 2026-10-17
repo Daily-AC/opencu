@@ -150,44 +150,12 @@ final class Engine {
     }
 }
 
-private var disclaimedChild: pid_t = 0
-
-/// macOS attributes privacy grants to the responsible process, normally the app
-/// that started the MCP client. Respawn once with responsibility disclaimed, an
-/// OS-exported SPI also used by browsers and debuggers, so the user's OpenCU grants
-/// apply whichever client launched it. Returns nil when this process should run
-/// the engine itself; otherwise the child's exit status.
-func runAsResponsibleProcess() -> Int32? {
-    let marker = "OPENCU_RESPONSIBLE_PROCESS"
-    if getenv(marker) != nil {
-        unsetenv(marker)
-        EngineResponsibility.respawned = true
-        return nil
-    }
-    typealias Disclaim = @convention(c) (UnsafeMutablePointer<posix_spawnattr_t?>, Int32) -> Int32
-    guard let executable = Bundle.main.executablePath,
-          let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "responsibility_spawnattrs_setdisclaim") else { return nil }
-    var attributes: posix_spawnattr_t?
-    guard posix_spawnattr_init(&attributes) == 0 else { return nil }
-    defer { posix_spawnattr_destroy(&attributes) }
-    guard unsafeBitCast(symbol, to: Disclaim.self)(&attributes, 1) == 0 else { return nil }
-    setenv(marker, "1", 1)
-    let spawned = posix_spawn(&disclaimedChild, executable, nil, &attributes, CommandLine.unsafeArgv, environ)
-    unsetenv(marker)
-    guard spawned == 0 else { return nil }
-    // The child shares stdin/stdout; this process only relays termination.
-    for signalNumber in [SIGTERM, SIGINT, SIGHUP] {
-        signal(signalNumber) { received in if disclaimedChild > 0 { kill(disclaimedChild, received) } }
-    }
-    var status: Int32 = 0
-    while waitpid(disclaimedChild, &status, 0) == -1 && errno == EINTR {}
-    return status & 0x7f == 0 ? (status >> 8) & 0xff : 128 + (status & 0x7f)
-}
-
 func permissions() -> [String: Any] {
     ["engine": "opencu", "version": "0.2.0", "platform": "macos",
      "accessibility": AXIsProcessTrusted(), "screenRecording": CGPreflightScreenCaptureAccess(), "screenLocked": desktopLocked(),
      "ownPermissions": EngineResponsibility.verified, "captureContext": EngineResponsibility.json,
+     "workerPID": getpid(), "responsiblePID": EngineResponsibility.responsiblePID().map { $0 as Any } ?? NSNull(),
+     "launchedBy": EngineResponsibility.worker ? "LaunchServices" : "direct",
      "transport": "stdio", "requiresAccount": false, "requiresOfficialRuntime": false]
 }
 
@@ -208,7 +176,7 @@ struct OpenCUMain {
     @MainActor
     static func main() {
         // Hidden one-shot metadata mode. Must precede NSApplication creation,
-        // responsibility respawn, doctor/setup, and all permission/AX calls.
+        // worker launch, doctor/setup, and all permission/AX calls.
         if CommandLine.arguments.dropFirst() == ["--online-displays"] {
             do {
                 let data = try OnlineDisplays.encode(OnlineDisplays.current())
@@ -220,21 +188,37 @@ struct OpenCUMain {
             return
         }
         if CommandLine.arguments.contains("--version") { print("opencu-engine 0.2.0"); return }
-        // `opencu setup` already launches through LaunchServices with its own
-        // responsibility. Only stdio/doctor need the disclaimed respawn.
-        if CommandLine.arguments.contains("--doctor") || CommandLine.arguments.dropFirst() == ["serve"],
-           let status = runAsResponsibleProcess() { exit(status) }
+        let arguments = Array(CommandLine.arguments.dropFirst())
+        if arguments == ["serve"] { exit(WorkerLauncher.relay(mode: "serve")) }
+        if arguments == ["--doctor"] { exit(WorkerLauncher.relay(mode: "doctor")) }
+        let worker = arguments.count == 3 && arguments[0] == "worker" && ["serve", "doctor"].contains(arguments[1])
+        if getenv("OPENCU_WORKER_TOKEN") != nil && !worker {
+            FileHandle.standardError.write(Data("OpenCU worker: invalid launch context.\n".utf8))
+            exit(1)
+        }
+        if worker {
+            do { try WorkerLauncher.attach(mode: arguments[1], path: arguments[2]) }
+            catch {
+                FileHandle.standardError.write(Data("OpenCU worker: \(error).\n".utf8))
+                exit(1)
+            }
+        }
+        // Keep the activity alive through serve's disconnect/shutdown cleanup.
+        // Avoid App Nap without inhibiting the person's display or system sleep.
+        let activity = worker ? ProcessInfo.processInfo.beginActivity(
+            options: .userInitiatedAllowingIdleSystemSleep, reason: "OpenCU client connection") : nil
+        defer { if let activity { ProcessInfo.processInfo.endActivity(activity) } }
+        if worker && arguments[1] == "doctor" { emit(permissions()); return }
         _ = NSApplication.shared
         NSApplication.shared.setActivationPolicy(.accessory)
-        if CommandLine.arguments.contains("--doctor") { emit(permissions()); return }
-        if CommandLine.arguments.contains("--setup") || CommandLine.arguments.count == 1 {
+        if arguments == ["--setup"] {
             let setup = PermissionSetup()
             setup.didClose = { NSApp.stop(nil); wakeApplicationLoop() }
             setup.show(activate: true)
             withExtendedLifetime(setup) { NSApp.run() }
             return
         }
-        guard CommandLine.arguments.dropFirst() == ["serve"] else {
+        guard worker && arguments[1] == "serve" else {
             FileHandle.standardError.write(Data("Usage: opencu-engine serve | --doctor | --setup | --version\n".utf8))
             return
         }

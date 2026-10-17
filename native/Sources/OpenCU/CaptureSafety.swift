@@ -4,10 +4,10 @@ import CoreGraphics
 
 /// Pure policy. A spawn marker is not evidence of the OS's responsible process.
 enum CaptureSafety {
-    static func requireVerifiedEngine(respawned: Bool, pid: Int32, responsiblePID: Int32?) throws {
-        guard respawned, pid > 0, responsiblePID == pid else {
+    static func requireVerifiedEngine(worker: Bool, pid: Int32, responsiblePID: Int32?) throws {
+        guard worker, pid > 0, responsiblePID == pid else {
             throw OpenCUError("CAPTURE_RESPONSIBILITY_UNVERIFIED",
-                "Screen capture refused before ScreenCaptureKit: OpenCU has not verified its disclaimed responsibility (pid \(pid), responsible PID \(responsiblePID.map(String.init) ?? "unavailable")). No capture or permission request was made.")
+                "Screen capture refused before ScreenCaptureKit: OpenCU has not verified its independent worker responsibility (pid \(pid), responsible PID \(responsiblePID.map(String.init) ?? "unavailable")). No capture or permission request was made.")
         }
     }
 
@@ -21,8 +21,8 @@ enum CaptureSafety {
 }
 
 enum EngineResponsibility {
-    // Set only in the respawn branch; independently corroborated by the OS.
-    static var respawned = false
+    // Set only after attaching the worker transport; independently corroborated by the OS.
+    static var worker = false
 
     static func responsiblePID() -> pid_t? {
         guard let library = dlopen("/usr/lib/system/libquarantine.dylib", RTLD_LAZY | RTLD_LOCAL) else { return nil }
@@ -33,16 +33,16 @@ enum EngineResponsibility {
         return result > 0 ? result : nil
     }
 
-    static var verified: Bool { respawned && responsiblePID() == getpid() }
+    static var verified: Bool { worker && responsiblePID() == getpid() }
     static var json: Arguments {
         ["pid": getpid(), "responsiblePID": responsiblePID().map { $0 as Any } ?? NSNull(),
-         "respawnMarkerSeen": respawned, "verifiedSelfResponsible": verified,
+         "workerMarkerSeen": worker, "launchedBy": worker ? "LaunchServices" : "direct", "verifiedSelfResponsible": verified,
          "capturePolicy": "verified-engine-and-existing-grant"]
     }
 
     static func requireCapture() throws {
         do {
-            try CaptureSafety.requireVerifiedEngine(respawned: respawned, pid: getpid(), responsiblePID: responsiblePID())
+            try CaptureSafety.requireVerifiedEngine(worker: worker, pid: getpid(), responsiblePID: responsiblePID())
             try CaptureSafety.requireScreenRecordingGrant(CGPreflightScreenCaptureAccess())
         } catch let error as OpenCUError {
             throw OpenCUError(error.code, error.message, details: ["captureContext": json])

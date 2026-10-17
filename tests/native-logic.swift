@@ -432,14 +432,14 @@ struct OpenCUInputLogicChecks {
         } } }
         for responsible: Int32? in [nil, -1, 0, 20] {
             fails("CAPTURE_RESPONSIBILITY_UNVERIFIED") {
-                try CaptureSafety.requireVerifiedEngine(respawned: true, pid: 10, responsiblePID: responsible)
+                try CaptureSafety.requireVerifiedEngine(worker: true, pid: 10, responsiblePID: responsible)
             }
         }
         fails("CAPTURE_RESPONSIBILITY_UNVERIFIED") {
-            try CaptureSafety.requireVerifiedEngine(respawned: false, pid: 10, responsiblePID: 10)
+            try CaptureSafety.requireVerifiedEngine(worker: false, pid: 10, responsiblePID: 10)
         }
-        try CaptureSafety.requireVerifiedEngine(respawned: true, pid: 10, responsiblePID: 10)
-        expect(true, "Only a respawned and OS-verified self-responsible engine qualifies")
+        try CaptureSafety.requireVerifiedEngine(worker: true, pid: 10, responsiblePID: 10)
+        expect(true, "Only a independent worker and OS-verified self-responsible engine qualifies")
         fails("SCREEN_RECORDING_PERMISSION_REQUIRED") { try CaptureSafety.requireScreenRecordingGrant(false) }
         try CaptureSafety.requireScreenRecordingGrant(true)
         expect(true, "An existing grant allows capture by a verified engine")

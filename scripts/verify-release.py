@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify an extracted OpenCU release offline without GUI, input or permission requests."""
+"""Verify an extracted release with empty HOME and separate sandbox capability probes."""
 
 import argparse
 import contextlib
@@ -12,6 +12,7 @@ import platform
 import pwd
 import shutil
 import signal
+import select
 import socket
 import stat
 import subprocess
@@ -26,7 +27,7 @@ CONTROLLER = r"""import { Client } from '@modelcontextprotocol/sdk/client/index.
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 const settings = JSON.parse(process.argv[2]);
 const transport = new StdioClientTransport({
-  command: '/usr/bin/sandbox-exec', args: ['-p', settings.profile, settings.entry, 'mcp'],
+  command: settings.entry, args: ['mcp'],
   env: settings.env, cwd: settings.cwd, stderr: 'pipe',
 });
 transport.stderr?.on('data', () => {});
@@ -177,6 +178,9 @@ def verify(archive, evidence):
         real_user_home = pathlib.Path(pwd.getpwuid(os.getuid()).pw_dir)
         denied = [ROOT, real_user_home / ".codex", real_user_home / ".agents",
                   pathlib.Path("/Applications/ChatGPT.app"), pathlib.Path("/Applications/Codex.app")]
+        # These probes check the sandbox profile, not runtime confinement.
+        # NSWorkspace strips arguments AND environment from sandboxed callers;
+        # the argv/token worker protocol must run outside sandbox-exec.
         profile = "(version 1)\n(allow default)\n(deny network*)\n" + "\n".join(
             "(deny file-read* (subpath " + json.dumps(str(path)) + "))" for path in denied)
         sandbox = ["/usr/bin/sandbox-exec", "-p", profile]
@@ -193,7 +197,7 @@ def verify(archive, evidence):
                       'catch(e){process.exit(["EPERM","EACCES"].includes(e.code)?0:2)}')
         checked = isolated([node, "--input-type=module", "-e", read_probe, pathlib.Path(__file__).resolve()])
         require(checked.returncode == 0, "Sandbox did not reject reads from the controller's source directory")
-        evidence["source_repository_reads_denied"] = True
+        evidence["sandbox_probe_source_repository_reads_denied"] = True
         network_probe = ('import net from "node:net";const s=net.connect({host:"127.0.0.1",port:Number(process.argv[1])});'
                          's.on("connect",()=>{s.destroy();process.exit(1)});'
                          's.on("error",e=>process.exit(["EPERM","EACCES"].includes(e.code)?0:2));'
@@ -205,23 +209,58 @@ def verify(archive, evidence):
             listener.listen(1)
             checked = isolated([node, "--input-type=module", "-e", network_probe, listener.getsockname()[1]])
         require(checked.returncode == 0, "Sandbox did not reject a network connection")
-        evidence["network_connections_denied"] = True
-        evidence["additional_read_denials"] = ["real ~/.codex", "real ~/.agents", "ChatGPT.app", "Codex.app",
+        evidence["sandbox_probe_ip_network_connections_denied"] = True
+        evidence["runtime_sandboxed"] = False
+        evidence["isolation_scope"] = "Sandbox probes only; runtime uses extracted bundle and empty HOME outside sandbox-exec"
+        evidence["sandbox_probe_read_denials"] = ["real ~/.codex", "real ~/.agents", "ChatGPT.app", "Codex.app",
                                                  "controller source directory including old .runtime"]
         version = isolated([engine, "--version"])
         require(version.returncode == 0, "Isolated engine version check failed")
         evidence["engine_version"] = version.stdout.strip()
-        doctor = isolated([engine, "serve"], input=json.dumps({"id": 1, "method": "doctor", "params": {}}) + "\n")
+        # Keep the worker alive long enough to check the actual OS launch
+        # environment. Never log its command/environment (it may contain tokens).
+        doctor = subprocess.Popen([str(engine), "serve"], cwd=isolated_home,
+                                  env=environment, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                  stderr=subprocess.PIPE, text=True)
+        try:
+            doctor.stdin.write(json.dumps({"id": 1, "method": "doctor", "params": {}}) + "\n")
+            doctor.stdin.flush()
+            require(select.select([doctor.stdout], [], [], 30)[0], "Native doctor timed out")
+            reply = json.loads(doctor.stdout.readline())
+            worker_pid = reply["result"]["workerPID"]
+            require(worker_pid != doctor.pid, "Doctor ran in the relay")
+            worker_environment = subprocess.run(
+                ["/bin/ps", "eww", "-p", str(worker_pid), "-o", "command="],
+                capture_output=True, text=True, timeout=5)
+            require(worker_environment.returncode == 0
+                    and "HOME=" + str(isolated_home) in worker_environment.stdout.split(),
+                    "Empty HOME did not reach the LaunchServices worker")
+            require(worker_environment.stdout.strip().startswith(str(engine) + " worker serve "),
+                    "LaunchServices started a different bundle than the extracted release")
+            evidence["worker_received_empty_home"] = True
+            evidence["worker_used_extracted_bundle"] = True
+        finally:
+            doctor.stdin.close()
+            try:
+                doctor.wait(timeout=6)
+            except subprocess.TimeoutExpired:
+                doctor.kill()
+                doctor.wait(timeout=3)
+            doctor.stdout.close()
+            doctor.stderr.close()
         require(doctor.returncode == 0, "Native doctor process failed")
-        reply = json.loads(doctor.stdout.strip())
         result = reply["result"]
         require(reply["id"] == 1 and result["engine"] == "opencu" and result["requiresAccount"] is False
                 and result["requiresOfficialRuntime"] is False, "Native doctor returned an unexpected result")
-        evidence["native_doctor"] = {key: result[key] for key in ["engine", "version", "transport", "requiresAccount", "requiresOfficialRuntime"]}
+        require(result["launchedBy"] == "LaunchServices" and result["workerPID"] == result["responsiblePID"]
+                and result["captureContext"]["verifiedSelfResponsible"] is True,
+                "Release worker is not independently self-responsible")
+        evidence["native_doctor"] = {key: result[key] for key in ["engine", "version", "transport", "requiresAccount", "requiresOfficialRuntime", "launchedBy"]}
+        evidence["worker_verified_self_responsible"] = True
         evidence["permission_status_not_used_as_standalone_authorization_evidence"] = True
         controller = package / ".release-check.mjs"
         controller.write_text(CONTROLLER)
-        settings = {"profile": profile, "entry": str(package / "bin/opencu"), "env": environment, "cwd": str(isolated_home)}
+        settings = {"entry": str(package / "bin/opencu"), "env": environment, "cwd": str(isolated_home)}
         checked = run([str(node), str(controller), json.dumps(settings)], cwd=area, timeout=45)
         require(checked.returncode == 0, "Isolated MCP initialization, tools/list or list_apps failed")
         evidence.update(json.loads(checked.stdout.strip()))
@@ -243,7 +282,7 @@ def main():
     if archive in outputs:
         raise SystemExit("Receipt output must not replace the archive being verified.")
     evidence = {
-        "test": "independent-release-isolated-read-only",
+        "test": "independent-release-empty-home-read-only",
         "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "host_macos_version": platform.mac_ver()[0], "arch": platform.machine(),
         "archive": archive.name, "archive_bytes": archive.stat().st_size, "archive_sha256": sha256(archive),
