@@ -7,12 +7,18 @@ import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { createServer } from 'node:http';
-import { access, mkdir, mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rename, writeFile, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as pause } from 'node:timers/promises';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+
+// The fixture polls for this file; publish it whole so it never reads a partial write.
+async function writeCommand(file, command) {
+  await writeFile(`${file}.tmp`, command);
+  await rename(`${file}.tmp`, file);
+}
 
 if (process.platform !== 'win32') throw new Error('Windows-only acceptance; no desktop was touched.');
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -56,7 +62,7 @@ async function fixtureState() {
 }
 async function fixtureCommand(command) {
   await waitFor(async () => { try { await access(commandFile); return false; } catch { return true; } }, 'fixture command idle');
-  await writeFile(commandFile, command);
+  await writeCommand(commandFile, command);
   await waitFor(async () => { try { await access(commandFile); return false; } catch { return true; } }, `fixture command ${command}`);
   await pause(150);
 }
@@ -249,7 +255,7 @@ try {
   assert.equal((await fixtureState()).foregroundHwnd, family.foregroundHwnd);
   checks.push('cold connection refuses different-process background input and activation without input');
   await client.close(); client = primaryClient;
-  await writeFile(otherCommand, 'close');
+  await writeCommand(otherCommand, 'close');
   await waitFor(() => other.exitCode !== null, 'background fixture closed');
 
   await fixtureCommand('overlay-close');

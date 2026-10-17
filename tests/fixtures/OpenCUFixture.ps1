@@ -80,7 +80,8 @@ public class OpenCUFixture : Form {
         scrolling.MouseWheel += delegate { wheel++; }; content.MouseWheel += delegate { wheel++; };
         Controls.AddRange(new Control[]{counter,notes,check,password,marker,slider,scrolling,dragPanel});
         timer.Interval=100;timer.Tick += delegate {
-            if(File.Exists(command)) { var cmd=File.ReadAllText(command).Trim();File.Delete(command);
+            if(File.Exists(command)) { string cmd; try { cmd=File.ReadAllText(command).Trim();File.Delete(command); } catch(IOException) { return; } // Antivirus or the writer may still hold it; retry next tick.
+               
                 if(cmd=="move") { Location=new Point(Location.X+40,Location.Y+30);moves++; }
                 else if(cmd=="digest") { try{digest=ClipboardDigest();}catch(Exception e){error=e.Message;} }
                 else if(cmd=="indicator") { var h=FindWindow("OpenCUOperationIndicator",null);indicatorVisible=IsWindowVisible(h);indicatorReadable=GetWindowDisplayAffinity(h,out indicatorAffinity); }
