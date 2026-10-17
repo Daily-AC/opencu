@@ -309,8 +309,16 @@ try {
   const browser = spawn(chrome, [`--user-data-dir=${profile}`, '--no-first-run', '--no-default-browser-check', '--mute-audio', '--disable-background-networking', '--disable-extensions', '--new-window', url], { windowsHide: true, stdio: 'ignore' });
   owned.push({ child: browser, marker: profile });
   browser.on('error', e => { report.browserError = e.message; });
-  await pause(2500);
-  await call('get_app_state', chromeTitle, { waitForText: 'OpenCU Chrome page text', waitTimeoutMs: 15000, disableDiff: true });
+  // A first launch on a fresh profile can take well over a few seconds.
+  for (let attempt = 0; ; attempt++) {
+    await pause(1000);
+    try {
+      await call('get_app_state', chromeTitle, { waitForText: 'OpenCU Chrome page text', waitTimeoutMs: 15000, disableDiff: true });
+      break;
+    } catch (error) {
+      if (!String(error.message).includes('APP_NOT_FOUND') || attempt >= 20) throw error;
+    }
+  }
   index('Fixture test link');
   assert.ok(!tree.includes('OpenCU-Web-Secret-2917'));
   checks.push('web password value is redacted');
