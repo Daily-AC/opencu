@@ -10,9 +10,9 @@ Physical takeover and privileged/locked-desktop cases remain manual follow-ups.
 ## Standalone transport and embedding
 
 Run `.build/win/opencu-engine.exe serve` with inherited stdin/stdout pipes in the
-signed-in user's interactive Windows session. Node is optional: a Go helper (for
-example a future `wanctl act` integration) can spawn the same executable. OpenCU
-neither imports nor invokes wanctl. The PE uses the Windows GUI subsystem, creates
+signed-in user's interactive Windows session. This JSON-lines protocol is
+internal and can change between releases; programs that start OpenCU for an
+agent use the MCP server as described in [host integration](host-integration.md). The PE uses the Windows GUI subsystem, creates
 no console or dialogs. A nonactivating status banner is visible during input and
 briefly afterwards; Windows excludes it from captures. Message-only windows handle
 input monitoring and clipboard ownership. It exposes no network listener.
