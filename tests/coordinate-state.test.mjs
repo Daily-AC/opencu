@@ -93,3 +93,16 @@ test('image sizes come from the PNG header and other or malformed headers fail c
     assert.equal(imageSize(bytes), undefined);
   }
 });
+
+
+test('missing, consumed, wrong-app and later-batch screenshots have a stable refusal code', () => {
+  const guard = new CoordinateState();
+  assert.throws(() => guard.before('click', { app, x: 1, y: 1 }), { code: 'SCREENSHOT_REQUIRED' });
+  observe(guard);
+  assert.throws(() => guard.before('click', { app: 'another', x: 1, y: 1 }), { code: 'SCREENSHOT_REQUIRED' });
+  assert.throws(() => guard.before('run_actions', { app, actions: [
+    { method: 'press_key', key: 'Tab' }, { method: 'click', x: 1, y: 1 },
+  ] }), { code: 'SCREENSHOT_REQUIRED' });
+  guard.before('get_app_state', { app });
+  assert.throws(() => guard.before('drag', drag), { code: 'SCREENSHOT_REQUIRED' });
+});

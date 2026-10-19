@@ -26,12 +26,12 @@ export class CoordinateState {
       const coordinates = points(action.method, action);
       if (!coordinates.length) continue;
       if (index > 0) {
-        throw new Error(`Action ${index + 1} uses coordinates after an earlier UI action. No actions were sent. End this batch before that action, call get_app_state with includeScreenshot: true, and inspect the new screenshot before continuing.`);
+        throw Object.assign(new Error(`Action ${index + 1} uses coordinates after an earlier UI action. No actions were sent. End this batch before that action, call get_app_state with includeScreenshot: true, and inspect the new screenshot before continuing.`), { code: 'SCREENSHOT_REQUIRED' });
       }
       const snapshot = this.#snapshot;
       if (!snapshot || !snapshot.apps.includes(args.app)) {
         const reason = snapshot ? 'The last screenshot belongs to a different app identifier.' : this.#reason;
-        throw new Error(`Coordinate input requires a fresh screenshot. ${reason} No coordinate action was sent. Call get_app_state with app ${JSON.stringify(args.app)} and includeScreenshot: true, inspect the returned window, then choose coordinates from that image.`);
+        throw Object.assign(new Error(`Coordinate input requires a fresh screenshot. ${reason} No coordinate action was sent. Call get_app_state with app ${JSON.stringify(args.app)} and includeScreenshot: true, inspect the returned window, then choose coordinates from that image.`), { code: 'SCREENSHOT_REQUIRED' });
       }
       for (const [x, y] of coordinates) {
         if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0 || x >= snapshot.width || y >= snapshot.height) {

@@ -19,7 +19,7 @@ OpenCU is installed when this per-user manifest exists:
 ```json
 {
   "name": "opencu",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "platform": "win32",
   "mcp": {
     "command": "C:\\Users\\me\\AppData\\Local\\OpenCU\\node\\node.exe",
@@ -60,6 +60,24 @@ The package is not code-signed.
 - Keep one connection for each agent session and reuse it for every call in that
   session. Element indexes, screenshot coordinates and the stop state belong to
   the connection; a new connection starts without them.
+- From v0.3.2, a 90-second engine request timeout does not kill the MCP session.
+  That call returns `RUNTIME_ERROR`; its input outcome remains unknown and no
+  action is replayed. OpenCU retires the old engine (EOF, up to 35 seconds for
+  cleanup, then termination), waits for process/output closure, and lets a later
+  call start a fresh engine internally. Hosts keep the same MCP connection.
+  The next call may wait for that cleanup; allow more than 125 seconds for a
+  call that can include cleanup plus a new engine request. Host cancellation
+  does not establish that input was cancelled.
+- After timeout, old element indexes, screenshots and diffs are discarded.
+  The agent must explicitly call `get_app_state` again before input or activation
+  (`OBSERVATION_REQUIRED` otherwise); `list_apps` alone is insufficient.
+  Coordinate input additionally needs a fresh screenshot (`SCREENSHOT_REQUIRED`
+  on both platforms). Do not replay the timed-out action or an interrupted batch.
+- Engine replacement is forbidden once this MCP connection has seen
+  `USER_STOPPED` or `STOPPED_BY_PERSON`, even in a late old-engine response.
+  Ordinary `PERSON_ACTIVE` is not a permanent stop, but still requires the
+  interaction described below. Other process/stream failures remain terminal;
+  automatic replacement is limited to engine request timeouts.
 - Close the connection when the agent session ends, and after an idle period;
   ten minutes is a reasonable default.
 - Do not let two connections operate the same app at the same time.
@@ -78,7 +96,7 @@ The package is not code-signed.
 ## Errors and stopping
 
 Tool errors begin with a stable code followed by a colon, for example
-`USER_STOPPED: ...`; the code is also in `_meta["opencu/error"]`. Two codes
+`USER_STOPPED: ...`; the code is also in `_meta["opencu/error"]`. These stops
 need host action:
 
 - `USER_STOPPED` (Windows, physical Esc) and `STOPPED_BY_PERSON` (macOS, menu

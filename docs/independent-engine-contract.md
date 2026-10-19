@@ -120,7 +120,14 @@ preserving the same code in `_meta["opencu/error"]`. For example,
 nor the native JSON-lines error schema change. Batch/final-observation context
 follows the prefix. `WAIT_TIMEOUT` uses the same envelope and places the last
 observed state after the error, retaining app metadata and any image. Errors
-without an engine code use the existing `RUNTIME_ERROR` fallback. Hosts can match
+without an engine code use the existing `RUNTIME_ERROR` fallback.
+`SCREENSHOT_REQUIRED` identifies coordinate input without a fresh screenshot for
+that app, including coordinates after another action in a batch, on both
+platforms. No action is sent for this refusal. From v0.3.2, an engine request
+timeout can retire the engine and allow a fresh observation on the same MCP
+connection; a seen person-stop code permanently forbids that replacement. See
+[host integration](host-integration.md#session-lifetime) for the cleanup and
+observation requirements. Hosts can match
 the visible prefix even when they do not expose MCP metadata to the agent.
 
 ## Direct-host safety contract

@@ -314,7 +314,7 @@ try {
   }
   await windowless();
   await refused('type_text', { text: 'must-not-type' }, ['NO_ACCESSIBLE_WINDOW']);
-  await refused('click', { x: 10, y: 10 }, ['RUNTIME_ERROR', 'SCREENSHOT_REQUIRED']);
+  await refused('click', { x: 10, y: 10 }, ['SCREENSHOT_REQUIRED']);
   await fileCommand('New');
   assert.equal((await readState(targetFile)).newCommands, 1);
   await untilTree('ID="textField"', 'File > New window missing from the state');
