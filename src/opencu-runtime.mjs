@@ -5,6 +5,7 @@ import path from 'node:path';
 import { setTimeout as pause } from 'node:timers/promises';
 import { CoordinateState } from './coordinate-state.mjs';
 
+const personStops = new Set(['STOPPED_BY_PERSON', 'USER_STOPPED']);
 const inputs = new Set(['click', 'drag', 'paste', 'press_key', 'type_text', 'scroll', 'set_value', 'select_text', 'perform_secondary_action']);
 
 export function toolError(error) {
@@ -29,10 +30,15 @@ export class OpenCURuntime {
   #closing = false;
   #failure;
   #personStop;
+  #retiring;
+  #retiringChild;
+  #needsObservation = false;
+  #requestTimeoutMs;
   #coordinates = new CoordinateState();
   #lastText = new Map();
 
-  constructor({ root, enginePath } = {}) {
+  constructor({ root, enginePath, requestTimeoutMs = 90_000 } = {}) {
+    this.#requestTimeoutMs = requestTimeoutMs;
     this.enginePath = enginePath ?? defaultEnginePath(root);
   }
 
@@ -40,35 +46,39 @@ export class OpenCURuntime {
     try { await access(this.enginePath); }
     catch { throw new Error(`OpenCU engine is missing. Run npm run ${process.platform === 'win32' ? 'build:win' : 'build'}, or use the prepared OpenCU release.`); }
     this.#active();
-    this.#child = spawn(this.enginePath, ['serve'], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
-    this.#child.stderr.on('data', () => {});
-    this.#child.stdin.on('error', () => this.#fail(new Error('OpenCU engine input closed; no operation was retried.')));
-    this.#child.on('error', error => this.#fail(error));
-    this.#child.on('exit', () => this.#fail(new Error('OpenCU engine exited; no operation was retried.')));
-    const lines = createInterface({ input: this.#child.stdout });
+    if (this.#personStop) throw this.#personStop;
+    const child = this.#child = spawn(this.enginePath, ['serve'], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    child.stderr.on('data', () => {});
+    const fail = error => { if (this.#child === child) this.#fail(error); };
+    child.stdin.on('error', () => fail(new Error('OpenCU engine input closed; no operation was retried.')));
+    child.on('error', fail);
+    child.on('exit', () => fail(new Error('OpenCU engine exited; no operation was retried.')));
+    const lines = createInterface({ input: child.stdout });
     lines.on('line', line => {
       try {
         const message = JSON.parse(line);
+        if (child !== this.#child && child !== this.#retiringChild) return;
+        // Even a late reply from the retiring engine must preserve a person's stop.
+        if (personStops.has(message.error?.code)) {
+          this.#personStop ??= Object.assign(new Error(message.error.message), { code: message.error.code });
+        }
         const request = this.#pending.get(message.id);
         if (!request) return;
         if (!message.error && !Object.hasOwn(message, 'result')) {
-          this.#fail(new Error('OpenCU returned an invalid response.')); return;
+          fail(new Error('OpenCU returned an invalid response.')); return;
         }
         this.#pending.delete(message.id);
         clearTimeout(request.timer);
         if (message.error) {
-          if (message.error.code === 'STOPPED_BY_PERSON') {
-            this.#personStop ??= Object.assign(new Error(message.error.message), { code: message.error.code });
-          }
           request.reject(Object.assign(new Error(message.error.message), { code: message.error.code, details: message.error.data }));
         } else request.resolve(message.result);
-      } catch { this.#fail(new Error('OpenCU returned invalid JSON.')); }
+      } catch { fail(new Error('OpenCU returned invalid JSON.')); }
     });
   }
 
   #active(signal) {
     if (this.#closing) throw new Error('OpenCU is closing; no further input was sent.');
-    if (this.#failure) throw this.#failure;
+    if (this.#failure) throw this.#personStop ?? this.#failure;
     if (signal?.aborted) throw new Error('The request was cancelled. Earlier input may already have run; inspect state before retrying.');
   }
 
@@ -80,16 +90,28 @@ export class OpenCURuntime {
 
   async #request(method, params, signal) {
     this.#active(signal);
+    await this.#retiring;
+    this.#active(signal);
     this.#started ??= this.#start();
     await this.#started;
     this.#active(signal);
     const id = this.#nextID++;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
-        this.#fail(new Error('OpenCU engine timed out. Input may already have run. Reconnect and inspect state; no operation was retried.'));
-        // Let in-flight input release its keys; block all later requests.
-        this.#child.stdin.end();
-      }, 90_000);
+        const error = new Error('OpenCU engine timed out. Input may already have run. Read fresh state before further input; no operation was retried.');
+        const child = this.#child;
+        this.#child = undefined;
+        this.#started = undefined;
+        this.#needsObservation = true;
+        this.#coordinates = new CoordinateState();
+        this.#lastText.clear();
+        this.#retiringChild = child;
+        // Reap the old process before any replacement can send input. Preserve
+        // normal held-key cleanup, and keep listening for a late stop result.
+        this.#retiring = this.#shutdown(child).then(() => { this.#retiringChild = undefined; });
+        for (const pending of this.#pending.values()) { clearTimeout(pending.timer); pending.reject(error); }
+        this.#pending.clear();
+      }, this.#requestTimeoutMs);
       this.#pending.set(id, { resolve, reject, timer });
       this.#child.stdin.write(JSON.stringify({ id, method, params }) + '\n');
     });
@@ -108,6 +130,7 @@ export class OpenCURuntime {
         method = 'get_app_state';
         continue;
       }
+      this.#needsObservation = false;
       if (!waitForText || result.text.includes(waitForText)) return result;
       if (Date.now() >= deadline) {
         const error = new Error('The expected text did not appear. Inspect the returned state before continuing. No additional input was sent.');
@@ -130,7 +153,9 @@ export class OpenCURuntime {
   async call(method, args, signal) {
     this.#active(signal);
     const run = this.#tail.then(async () => {
+      await this.#retiring;
       this.#active(signal);
+      if (this.#personStop && !this.#child) throw this.#personStop;
       if (method === 'list_apps') {
         return { content: [{ type: 'text', text: JSON.stringify(await this.#request(method, {}, signal)) }] };
       }
@@ -138,8 +163,11 @@ export class OpenCURuntime {
       // Preserve the person's stop even when local coordinate validation would
       // otherwise mask it. Text reads keep the same connection and remain usable.
       if (this.#personStop && (inputs.has(method) || ['activate_app', 'run_actions'].includes(method)
-          || method === 'get_app_state' && args.includeScreenshot)) {
-        throw Object.assign(new Error(this.#personStop.message), { code: 'STOPPED_BY_PERSON' });
+          || this.#personStop.code === 'STOPPED_BY_PERSON' && method === 'get_app_state' && args.includeScreenshot)) {
+        throw Object.assign(new Error(this.#personStop.message), { code: this.#personStop.code });
+      }
+      if (this.#needsObservation && (inputs.has(method) || ['activate_app', 'run_actions'].includes(method))) {
+        throw Object.assign(new Error('The engine timed out and must restart. Read fresh app state before input; no operation was retried.'), { code: 'OBSERVATION_REQUIRED' });
       }
       this.#coordinates.before(method, args);
       let options = args;
@@ -167,7 +195,7 @@ export class OpenCURuntime {
             }
           }
           catch (error) {
-            error.message = `Action ${index + 1} failed: ${error.message} Earlier actions may have run.${error.code === 'STOPPED_BY_PERSON' ? '' : ' Read state before retrying.'}`;
+            error.message = `Action ${index + 1} failed: ${error.message} Earlier actions may have run.${personStops.has(error.code) ? '' : ' Read state before retrying.'}`;
             throw error;
           }
         }
@@ -194,13 +222,20 @@ export class OpenCURuntime {
   async close() {
     if (this.#closing) return;
     this.#closing = true;
-    const child = this.#child;
+    await this.#retiring;
+    await this.#shutdown(this.#child);
+  }
+
+  async #shutdown(child) {
     if (!child || child.exitCode !== null || child.signalCode !== null) return;
+    // Wait for close, not just exit: drain late stdout (including stop errors)
+    // before allowing a replacement process.
+    const closed = new Promise(resolve => child.once('close', resolve));
     child.stdin.end();
     // A held input is capped at 30 seconds. Preserve its normal release on EOF.
     const timer = setTimeout(() => child.kill('SIGTERM'), 35_000);
     timer.unref();
-    await new Promise(resolve => child.once('exit', resolve));
+    await closed;
     clearTimeout(timer);
   }
 }

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { OpenCURuntime, toolError } from '../src/opencu-runtime.mjs';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 
@@ -76,6 +77,8 @@ test('capture safety refusals preserve diagnostics without retrying or granting 
   assert.equal((await f.calls()).length, 1);
   const click = await f.call('click', { app: 'Fixture', x: 5, y: 5 });
   assert.equal(click.isError, true);
+  assert.equal(click._meta['opencu/error'], 'SCREENSHOT_REQUIRED');
+  assert.match(click.content[0].text, /^SCREENSHOT_REQUIRED: /);
   assert.equal((await f.calls()).length, 1, 'No coordinate action reaches the engine after refused capture');
 });
 
@@ -224,4 +227,106 @@ test('all engine codes are visible in agent text as well as metadata', async t =
     assert.equal(result._meta['opencu/error'], code);
   }
   assert.equal((await f.calls()).length, codes.length);
+});
+
+// Real subprocesses exercise EOF, late output and exit events as well as the
+// request timer. Only the timeout is shortened; no engine request is replayed.
+async function restartingFixture(t, replies) {
+  await mkdir(path.join(root, '.cache'), { recursive: true });
+  const dir = await mkdtemp(path.join(root, '.cache/runtime-timeout-'));
+  const binary = path.join(dir, 'engine.mjs');
+  const script = `#!${process.execPath}
+import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
+import { createInterface } from 'node:readline';
+const dir = ${JSON.stringify(dir)};
+appendFileSync(dir + '/starts', process.pid + '\\n');
+let late;
+const lines = createInterface({ input: process.stdin });
+lines.on('line', line => {
+  const q = JSON.parse(line);
+  appendFileSync(dir + '/calls', JSON.stringify(q) + '\\n');
+  const replies = JSON.parse(readFileSync(dir + '/replies', 'utf8'));
+  const reply = replies.shift();
+  writeFileSync(dir + '/replies', JSON.stringify(replies));
+  if (reply?.hang) {
+    if (reply.stubborn) setInterval(() => {}, 1000);
+    late = { id: q.id, ...reply.late }; return;
+  }
+  process.stdout.write(JSON.stringify({ id: q.id, ...(reply ?? { result: q.method === 'get_app_state' ? ${JSON.stringify(state)} : { ok: true } }) }) + '\\n');
+});
+lines.on('close', () => {
+  // Exercise a result arriving after timeout, while the old engine retires.
+  if (late) setTimeout(() => process.stdout.write(JSON.stringify(late) + '\\n'), 50);
+});
+`;
+  await writeFile(binary, script);
+  await chmod(binary, 0o700);
+  await writeFile(path.join(dir, 'replies'), JSON.stringify(replies));
+  const runtime = new OpenCURuntime({ enginePath: binary, requestTimeoutMs: 3000 });
+  t.after(async () => { await runtime.close(); await rm(dir, { recursive: true, force: true }); });
+  const lines = async file => (await readFile(path.join(dir, file), 'utf8').catch(() => '')).trim().split('\n').filter(Boolean);
+  return {
+    call: (method, args = {}) => runtime.call(method, { app: 'Fixture', ...args }).catch(toolError),
+    calls: async () => (await lines('calls')).map(JSON.parse),
+    starts: async () => (await lines('starts')).map(Number),
+  };
+}
+
+test('a timed-out action is never replayed; the same runtime restarts with fresh observation and no old diff', async t => {
+  await mkdir(path.join(root, '.cache'), { recursive: true });
+  const f = await restartingFixture(t, [{ result: state }, { hang: true, late: { result: { ok: true } } }]);
+  const initial = await f.call('get_app_state');
+  assert.equal(initial.isError, undefined, JSON.stringify(initial));
+  const timeout = await f.call('run_actions', { actions: [
+    { method: 'click', element_index: 1 }, { method: 'type_text', text: 'must-not-run' },
+  ] });
+  assert.equal(timeout._meta['opencu/error'], 'RUNTIME_ERROR');
+  assert.match(timeout.content[0].text, /timed out.*Input may already have run.*no operation was retried/);
+  for (const [method, args] of [['click', { element_index: 1 }], ['click', { x: 1, y: 1 }], ['activate_app', {}]]) {
+    assert.equal((await f.call(method, args))._meta['opencu/error'], 'OBSERVATION_REQUIRED');
+  }
+  const fresh = await f.call('get_app_state');
+  assert.equal(fresh.isError, undefined);
+  assert.equal(fresh.content[0].text, state.text, 'Old observation diff is discarded');
+  assert.equal((await f.call('click', { x: 1, y: 1 }))._meta['opencu/error'], 'SCREENSHOT_REQUIRED');
+  assert.equal((await f.call('click', { element_index: 1 })).isError, undefined);
+  const starts = await f.starts();
+  assert.equal(starts.length, 2);
+  assert.throws(() => process.kill(starts[0], 0), { code: 'ESRCH' }, 'Old process exited before replacement');
+  assert.deepEqual((await f.calls()).map(q => q.method), ['get_app_state', 'click', 'get_app_state', 'click', 'get_app_state']);
+});
+
+for (const code of ['USER_STOPPED', 'STOPPED_BY_PERSON']) {
+  test(`${code} survives a later timeout without starting a replacement engine`, async t => {
+    const f = await restartingFixture(t, [{ error: { code, message: 'Person stopped input' } }, { hang: true }]);
+    assert.equal((await f.call('press_key', { key: 'Return' }))._meta['opencu/error'], code);
+    assert.equal((await f.call('click', { x: 1, y: 1 }))._meta['opencu/error'], code);
+    assert.equal((await f.starts()).length, 1);
+    assert.match((await f.call('get_app_state')).content[0].text, /timed out/);
+    for (const method of ['get_app_state', 'press_key', 'list_apps']) {
+      assert.equal((await f.call(method, { key: 'Return' }))._meta['opencu/error'], code);
+    }
+    assert.equal((await f.starts()).length, 1);
+    assert.deepEqual((await f.calls()).map(q => q.method), ['press_key', 'get_app_state']);
+  });
+}
+
+test('a late USER_STOPPED from the timed-out engine prevents restart', async t => {
+  const f = await restartingFixture(t, [{ hang: true, late: { error: { code: 'USER_STOPPED', message: 'Physical Escape' } } }]);
+  assert.match((await f.call('get_app_state')).content[0].text, /timed out/);
+  assert.equal((await f.call('get_app_state'))._meta['opencu/error'], 'USER_STOPPED');
+  assert.equal((await f.starts()).length, 1);
+});
+
+
+test('a provider that ignores EOF is terminated before a replacement starts', async t => {
+  const f = await restartingFixture(t, [{ hang: true, stubborn: true }]);
+  assert.match((await f.call('get_app_state')).content[0].text, /timed out/);
+  const oldPID = (await f.starts())[0];
+  assert.doesNotThrow(() => process.kill(oldPID, 0), 'Old engine is still alive during cleanup grace');
+  const fresh = await f.call('get_app_state');
+  assert.equal(fresh.isError, undefined);
+  assert.equal((await f.starts()).length, 2);
+  assert.throws(() => process.kill(oldPID, 0), { code: 'ESRCH' });
+  assert.deepEqual((await f.calls()).map(q => q.method), ['get_app_state', 'get_app_state']);
 });
