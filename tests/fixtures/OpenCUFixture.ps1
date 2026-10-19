@@ -67,6 +67,7 @@ public class OpenCUFixture : Form {
     readonly Timer timer = new Timer();
     readonly StringBuilder received = new StringBuilder();
     bool ready, indicatorVisible, indicatorReadable; uint indicatorAffinity;
+    bool modalOpen; int modalCompletions; string modalValue = "";
     int clicks, moves, wheel, overlayClicks; string digest = "", error = "";
     public OpenCUFixture(string o, string c, string title, bool b) {
         background=b;output=o; command=c; Text=title; Name="OpenCUFixture";
@@ -86,7 +87,22 @@ public class OpenCUFixture : Form {
         scrolling.Name="scrollArea";scrolling.AccessibleName="Fixture scroll area";scrolling.SetBounds(20,355,620,170);scrolling.AutoScroll=true;
         var content=new Label();content.Text="Fixture scroll content";content.SetBounds(10,10,500,1500);scrolling.Controls.Add(content);
         scrolling.MouseWheel += delegate { wheel++; }; content.MouseWheel += delegate { wheel++; };
-        Controls.AddRange(new Control[]{counter,notes,check,password,marker,slider,scrolling,dragPanel});
+        var modalButton=new Button();modalButton.Name="modalButton";modalButton.AccessibleName="Fixture open modal";modalButton.Text="Fixture open modal";modalButton.SetBounds(20,328,220,26);
+        modalButton.Click += delegate {
+            // Deliberately synchronous: the provider may keep Invoke pending
+            // until ShowDialog returns. Pointer delivery uses the app message loop.
+            using(var dialog=new Form()) {
+                dialog.Name="modalDialog";dialog.Text=Text+" Modal";dialog.StartPosition=FormStartPosition.CenterParent;dialog.ClientSize=new Size(320,130);
+                var value=new TextBox();value.Name="modalValue";value.AccessibleName="Fixture modal value";value.Text="pending";value.SetBounds(20,20,280,30);
+                var ok=new Button();ok.Name="modalOK";ok.AccessibleName="Fixture modal OK";ok.Text="Fixture modal OK";ok.SetBounds(20,65,280,40);
+                ok.Click += delegate { modalValue=value.Text;dialog.DialogResult=DialogResult.OK;dialog.Close(); };
+                dialog.Controls.AddRange(new Control[]{value,ok});
+                modalOpen=true;Save();
+                if(dialog.ShowDialog(this)==DialogResult.OK)modalCompletions++;
+                modalOpen=false;Save();
+            }
+        };
+        Controls.AddRange(new Control[]{counter,notes,check,password,marker,slider,scrolling,dragPanel,modalButton});
         timer.Interval=100;timer.Tick += delegate {
             if(File.Exists(command)) { string cmd; try { cmd=File.ReadAllText(command).Trim();File.Delete(command); } catch(IOException) { return; } // Antivirus or the writer may still hold it; retry next tick.
                
@@ -124,7 +140,7 @@ public class OpenCUFixture : Form {
         var family="\"foregroundOwner\":"+Q(GetWindow(foreground,4).ToInt64().ToString())+","+"\"mainHwnd\":"+Q(Handle.ToInt64().ToString())+",\"foregroundHwnd\":"+Q(foreground.ToInt64().ToString())+",\"foregroundPid\":"+foregroundPid+",\"mainRootOwner\":"+Q(GetAncestor(Handle,3).ToInt64().ToString())+",\"foregroundRootOwner\":"+Q(GetAncestor(foreground,3).ToInt64().ToString())+",\"overlayClicks\":"+overlayClicks+",\"overlayNotes\":"+Q(overlayNotes==null?"":overlayNotes.Text)+",";
         var a=dragPanel.PointToScreen(new Point(20,dragPanel.Height/2));var b=dragPanel.PointToScreen(new Point(dragPanel.Width-20,dragPanel.Height/2));
         var drag="\"dragFromX\":"+(a.X-r.Left)+",\"dragFromY\":"+(a.Y-r.Top)+",\"dragToX\":"+(b.X-r.Left)+",\"dragToY\":"+(b.Y-r.Top)+",\"dragDistance\":"+(b.X-a.X)+",\"dragDownX\":"+dragDown.X+",\"dragDownY\":"+dragDown.Y+",\"dragUpX\":"+dragUp.X+",\"dragUpY\":"+dragUp.Y+",\"dragHeld\":"+(dragHeld?"true":"false")+",\"dragMoves\":"+dragMoves+",\"drags\":"+drags+",";
-        var json="{\"idleMs\":"+IdleMilliseconds()+",\"minimized\":"+(IsIconic(Handle)?"true":"false")+","+drag+family+"\"pid\":"+System.Diagnostics.Process.GetCurrentProcess().Id+",\"clicks\":"+clicks+",\"notes\":"+Q(notes.Text)+",\"checked\":"+(check.Checked?"true":"false")+",\"slider\":"+slider.Value+",\"scroll\":"+(-scrolling.AutoScrollPosition.Y)+",\"wheel\":"+wheel+",\"moves\":"+moves+",\"x\":"+(p.X-r.Left)+",\"y\":"+(p.Y-r.Top)+",\"markerX\":"+(m.X-r.Left)+",\"markerY\":"+(m.Y-r.Top)+",\"width\":"+(r.Right-r.Left)+",\"height\":"+(r.Bottom-r.Top)+",\"indicatorVisible\":"+(indicatorVisible?"true":"false")+",\"indicatorReadable\":"+(indicatorReadable?"true":"false")+",\"indicatorAffinity\":"+indicatorAffinity+",\"keyChars\":"+Q(received.ToString())+",\"inputLanguage\":"+Q(InputLanguage.CurrentInputLanguage.LayoutName)+",\"clipboardDigest\":"+Q(digest)+",\"error\":"+Q(error)+"}";
+        var json="{\"modalOpen\":"+(modalOpen?"true":"false")+",\"modalCompletions\":"+modalCompletions+",\"modalValue\":"+Q(modalValue)+",\"idleMs\":"+IdleMilliseconds()+",\"minimized\":"+(IsIconic(Handle)?"true":"false")+","+drag+family+"\"pid\":"+System.Diagnostics.Process.GetCurrentProcess().Id+",\"clicks\":"+clicks+",\"notes\":"+Q(notes.Text)+",\"checked\":"+(check.Checked?"true":"false")+",\"slider\":"+slider.Value+",\"scroll\":"+(-scrolling.AutoScrollPosition.Y)+",\"wheel\":"+wheel+",\"moves\":"+moves+",\"x\":"+(p.X-r.Left)+",\"y\":"+(p.Y-r.Top)+",\"markerX\":"+(m.X-r.Left)+",\"markerY\":"+(m.Y-r.Top)+",\"width\":"+(r.Right-r.Left)+",\"height\":"+(r.Bottom-r.Top)+",\"indicatorVisible\":"+(indicatorVisible?"true":"false")+",\"indicatorReadable\":"+(indicatorReadable?"true":"false")+",\"indicatorAffinity\":"+indicatorAffinity+",\"keyChars\":"+Q(received.ToString())+",\"inputLanguage\":"+Q(InputLanguage.CurrentInputLanguage.LayoutName)+",\"clipboardDigest\":"+Q(digest)+",\"error\":"+Q(error)+"}";
         try{File.WriteAllText(output,json,new UTF8Encoding(false));}catch(IOException){}
     }
     static string ClipboardDigest(){

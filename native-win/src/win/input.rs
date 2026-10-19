@@ -301,6 +301,7 @@ unsafe fn pointer(point: (i32, i32), window: &super::apps::Window, g: &Guard<'_>
 pub unsafe fn perform(
     method: &str,
     args: &Value,
+    automation: &IUIAutomation,
     s: &mut Snapshot,
     image: Option<Screenshot>,
     g: &mut Guard<'_>,
@@ -438,20 +439,32 @@ pub unsafe fn perform(
             held.release()?;
         }
         "click" => {
-            if let Some(e) = &e {
-                if down == MOUSEEVENTF_LEFTDOWN
-                    && count == 1
-                    && chord.is_none()
-                    && args.get("duration").is_none()
-                {
-                    let available = actions(&e.element);
-                    if let Some(a) = ["Invoke", "Toggle", "Select", "DoDefaultAction"]
-                        .iter()
-                        .find(|a| available.iter().any(|s| s == **a))
+            // A provider may run a modal message loop inside Invoke. Prefer
+            // real pointer input only when the live UIA hit belongs to this
+            // element, not an owned overlay covering the same window point.
+            let owned_point = if let Some(e) = &e {
+                owned_element_point(automation, e, g)?
+            } else {
+                None
+            };
+            if owned_point.is_none() {
+                if let Some(e) = &e {
+                    if down == MOUSEEVENTF_LEFTDOWN
+                        && count == 1
+                        && chord.is_none()
+                        && args.get("duration").is_none()
                     {
-                        g.check()?;
-                        return secondary(&e.element, a);
+                        let available = actions(&e.element);
+                        if let Some(a) = ["Invoke", "Toggle", "Select", "DoDefaultAction"]
+                            .iter()
+                            .find(|a| available.iter().any(|s| s == **a))
+                        {
+                            g.check()?;
+                            return secondary(&e.element, a);
+                        }
                     }
+                    return Err(Error::new("TARGET_OCCLUDED",
+                        "The element does not own its centre point; no pointer input was sent"));
                 }
             }
             let mut modifiers = hold(
@@ -463,7 +476,10 @@ pub unsafe fn perform(
                 let point = if let Some(p) = screenshot_point()? {
                     p
                 } else {
-                    element_point(e.as_ref().unwrap())?
+                    // Recheck for each click; never fall back after any input.
+                    owned_element_point(automation, e.as_ref().unwrap(), g)?
+                        .ok_or_else(|| Error::new("TARGET_OCCLUDED",
+                            "The element no longer owns its centre point; remaining clicks were stopped"))?
                 };
                 pointer(point, window, g)?;
                 screenshot_point()?;
@@ -560,7 +576,21 @@ pub unsafe fn perform(
                 ));
             }
             g.check()?;
-            secondary(&e.element, a)?;
+            if matches!(a, "Invoke" | "DoDefaultAction") {
+                if let Some(point) = owned_element_point(automation, &e, g)? {
+                    pointer(point, window, g)?;
+                    let mut held = Held::new();
+                    held.down(mouse(MOUSEEVENTF_LEFTDOWN, 0, 0, 0),
+                        mouse(MOUSEEVENTF_LEFTUP, 0, 0, 0), g)?;
+                    g.pause(0.04)?;
+                    held.release()?;
+                } else {
+                    g.check()?;
+                    secondary(&e.element, a)?;
+                }
+            } else {
+                secondary(&e.element, a)?;
+            }
         }
         _ => return Err(Error::new("METHOD_NOT_FOUND", "Unknown input method")),
     }
@@ -575,4 +605,33 @@ unsafe fn element_point(e: &Element) -> Result<(i32, i32)> {
         ));
     }
     Ok((r.x + r.width / 2, r.y + r.height / 2))
+}
+
+/// Accept the element or one of its UIA descendants (e.g. a button's label).
+/// Window-family ownership alone would let an owned overlay receive the click.
+unsafe fn owned_element_point(
+    automation: &IUIAutomation, e: &Element, g: &Guard<'_>,
+) -> Result<Option<(i32, i32)>> {
+    g.check()?;
+    let point = match element_point(e) {
+        Ok(point) => point,
+        Err(error) if error.code == "ELEMENT_NOT_VISIBLE" => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let (x, y) = point;
+    if !e.window.contains(WindowFromPoint(POINT { x, y })) {
+        return Ok(None);
+    }
+    let mut hit = automation.ElementFromPoint(POINT { x, y })?;
+    let walker = automation.RawViewWalker()?;
+    for _ in 0..64 {
+        g.check()?;
+        if automation.CompareElements(&e.element, &hit)?.as_bool() {
+            return Ok(Some(point));
+        }
+        // The root has no parent. A failed walk cannot authorize a pointer.
+        let Ok(parent) = walker.GetParentElement(&hit) else { break };
+        hit = parent;
+    }
+    Ok(None)
 }

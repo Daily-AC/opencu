@@ -71,8 +71,8 @@ function index(label) {
   assert.ok(line, `Missing fixture control: ${label}`);
   return Number(line.match(/^\s*\[(\d+)\]/)?.[1]);
 }
-async function call(name, app, args = {}, errorCode) {
-  const result = await client.callTool({ name, arguments: { app, ...args } }, undefined, { timeout: 90000 });
+async function call(name, app, args = {}, errorCode, timeout = 90000) {
+  const result = await client.callTool({ name, arguments: { app, ...args } }, undefined, { timeout });
   const text = result.content.filter(c => c.type === 'text').map(c => c.text).join('\n');
   await writeFile(path.join(area, `call-${++sequence}.json`), JSON.stringify({ name, app, args, result }, null, 2));
   if (errorCode) {
@@ -204,6 +204,38 @@ try {
   await imageState(title);
   await call('select_text', title, { element_index: index('Fixture notes'), text: 'fixture' }, 'UNSUPPORTED_ON_WINDOWS');
   checks.push('unsupported text selection refused');
+
+  await call('get_app_state', title, { disableDiff: true });
+  await call('click', title, { x: 1, y: 1 }, 'SCREENSHOT_REQUIRED');
+  checks.push('text-only observation refuses coordinate input with SCREENSHOT_REQUIRED');
+
+  report.modalDialog = { handler: 'WinForms synchronous ShowDialog', boundMs: 15000, cases: [] };
+  for (const method of ['click', 'perform_secondary_action', 'run_actions']) {
+    await call('get_app_state', title, { disableDiff: true });
+    const element_index = index('Fixture open modal');
+    const action = { method: 'perform_secondary_action', element_index, action: 'Invoke' };
+    const args = method === 'click' ? { element_index }
+      : method === 'run_actions' ? { actions: [action] } : { element_index, action: 'Invoke' };
+    const started = performance.now();
+    await call(method, title, args, undefined, 15000);
+    const elapsedMs = Math.round(performance.now() - started);
+    assert.ok(elapsedMs < 15000, `Modal opening must return promptly: ${elapsedMs} ms`);
+    await call('get_app_state', title, { disableDiff: true }, undefined, 15000);
+    assert.ok(tree.includes(`${title} Modal`), 'Fresh observation lists the modal dialog');
+    index('Fixture modal OK');
+    assert.equal((await fixtureState()).modalOpen, true);
+    const value = `modal-result-${method}`;
+    await call('set_value', title, { element_index: index('Fixture modal value'), value });
+    await call('click', title, { element_index: index('Fixture modal OK') }, undefined, 15000);
+    await waitFor(async () => {
+      const s = await fixtureState();
+      return !s.modalOpen && s.modalValue === value && s.modalCompletions === report.modalDialog.cases.length + 1;
+    }, 'modal OK recorded value and closed dialog');
+    await call('get_app_state', title, { disableDiff: true });
+    assert.ok(!tree.includes('Fixture modal OK'), 'Closed dialog is absent from fresh state');
+    report.modalDialog.cases.push({ method, elapsedMs, value, closed: true });
+    checks.push(`${method} opens a synchronous modal promptly; fresh state, value input and indexed OK work on the same connection`);
+  }
 
   await fixtureCommand('owned');
   const family = await fixtureState();
