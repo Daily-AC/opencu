@@ -357,6 +357,7 @@ try {
   // activation after the indexed click has already acquired foreground.
   await fixtureCommand('overlay-activate');
   const unrelatedAgain = await fixtureState();
+  assert.equal(unrelatedAgain.error, '', 'fixture overlay-activate');
   assert.equal(unrelatedAgain.foregroundHwnd, unrelated.foregroundHwnd);
   assert.notEqual(unrelatedAgain.foregroundRootOwner, unrelatedAgain.mainRootOwner);
   await call('activate_app', title);
