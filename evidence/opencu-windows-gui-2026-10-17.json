@@ -1,0 +1,68 @@
+{
+  "test": "windows-foreground-fixtures",
+  "date": "2026-10-17",
+  "environment": "Windows 11 Enterprise Evaluation 26H2 (build 26300.9457, zh-CN, Microsoft Pinyin default input), Hyper-V VM 4 vCPU / 8 GB / 1920x1080, Defender real-time protection on, restored from a clean checkpoint before every run",
+  "package": {
+    "file": "opencu-win-x64.zip",
+    "sha256": "4a4192fc4022a754474337f28e97b1e5b0d69b9fd51718737db18877f6fc2569",
+    "installedWith": "install.ps1 -LocalZip"
+  },
+  "runs": [
+    {
+      "run": 1,
+      "ok": true,
+      "checks": 27
+    },
+    {
+      "run": 2,
+      "ok": true,
+      "checks": 27
+    },
+    {
+      "run": 3,
+      "ok": true,
+      "checks": 27
+    }
+  ],
+  "packageVerifier": {
+    "ok": true,
+    "hashMismatchPreservesInstall": true,
+    "toolCount": 13,
+    "inUseUpdatePreservesInstall": true,
+    "closedSessionUpdateSucceeded": true
+  },
+  "lastRun": {
+    "timestamp": "2026-10-17T10:04:06.334Z",
+    "ok": true,
+    "checks": [
+      "tree read and physical-size window PNG",
+      "native password text is redacted",
+      "covered-window capture preserves target pixels",
+      "indexed click",
+      "key chord and Unicode typing",
+      "visible operation indicator is excluded from capture",
+      "target pixels remain intact beneath the visible indicator",
+      "engine-injected Escape does not trigger the physical stop latch",
+      "plain-text paste and original clipboard digest restored",
+      "RangeValue and exposed secondary action",
+      "scroll",
+      "fresh screenshot coordinate click",
+      "engine refuses moved-window coordinates before input",
+      "fresh screenshot drag holds left button along path and releases at endpoint",
+      "unsupported text selection refused",
+      "owned foreground overlay permits main-window indexed click and activation without stealing focus",
+      "keyboard and literal Unicode input use the foreground family focus",
+      "coordinate hit testing accepts the owned overlay at the main-window point",
+      "cold connection refuses different-process background input and activation without input",
+      "unrelated foreground transition stops in-flight input and releases held keys",
+      "same-process unrelated foreground window is refused",
+      "owned non-popup window is accepted through the actual owner chain",
+      "web password value is redacted",
+      "Chrome native UIA reaches local page text and links without accessibility flags",
+      "Chrome indexed link action",
+      "Chrome literal Unicode typing preserves spaces and dispatches input",
+      "all temporary fixture and browser processes closed"
+    ],
+    "engine_sha256": "dd8ec45aec04830bc68473fcfd79d14fad527853f4e9f9d109cf9a8e90b151b0"
+  }
+}
