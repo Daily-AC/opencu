@@ -103,7 +103,6 @@ public class OpenCUFixture : Form {
                     overlay.Activate();overlayNotes.Focus();
                     if(GetForegroundWindow()!=overlay.Handle || !LockSetForegroundWindow(1))throw new Exception("Fixture could not hold foreground lock");
                 }
-                else if(cmd=="foreground-unlock") { if(!LockSetForegroundWindow(2))throw new Exception("Fixture could not release foreground lock"); }
                 else if(cmd=="minimize") { WindowState=FormWindowState.Minimized; }
                 else if(cmd=="overlay-close") { LockSetForegroundWindow(2);if(overlay!=null){var closing=overlay;overlay=null;overlayNotes=null;closing.Close();closing.Dispose();}Activate(); }
                 else if(cmd=="cover") { cover=new Form();cover.Text=Text+" Cover";cover.FormBorderStyle=FormBorderStyle.None;cover.StartPosition=FormStartPosition.Manual;cover.Bounds=Bounds;cover.BackColor=Color.Lime;cover.Show(this); }

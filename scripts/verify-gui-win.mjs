@@ -239,10 +239,9 @@ try {
     try { return JSON.parse(await readFile(otherOutput, 'utf8')).pid === other.pid; } catch { return false; }
   }, 'background fixture start', 30000);
   assert.equal((await fixtureState()).foregroundHwnd, family.foregroundHwnd);
-  // Keep the explicit foreground-lock refusal regression. Before creating a
-  // cold connection, let prior synthetic input age out of GetLastInputInfo;
-  // its startup baseline cannot attribute events from an earlier connection.
-  // This is preparation, never a retry of refused input or a physical stop.
+  // Before creating a cold connection, let prior synthetic input age out of
+  // GetLastInputInfo; its startup baseline cannot attribute events from an
+  // earlier connection. This is preparation, never a retry of refused input.
   await pause(10500);
   const idleBefore = await fixtureState();
   assert.ok(idleBefore.idleMs >= 10000, 'Desktop must be idle for 10 seconds; no input is retried');
@@ -252,14 +251,11 @@ try {
   const coldTransport = new StdioClientTransport({ command: process.execPath, args: [path.join(root, 'src/server.mjs')], stderr: 'pipe' });
   coldTransport.stderr?.resume(); await client.connect(coldTransport);
   await call('get_app_state', otherTitle, { disableDiff: true });
-  await call('click', otherTitle, { element_index: index('Fixture counter') }, 'ACTIVATION_FAILED');
-  await call('activate_app', otherTitle, {}, 'ACTIVATION_FAILED');
-  assert.equal(JSON.parse(await readFile(otherOutput, 'utf8')).clicks, 0);
   assert.equal((await fixtureState()).foregroundHwnd, family.foregroundHwnd);
-  checks.push('cold connection refuses different-process background input and activation while the fixture holds the foreground lock');
-  // The same cold connection can now acquire the background target without
-  // a synthetic Alt or any fixture-side activation of that target.
-  await fixtureCommand('foreground-unlock');
+  checks.push('cold connection reads a different-process background window without taking foreground');
+  // The fixture still holds LockSetForegroundWindow. On an idle desktop the
+  // contract permits foreground-lock acquisition (AttachThreadInput, as
+  // wanctl's Focus does), with no synthetic Alt or fixture-side activation.
   const beforeActivation = await fixtureState(otherOutput);
   assert.notEqual(beforeActivation.foregroundPid, other.pid);
   await call('get_app_state', otherTitle, { disableDiff: true });
@@ -271,12 +267,12 @@ try {
   assert.equal((await fixtureState()).clicks, 3, 'Input must not reach the previous foreground fixture');
   report.idleForegroundAcquisition = {
     idleThresholdMs: 10000, idleBeforeConnectionMs: idleBefore.idleMs,
-    launchedInBackground: true, sameConnectionAfterLockRefusal: true,
+    launchedInBackground: true, foregroundLockHeld: true,
     beforeForegroundPid: beforeActivation.foregroundPid, targetPid: other.pid,
     afterForegroundPid: acquired.foregroundPid, verifiedTargetFamily: true,
     indexedClicksBefore: beforeActivation.clicks, indexedClicksAfter: acquired.clicks,
   };
-  checks.push('idle cold connection brings a background fixture forward and delivers an indexed click');
+  checks.push('idle cold connection takes the foreground lock, brings a background fixture forward and delivers an indexed click');
 
   // Exercise both tagged keyboard and pointer input, then immediately switch
   // families. Polling LASTINPUTINFO after SendInput would wrongly refuse this.
