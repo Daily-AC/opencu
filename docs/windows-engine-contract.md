@@ -290,13 +290,56 @@ It emits character/input events, not a physical keydown/keyup pair for every
 character; use `press_key` for key-event semantics. Native Edit and Chrome input
 acceptance cover this distinction.
 
-Supported inputs: click (Invoke, Toggle, SelectionItem or Legacy default action,
-then centre-click fallback), coordinate drag, Unicode typing, plain-text paste, xdotool-style keys,
+Supported inputs: indexed and coordinate click, coordinate drag, Unicode typing, plain-text paste, xdotool-style keys,
 vertical/horizontal wheel, Value/RangeValue and exposed secondary actions. `super`
 means Windows, `ctrl` means Control; modifiers use the target keyboard layout.
 `click.key` accepts modifiers only. Scroll approximates a page with three wheel
 detents (user wheel settings still apply), limited to 100 pages per request.
 `select_text`, HTML and Markdown paste return UNSUPPORTED_ON_WINDOWS.
+
+### Modal-safe indexed clicks
+
+From v0.3.2, indexed clicks prefer a pointer click at the live element's centre
+in the verified foreground window family. In addition to the existing HWND
+point-ownership check, UIA ElementFromPoint must identify that element or a raw-tree
+descendant (up to 64 parent links). The hit is checked again before each click.
+An owned overlay covering a main-window button therefore cannot accidentally
+receive its click. Bounds, enabled state, foreground/idle checks, input monitoring,
+physical Escape, integrity and desktop refusals still apply. Indexed pointer input
+does not require screenshot coordinates supplied by the caller.
+
+If the element does not own a usable centre, an unmodified single left click
+retains the existing Invoke/Toggle/Select/Legacy default-action fallback. Explicit
+`Invoke` and `DoDefaultAction` secondary actions use the same pointer preference;
+other secondary actions retain their UIA semantics. `run_actions` uses these same
+paths. After any pointer input begins, a failed check stops the operation; it
+never falls back to a pattern or replays input.
+
+This avoids entering a provider's synchronous Invoke handler for ordinary visible
+buttons. Qt can run a dialog's modal loop inside Invoke, leaving later UIA reads
+blocked until the dialog closes. Pointer input lets the application process the
+click in its own message loop, so OpenCU can observe and operate the dialog.
+We retain the semantic fallback for covered controls because the existing owned
+foreground fixture requires operating the covered main control without clicking
+its overlay. A covered/offscreen control's provider can still block a pattern
+call, and UIA itself can still hang during reads. The MCP timeout recovery below
+is the containment boundary, not a guarantee that every provider call returns.
+
+After a 90-second engine request timeout, the MCP server reports `RUNTIME_ERROR`
+with an unknown input outcome and stops the batch without replaying or automatically
+observing it. It discards indexes (by replacing the engine), screenshot grants and
+text diffs. It closes the old engine's stdin, allows up to 35 seconds for normal
+held-input cleanup, then terminates it if necessary; a replacement starts only
+after the old process and its output have closed. The next explicit observation
+on the **same MCP connection** can start that replacement. Input and activation
+are refused with `OBSERVATION_REQUIRED` until a successful fresh `get_app_state`.
+`list_apps` does not satisfy this requirement. The new monitor samples the normal
+idle baseline; it does not bypass the 10-second rule.
+
+A seen `USER_STOPPED` or macOS `STOPPED_BY_PERSON`, including a late stop response
+during retirement, remains latched in the MCP connection. Such a connection never
+starts a replacement engine. Existing permitted reads may use the stopped engine;
+if that engine times out, subsequent calls remain refused. See [host integration](host-integration.md#session-lifetime).
 
 `drag` takes `app`, `from_x`, `from_y`, `to_x`, `to_y`: finite pixel coordinates
 inside the latest fresh screenshot of the same window. Both endpoints are checked
@@ -340,7 +383,7 @@ can represent partial completion; re-observe instead of automatically retrying.
 | `WINDOW_FOCUS_CHANGED` | Foreground changed during the operation; stop remaining input. |
 | `TARGET_OCCLUDED` | Another window owns the pointer point. |
 | `OBSERVATION_REQUIRED` | No matching latest app/window observation. |
-| `SCREENSHOT_REQUIRED` | No unconsumed screenshot in this engine connection. |
+| `SCREENSHOT_REQUIRED` | Coordinate input lacks a fresh screenshot for this app, or follows another action in a batch; refused by MCP on both platforms and by the native engine. |
 | `STALE_SCREENSHOT` | Window moved, resized or changed DPI. |
 | `INVALID_COORDINATE` | Nonfinite/out-of-image/off-desktop coordinate. |
 | `STALE_WINDOW`, `STALE_ELEMENT` | HWND/process identity or UIA element is no longer valid. |
@@ -356,6 +399,7 @@ can represent partial completion; re-observe instead of automatically retrying.
 | `CLIPBOARD_UNAVAILABLE`, `CLIPBOARD_CHANGED` | Clipboard could not be preserved or changed before paste. |
 | `CLIPBOARD_RESTORE_FAILED` | Input may have run; clipboard restoration failed. |
 | `INPUT_FAILED` | SendInput did not accept the event; never retry automatically. |
+| `RUNTIME_ERROR` | MCP transport/runtime failure; a request timeout leaves the input outcome unknown and permits engine replacement only under the rules above. |
 | `ACCESS_DENIED`, `UIA_TIMEOUT`, `WINDOWS_API_ERROR` | OS/provider failure; message includes diagnostic details. |
 
 ## Validation follow-up
@@ -465,3 +509,23 @@ unchanged and no input sent; after 11 idle seconds the same request brought the
 window forward and clicked it. Escape followed by an idle 11 seconds returned
 `USER_STOPPED`, and wanctl did not reconnect. Elevated, locked-session and
 secure-desktop refusals still require real Windows verification.
+
+
+### v0.3.2 modal acceptance (pending Windows execution)
+
+With the v0.3.2 executable in `.build/win/opencu-engine.exe`, run the three
+PowerShell commands in the v0.3.1 acceptance section above. The GUI suite keeps
+all existing checks and adds a WinForms button whose Click handler synchronously
+calls `ShowDialog(this)`. It exercises indexed `click`, explicit `Invoke` and a
+`run_actions` Invoke step on the same MCP connection. Each opening call (including
+its final observation) must return in less than 15 seconds. An explicit state
+read must list the modal, setting its value and indexed OK must close it, and the
+fixture must record the expected value and completion count. The report's
+`modalDialog` entry records each latency and result. Text-only coordinate input
+must separately return `SCREENSHOT_REQUIRED`.
+
+These are regression assertions, not evidence of a completed Windows run.
+WinForms may dispatch Invoke asynchronously and therefore may not reproduce Qt's
+provider blockage on the old engine. Retest OBS Studio's Add Scene button on
+Windows as well; neither WinForms provider blocking nor the OBS fix has been
+verified on this Mac. No real-app observations are published with this change.

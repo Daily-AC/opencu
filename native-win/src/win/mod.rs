@@ -156,7 +156,7 @@ impl Engine {
                 )
             })?;
         let g = guard.as_mut().unwrap();
-        let outcome = input::perform(method, args, s, previous_image, g);
+        let outcome = input::perform(method, args, &self.automation, s, previous_image, g);
         // A physical event queued during the final API call wins over its return status.
         g.finish()?;
         outcome?;
