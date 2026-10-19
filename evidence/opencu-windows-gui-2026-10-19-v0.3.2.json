@@ -1,0 +1,205 @@
+{
+  "test": "windows-foreground-fixtures",
+  "date": "2026-10-19",
+  "environment": "Windows 11 Enterprise Evaluation 26H2 (zh-CN), Hyper-V VM 4 vCPU / 8 GB / 1920x1080, Defender real-time protection on, restored from a clean checkpoint before every run",
+  "package": {
+    "file": "opencu-win-x64.zip",
+    "sha256": "be6a0cba68159878ed6dffe42f3ae103deb52482203ace0ca72ea55c43cbdbb7",
+    "installedWith": "install.ps1 -LocalZip"
+  },
+  "engine_sha256": "578ef0d6a6b8dedf9533cadbcbeaeea137a027fee473ea9d9c2cbeb18e9a2749",
+  "runs": [
+    {
+      "run": 1,
+      "ok": true,
+      "checks": 34
+    },
+    {
+      "run": 2,
+      "ok": true,
+      "checks": 34
+    },
+    {
+      "run": 3,
+      "ok": true,
+      "checks": 34
+    }
+  ],
+  "packageVerifier": {
+    "ok": true,
+    "hashMismatchPreservesInstall": true,
+    "toolCount": 13,
+    "version": "0.3.2",
+    "inUseUpdatePreservesInstall": true,
+    "closedSessionUpdateSucceeded": true
+  },
+  "hostInput": {
+    "method": "Hyper-V synthetic keyboard from the host; the guest sees it as physical input",
+    "escapeThenClickAfter11sIdle": "USER_STOPPED; the host required fresh approval and did not restart the engine"
+  },
+  "lastRun": {
+    "test": "windows-foreground-fixtures",
+    "timestamp": "2026-10-19T09:30:52.015Z",
+    "checks": [
+      "tree read and physical-size window PNG",
+      "native password text is redacted",
+      "covered-window capture preserves target pixels",
+      "indexed click",
+      "key chord and Unicode typing",
+      "visible operation indicator is excluded from capture",
+      "target pixels remain intact beneath the visible indicator",
+      "engine-injected Escape does not trigger the physical stop latch",
+      "plain-text paste and original clipboard digest restored",
+      "RangeValue and exposed secondary action",
+      "scroll",
+      "fresh screenshot coordinate click",
+      "engine refuses moved-window coordinates before input",
+      "fresh screenshot drag holds left button along path and releases at endpoint",
+      "unsupported text selection refused",
+      "text-only observation refuses coordinate input with SCREENSHOT_REQUIRED",
+      "click opens a synchronous modal promptly; fresh state, value input and indexed OK work on the same connection",
+      "perform_secondary_action opens a synchronous modal promptly; fresh state, value input and indexed OK work on the same connection",
+      "run_actions opens a synchronous modal promptly; fresh state, value input and indexed OK work on the same connection",
+      "owned foreground overlay permits main-window indexed click and activation without stealing focus",
+      "keyboard and literal Unicode input use the foreground family focus",
+      "coordinate hit testing accepts the owned overlay at the main-window point",
+      "cold connection reads a different-process background window without taking foreground",
+      "idle cold connection takes the foreground lock, brings a background fixture forward and delivers an indexed click",
+      "recent engine keyboard and mouse input permits minimized-window activation without PERSON_ACTIVE or the Escape latch",
+      "activate_app restores an iconic window that already holds foreground",
+      "unrelated foreground transition stops in-flight input and releases held keys",
+      "idle input and activate_app acquire the target family from an unrelated same-process window without sending it input",
+      "owned non-popup window is accepted through the actual owner chain",
+      "web password value is redacted",
+      "Chrome native UIA reaches local page text and links without accessibility flags",
+      "Chrome indexed link action",
+      "Chrome literal Unicode typing preserves spaces and dispatches input",
+      "all temporary fixture and browser processes closed"
+    ],
+    "ok": true,
+    "engine_sha256": "578ef0d6a6b8dedf9533cadbcbeaeea137a027fee473ea9d9c2cbeb18e9a2749",
+    "fixtureWindow": {
+      "Id": 9264,
+      "MainWindowTitle": "OpenCU Fixture f48d643d-5329-4c10-b317-631ec1f1edeb",
+      "hwnd": 196704
+    },
+    "lastFixtureImage": "screenshot-54.png",
+    "unicode": {
+      "modalOpen": false,
+      "modalCompletions": 0,
+      "modalValue": "",
+      "idleMs": 235,
+      "minimized": false,
+      "dragFromX": 281,
+      "dragFromY": 73,
+      "dragToX": 541,
+      "dragToY": 73,
+      "dragDistance": 260,
+      "dragDownX": 0,
+      "dragDownY": 0,
+      "dragUpX": 0,
+      "dragUpY": 0,
+      "dragHeld": true,
+      "dragMoves": 0,
+      "drags": 0,
+      "foregroundOwner": "0",
+      "mainHwnd": "196704",
+      "foregroundHwnd": "196704",
+      "foregroundPid": 9264,
+      "mainRootOwner": "196704",
+      "foregroundRootOwner": "196704",
+      "overlayClicks": 0,
+      "overlayNotes": "",
+      "pid": 9264,
+      "clicks": 1,
+      "notes": "Windows 涓枃 馃榾",
+      "checked": false,
+      "slider": 0,
+      "scroll": 0,
+      "wheel": 0,
+      "moves": 0,
+      "x": 131,
+      "y": 73,
+      "markerX": 616,
+      "markerY": 73,
+      "width": 682,
+      "height": 592,
+      "indicatorVisible": false,
+      "indicatorReadable": false,
+      "indicatorAffinity": 0,
+      "keyChars": "0001,0057,0069,006e,0064,006f,0077,0073,0020,4e2d,6587,0020,d83d,de00,",
+      "inputLanguage": "涓枃(绠€浣? - 缇庡紡閿洏",
+      "clipboardDigest": "",
+      "error": ""
+    },
+    "indicator": {
+      "visible": true,
+      "affinity": 17,
+      "readable": true
+    },
+    "modalDialog": {
+      "handler": "WinForms synchronous ShowDialog",
+      "boundMs": 15000,
+      "cases": [
+        {
+          "method": "click",
+          "elapsedMs": 249,
+          "value": "modal-result-click",
+          "closed": true
+        },
+        {
+          "method": "perform_secondary_action",
+          "elapsedMs": 250,
+          "value": "modal-result-perform_secondary_action",
+          "closed": true
+        },
+        {
+          "method": "run_actions",
+          "elapsedMs": 240,
+          "value": "modal-result-run_actions",
+          "closed": true
+        }
+      ]
+    },
+    "ownedForeground": {
+      "sameProcess": true,
+      "sameRootOwner": true,
+      "distinctHwnd": true
+    },
+    "idleForegroundAcquisition": {
+      "idleThresholdMs": 10000,
+      "idleBeforeConnectionMs": 11562,
+      "launchedInBackground": true,
+      "foregroundLockHeld": true,
+      "beforeForegroundPid": 9264,
+      "targetPid": 9648,
+      "afterForegroundPid": 9648,
+      "verifiedTargetFamily": true,
+      "indexedClicksBefore": 0,
+      "indexedClicksAfter": 1,
+      "syntheticInputIdleMs": 672,
+      "minimizedRestoredByActivateApp": true
+    },
+    "minimizedForegroundRestoration": {
+      "beforeMinimized": true,
+      "afterMinimized": false,
+      "beforeForegroundHwnd": "328556",
+      "afterForegroundHwnd": "328556",
+      "targetHwnd": "328556",
+      "clicksBefore": 2,
+      "clicksAfter": 2
+    },
+    "unrelatedForegroundAcquisition": {
+      "beforeForegroundHwnd": "786454",
+      "targetHwnd": "196704",
+      "afterClickForegroundHwnd": "196704",
+      "afterActivateForegroundHwnd": "196704",
+      "clicksBefore": 3,
+      "clicksAfter": 4,
+      "unrelatedClicksBefore": 1,
+      "unrelatedClicksAfter": 1,
+      "unrelatedNotesUnchanged": true
+    },
+    "evidence": "C:\\bench\\gui\\.cache\\windows-acceptance-f48d643d-5329-4c10-b317-631ec1f1edeb"
+  }
+}

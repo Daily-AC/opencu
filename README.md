@@ -217,7 +217,10 @@ handlers. Covered controls retain the UIA fallback. If an engine request still
 times out, the same MCP connection can restart the engine after cleanup and a
 fresh observation; input is never replayed, and a person's stop forbids restart.
 Coordinate input without a fresh screenshot returns `SCREENSHOT_REQUIRED`.
-The new modal fixture checks and OBS retest await Windows acceptance.
+v0.3.2 passed 34 fixture checks, including the modal dialog cases, in three
+consecutive runs on a fresh Windows 11 VM; an OBS Studio Add Scene dialog that
+wedged v0.3.1 now opens, fills and closes through indexed calls
+([evidence](evidence/opencu-windows-gui-2026-10-19-v0.3.2.json)).
 
 Missing: text selection. Elevated windows, UAC prompts and secure desktops are refused (`ELEVATED_TARGET`, `SCREEN_LOCKED`); these
 refusals have not been checked on a real desktop yet. Controls without accessible
