@@ -6,8 +6,10 @@ from PowerShell without Node. See the [fixture evidence](../evidence/opencu-wind
 The owned-foreground regression and foreign-process refusals were additionally
 accepted in [three consecutive fixture runs](../evidence/opencu-windows-owned-foreground-2026-10-13.json).
 Physical takeover and privileged/locked-desktop cases remain manual follow-ups.
-The v0.3.1 idle foreground acquisition change is host-tested and cross-compiled;
-its real Windows acceptance is pending.
+The v0.3.1 idle foreground acquisition and restoration changes were accepted in
+three consecutive 30-check fixture runs on a fresh Windows 11 VM, with the
+10-second rule and physical Escape checked through host-injected input
+([evidence](../evidence/opencu-windows-gui-2026-10-19.json)).
 
 ## Standalone transport and embedding
 
@@ -306,8 +308,8 @@ click. No duration, button or modifier options are added. All early returns atte
 to release the held button, including `PERSON_ACTIVE` and `USER_STOPPED`; completed
 input is never replayed. The MCP layer returns a new screenshot after success.
 The disposable WinForms fixture records both endpoints and held-button movement;
-this check was accepted with v0.3.0. The v0.3.1 idle foreground acquisition and
-minimized restoration checks still require Windows desktop acceptance.
+this check was accepted with v0.3.0 and again with v0.3.1, together with the
+idle foreground acquisition and minimized restoration checks.
 
 Paste snapshots every copyable HGLOBAL clipboard format before mutation. Temporary
 paste content is marked ExcludeClipboardContentFromMonitorProcessing so Windows
@@ -453,12 +455,13 @@ from an unrelated same-process foreground window, with target-family verificatio
 and unchanged unrelated click/text values. The in-flight focus-change refusal
 and owned-overlay focus checks remain in place. Preparation includes a
 10.5-second idle wait before creating the cold connection; no refused input is
-automatically replayed. These revised checks still require Windows acceptance.
+automatically replayed. All 30 checks passed in three consecutive runs on
+2026-10-19, each from a clean checkpoint.
 
-Manual follow-ups: use physical mouse/keyboard input before connecting and
-between calls, then request an indexed click or `activate_app` on a background
-fixture within 10 seconds. Expect `PERSON_ACTIVE`, unchanged foreground and click
-count (including when the target is minimized). Re-observe and explicitly permit
-continuation after the desktop is idle; do not automatically retry. Physical Esc
-must still latch `USER_STOPPED` for that connection. Elevated, locked-session and
-secure-desktop refusals also require real Windows verification.
+Host-injected input (Hyper-V synthetic mouse and keyboard, which the guest sees
+as physical input): moving the mouse and then requesting an indexed click on a
+background window within 10 seconds returned `PERSON_ACTIVE` with the foreground
+unchanged and no input sent; after 11 idle seconds the same request brought the
+window forward and clicked it. Escape followed by an idle 11 seconds returned
+`USER_STOPPED`, and wanctl did not reconnect. Elevated, locked-session and
+secure-desktop refusals still require real Windows verification.
