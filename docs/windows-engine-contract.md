@@ -361,3 +361,36 @@ API references: [UIA raw tree](https://learn.microsoft.com/en-us/windows/win32/w
 [foreground restrictions](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setforegroundwindow),
 [Raw Input](https://learn.microsoft.com/en-us/windows/win32/inputdev/raw-input),
 [window capture](https://learn.microsoft.com/en-us/windows/win32/api/windows.graphics.capture.interop/nf-windows-graphics-capture-interop-igraphicscaptureiteminterop-createforwindow).
+
+## Building the package
+
+The executable is cross-compiled on a Mac with Rust's `x86_64-pc-windows-gnu`
+target and MinGW-w64 (`x86_64-w64-mingw32-gcc` on PATH):
+
+```sh
+npm ci --ignore-scripts
+npm run build:win
+npm run package:win
+```
+
+`npm run package:win` produces `dist/opencu-win-x64.zip`, its `.sha256` and
+`dist/install.ps1`. It requires a fresh engine build, Python 3.11+, npm, Cargo,
+Rust's standard-library copyright file (rust-docs) and MinGW-w64's `COPYING` in its
+installation prefix (or the parent of a Homebrew toolchain prefix). It downloads pinned official Node v22.22.0 and installs only
+locked production npm dependencies; downloads and installs fail without retries.
+The resulting package needs no checkout, npm, compiler, git or network at runtime.
+
+On Windows, with the zip and generated installer together:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify-package-win.ps1 -Zip .\dist\opencu-win-x64.zip
+& ([ScriptBlock]::Create((Get-Content .\dist\install.ps1 -Raw))) -LocalZip (Resolve-Path .\dist\opencu-win-x64.zip).Path
+& "$env:LOCALAPPDATA\OpenCU\bin\opencu.cmd" doctor
+```
+
+The verifier installs into temporary `LOCALAPPDATA`, launches the manifest's MCP
+command without a shell, checks its version and 13 tools, and calls only
+`list_apps`. It also accepts `-InstallDirectory "$env:LOCALAPPDATA\OpenCU"`.
+The next command installs for the current user using the same script as `irm | iex`,
+with a local zip and no download. `node scripts/verify-gui-win.mjs` runs the
+foreground fixture suite, including drag, on an idle desktop.
