@@ -214,10 +214,11 @@ that OpenCU is operating.
 Missing: text selection. Elevated windows, UAC prompts and secure desktops are refused (`ELEVATED_TARGET`, `SCREEN_LOCKED`); these
 refusals have not been checked on a real desktop yet. Controls without accessible
 names, common in media players, are listed with an index and bounds but need a
-screenshot to tell apart. Acceptance so far is 27 checks on disposable WinForms
-and Chrome fixtures, including drag, in three consecutive runs on a fresh
-Windows 11 x64 VM ([evidence](evidence/opencu-windows-gui-2026-10-17.json)).
-The v0.3.1 idle foreground acquisition changes still await real Windows acceptance.
+screenshot to tell apart. v0.3.1 acceptance is 30 checks on disposable WinForms
+and Chrome fixtures, including drag and idle foreground acquisition, in three
+consecutive runs on a fresh Windows 11 x64 VM, plus the 10-second rule and
+physical Escape checked with host-injected input
+([evidence](evidence/opencu-windows-gui-2026-10-19.json)).
 
 ### Install
 

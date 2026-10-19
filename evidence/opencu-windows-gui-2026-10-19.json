@@ -1,0 +1,176 @@
+{
+  "test": "windows-foreground-fixtures",
+  "date": "2026-10-19",
+  "environment": "Windows 11 Enterprise Evaluation 26H2 (zh-CN), Hyper-V VM 4 vCPU / 8 GB / 1920x1080, Defender real-time protection on, restored from a clean checkpoint before every run",
+  "package": {
+    "file": "opencu-win-x64.zip",
+    "sha256": "a5fdf41149d2c112e46b68ae24ae0fe8790e678bde78c0cc5ffc6895afd25701",
+    "installedWith": "install.ps1 -LocalZip"
+  },
+  "engine_sha256": "ed20c70d1bd4f5a9eecd1d2ea365ef5b13ebe1448df5c4ea2fa95bf74ae44f7b",
+  "runs": [
+    {
+      "run": 1,
+      "ok": true,
+      "checks": 30
+    },
+    {
+      "run": 2,
+      "ok": true,
+      "checks": 30
+    },
+    {
+      "run": 3,
+      "ok": true,
+      "checks": 30
+    }
+  ],
+  "packageVerifier": {
+    "ok": true,
+    "hashMismatchPreservesInstall": true,
+    "toolCount": 13,
+    "version": "0.3.1",
+    "inUseUpdatePreservesInstall": true,
+    "closedSessionUpdateSucceeded": true
+  },
+  "hostInput": {
+    "method": "Hyper-V synthetic mouse and keyboard from the host; the guest sees them as physical input",
+    "mouseWithin10sOfBackgroundClick": "PERSON_ACTIVE, foreground unchanged, no input sent",
+    "sameClickAfter11sIdle": "target brought forward and clicked",
+    "escapeThenClickAfter11sIdle": "USER_STOPPED; the host did not reconnect (OPENCU_STOPPED)"
+  },
+  "lastRun": {
+    "test": "windows-foreground-fixtures",
+    "timestamp": "2026-10-19T06:08:08.363Z",
+    "checks": [
+      "tree read and physical-size window PNG",
+      "native password text is redacted",
+      "covered-window capture preserves target pixels",
+      "indexed click",
+      "key chord and Unicode typing",
+      "visible operation indicator is excluded from capture",
+      "target pixels remain intact beneath the visible indicator",
+      "engine-injected Escape does not trigger the physical stop latch",
+      "plain-text paste and original clipboard digest restored",
+      "RangeValue and exposed secondary action",
+      "scroll",
+      "fresh screenshot coordinate click",
+      "engine refuses moved-window coordinates before input",
+      "fresh screenshot drag holds left button along path and releases at endpoint",
+      "unsupported text selection refused",
+      "owned foreground overlay permits main-window indexed click and activation without stealing focus",
+      "keyboard and literal Unicode input use the foreground family focus",
+      "coordinate hit testing accepts the owned overlay at the main-window point",
+      "cold connection reads a different-process background window without taking foreground",
+      "idle cold connection takes the foreground lock, brings a background fixture forward and delivers an indexed click",
+      "recent engine keyboard and mouse input permits minimized-window activation without PERSON_ACTIVE or the Escape latch",
+      "activate_app restores an iconic window that already holds foreground",
+      "unrelated foreground transition stops in-flight input and releases held keys",
+      "idle input and activate_app acquire the target family from an unrelated same-process window without sending it input",
+      "owned non-popup window is accepted through the actual owner chain",
+      "web password value is redacted",
+      "Chrome native UIA reaches local page text and links without accessibility flags",
+      "Chrome indexed link action",
+      "Chrome literal Unicode typing preserves spaces and dispatches input",
+      "all temporary fixture and browser processes closed"
+    ],
+    "ok": true,
+    "engine_sha256": "ed20c70d1bd4f5a9eecd1d2ea365ef5b13ebe1448df5c4ea2fa95bf74ae44f7b",
+    "fixtureWindow": {
+      "Id": 10896,
+      "MainWindowTitle": "OpenCU Fixture 179bc39a-0752-41ae-a645-6bd142e5928a",
+      "hwnd": 131900
+    },
+    "lastFixtureImage": "screenshot-34.png",
+    "unicode": {
+      "idleMs": 156,
+      "minimized": false,
+      "dragFromX": 281,
+      "dragFromY": 73,
+      "dragToX": 541,
+      "dragToY": 73,
+      "dragDistance": 260,
+      "dragDownX": 0,
+      "dragDownY": 0,
+      "dragUpX": 0,
+      "dragUpY": 0,
+      "dragHeld": true,
+      "dragMoves": 0,
+      "drags": 0,
+      "foregroundOwner": "0",
+      "mainHwnd": "131900",
+      "foregroundHwnd": "131900",
+      "foregroundPid": 10896,
+      "mainRootOwner": "131900",
+      "foregroundRootOwner": "131900",
+      "overlayClicks": 0,
+      "overlayNotes": "",
+      "pid": 10896,
+      "clicks": 1,
+      "notes": "Windows 涓枃 馃榾",
+      "checked": false,
+      "slider": 0,
+      "scroll": 0,
+      "wheel": 0,
+      "moves": 0,
+      "x": 131,
+      "y": 73,
+      "markerX": 616,
+      "markerY": 73,
+      "width": 682,
+      "height": 592,
+      "indicatorVisible": false,
+      "indicatorReadable": false,
+      "indicatorAffinity": 0,
+      "keyChars": "0001,0057,0069,006e,0064,006f,0077,0073,0020,4e2d,6587,0020,d83d,de00,",
+      "inputLanguage": "涓枃(绠€浣? - 缇庡紡閿洏",
+      "clipboardDigest": "",
+      "error": ""
+    },
+    "indicator": {
+      "visible": true,
+      "affinity": 17,
+      "readable": true
+    },
+    "ownedForeground": {
+      "sameProcess": true,
+      "sameRootOwner": true,
+      "distinctHwnd": true
+    },
+    "idleForegroundAcquisition": {
+      "idleThresholdMs": 10000,
+      "idleBeforeConnectionMs": 11625,
+      "launchedInBackground": true,
+      "foregroundLockHeld": true,
+      "beforeForegroundPid": 10896,
+      "targetPid": 2484,
+      "afterForegroundPid": 2484,
+      "verifiedTargetFamily": true,
+      "indexedClicksBefore": 0,
+      "indexedClicksAfter": 1,
+      "syntheticInputIdleMs": 547,
+      "minimizedRestoredByActivateApp": true
+    },
+    "minimizedForegroundRestoration": {
+      "beforeMinimized": true,
+      "afterMinimized": false,
+      "beforeForegroundHwnd": "131948",
+      "afterForegroundHwnd": "131948",
+      "targetHwnd": "131948",
+      "clicksBefore": 2,
+      "clicksAfter": 2
+    },
+    "unrelatedForegroundAcquisition": {
+      "beforeForegroundHwnd": "721344",
+      "targetHwnd": "131900",
+      "afterClickForegroundHwnd": "131900",
+      "afterActivateForegroundHwnd": "131900",
+      "clicksBefore": 3,
+      "clicksAfter": 4,
+      "unrelatedClicksBefore": 1,
+      "unrelatedClicksAfter": 1,
+      "unrelatedNotesUnchanged": true
+    },
+    "evidence": "C:\\bench\\gui\\.cache\\windows-acceptance-179bc39a-0752-41ae-a645-6bd142e5928a"
+  }
+}
