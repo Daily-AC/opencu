@@ -281,9 +281,19 @@ try {
   const otherPoint = await fixtureState(otherOutput);
   assert.ok(otherPoint.x < otherSize.width && otherPoint.y < otherSize.height);
   await call('click', otherTitle, { x: otherPoint.x, y: otherPoint.y });
+  // Minimize alone need not yield foreground. Explicitly activate a different
+  // fixture through the primary engine before testing background restoration.
   await fixtureCommand('minimize', otherCommand);
   assert.equal((await fixtureState(otherOutput)).minimized, true);
-  assert.notEqual((await fixtureState(otherOutput)).foregroundPid, other.pid);
+  const coldClient = client;
+  client = primaryClient;
+  await call('activate_app', title);
+  client = coldClient;
+  await waitFor(async () => (await fixtureState()).foregroundPid === fixture.pid, 'primary fixture foreground');
+  const minimizedBackground = await fixtureState(otherOutput);
+  assert.equal(minimizedBackground.minimized, true);
+  assert.equal(minimizedBackground.foregroundPid, fixture.pid);
+  assert.notEqual(minimizedBackground.foregroundPid, other.pid);
   const afterSynthetic = await fixtureState(otherOutput);
   assert.ok(afterSynthetic.idleMs < 10000, 'Synthetic input must still be recent for this regression');
   await call('activate_app', otherTitle);
@@ -295,6 +305,30 @@ try {
   report.idleForegroundAcquisition.syntheticInputIdleMs = afterSynthetic.idleMs;
   report.idleForegroundAcquisition.minimizedRestoredByActivateApp = true;
   checks.push('recent engine keyboard and mouse input permits minimized-window activation without PERSON_ACTIVE or the Escape latch');
+  // SW_SHOWMINIMIZED explicitly keeps this window active while minimizing it;
+  // verify the precondition instead of relying on a desktop's minimize policy.
+  await fixtureCommand('minimize-foreground', otherCommand);
+  const minimizedForeground = await fixtureState(otherOutput);
+  assert.equal(minimizedForeground.minimized, true);
+  assert.equal(minimizedForeground.foregroundPid, other.pid);
+  assert.equal(minimizedForeground.foregroundHwnd, minimizedForeground.mainHwnd);
+  await call('activate_app', otherTitle);
+  await waitFor(async () => {
+    const s = await fixtureState(otherOutput);
+    return !s.minimized && s.foregroundHwnd === s.mainHwnd;
+  }, 'minimized foreground fixture restored');
+  const restoredForeground = await fixtureState(otherOutput);
+  assert.equal(restoredForeground.clicks, 2);
+  assert.equal(restoredForeground.foregroundPid, other.pid);
+  assert.equal(restoredForeground.foregroundRootOwner, restoredForeground.mainRootOwner);
+  report.minimizedForegroundRestoration = {
+    beforeMinimized: minimizedForeground.minimized, afterMinimized: restoredForeground.minimized,
+    beforeForegroundHwnd: minimizedForeground.foregroundHwnd,
+    afterForegroundHwnd: restoredForeground.foregroundHwnd,
+    targetHwnd: restoredForeground.mainHwnd,
+    clicksBefore: minimizedForeground.clicks, clicksAfter: restoredForeground.clicks,
+  };
+  checks.push('activate_app restores an iconic window that already holds foreground');
   await client.close(); client = primaryClient;
   await writeCommand(otherCommand, 'close');
   await waitFor(() => other.exitCode !== null, 'background fixture closed');
@@ -311,10 +345,37 @@ try {
   assert.equal(unrelated.foregroundPid, fixture.pid);
   assert.notEqual(unrelated.foregroundRootOwner, unrelated.mainRootOwner);
   await call('get_app_state', title, { disableDiff: true });
-  await call('click', title, { element_index: index('Fixture counter') }, 'ACTIVATION_FAILED');
-  await call('activate_app', title, {}, 'ACTIVATION_FAILED');
-  assert.equal((await fixtureState()).clicks, 3);
-  checks.push('same-process unrelated foreground window is refused');
+  await call('click', title, { element_index: index('Fixture counter') });
+  await waitFor(async () => (await fixtureState()).clicks === 4, 'main fixture receives reacquired indexed click');
+  const reacquired = await fixtureState();
+  assert.equal(reacquired.foregroundPid, fixture.pid);
+  assert.equal(reacquired.foregroundHwnd, reacquired.mainHwnd);
+  assert.equal(reacquired.foregroundRootOwner, reacquired.mainRootOwner);
+  assert.equal(reacquired.overlayClicks, unrelated.overlayClicks);
+  assert.equal(reacquired.overlayNotes, unrelated.overlayNotes);
+  // Also exercise activate_app from the unrelated window, not just a no-op
+  // activation after the indexed click has already acquired foreground.
+  await fixtureCommand('overlay-activate');
+  const unrelatedAgain = await fixtureState();
+  assert.equal(unrelatedAgain.foregroundHwnd, unrelated.foregroundHwnd);
+  assert.notEqual(unrelatedAgain.foregroundRootOwner, unrelatedAgain.mainRootOwner);
+  await call('activate_app', title);
+  await waitFor(async () => (await fixtureState()).foregroundHwnd === reacquired.mainHwnd, 'main fixture activated from unrelated window');
+  const activated = await fixtureState();
+  assert.equal(activated.foregroundPid, fixture.pid);
+  assert.equal(activated.foregroundRootOwner, activated.mainRootOwner);
+  assert.equal(activated.clicks, 4);
+  assert.equal(activated.overlayClicks, unrelated.overlayClicks);
+  assert.equal(activated.overlayNotes, unrelated.overlayNotes);
+  report.unrelatedForegroundAcquisition = {
+    beforeForegroundHwnd: unrelated.foregroundHwnd, targetHwnd: reacquired.mainHwnd,
+    afterClickForegroundHwnd: reacquired.foregroundHwnd,
+    afterActivateForegroundHwnd: activated.foregroundHwnd,
+    clicksBefore: unrelated.clicks, clicksAfter: activated.clicks,
+    unrelatedClicksBefore: unrelated.overlayClicks, unrelatedClicksAfter: activated.overlayClicks,
+    unrelatedNotesUnchanged: activated.overlayNotes === unrelated.overlayNotes,
+  };
+  checks.push('idle input and activate_app acquire the target family from an unrelated same-process window without sending it input');
   await fixtureCommand('overlay-close');
 
   await fixtureCommand('owned-overlapped');
@@ -325,7 +386,7 @@ try {
   await call('get_app_state', title, { disableDiff: true });
   await call('click', title, { element_index: index('Fixture counter') });
   await call('activate_app', title);
-  assert.equal((await fixtureState()).clicks, 4);
+  assert.equal((await fixtureState()).clicks, 5);
   assert.equal((await fixtureState()).foregroundHwnd, overlapped.foregroundHwnd);
   checks.push('owned non-popup window is accepted through the actual owner chain');
   await fixtureCommand('overlay-close');

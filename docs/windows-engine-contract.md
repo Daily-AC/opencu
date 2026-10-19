@@ -203,9 +203,13 @@ time and HWND are still validated.
 The same live predicate guards activation, each subsequent input safety check,
 pointer hit testing, and the focused control used for literal text.
 
-If this family already holds foreground, activation succeeds without calling
-SetForegroundWindow or changing the active overlay. Otherwise, both input and
-`activate_app` require at least **10 seconds without human keyboard or mouse
+If this family already holds foreground, activation skips SetForegroundWindow
+and leaves a non-minimized active overlay alone. An iconic target is still
+restored with ShowWindowAsync(SW_RESTORE), without requiring the idle threshold.
+Restoration waits up to 500 ms with the existing safety checks; a target that
+remains iconic returns `ACTIVATION_FAILED` before any input.
+
+When the target family is not foreground, both input and `activate_app` require at least **10 seconds without human keyboard or mouse
 input**. Recent activity returns `PERSON_ACTIVE` before restoring or raising the
 window, with no input sent. The Raw Input monitor tracks activity continuously,
 including between calls; a one-time `GetLastInputInfo` sample after registration
@@ -216,7 +220,8 @@ It is not polled after startup, because SendInput also updates it. Engine-tagged
 keyboard and mouse events are excluded before updating the activity deadline,
 interruption state or Raw Input Escape latch.
 
-On an idle desktop, restore a minimized target first and try SetForegroundWindow.
+When another family holds foreground, check the idle threshold before any
+restoration, wait for a minimized target to restore as above, then try SetForegroundWindow.
 If necessary, create the caller's message queue and temporarily AttachThreadInput
 to the foreground and target threads, then BringWindowToTop and SetForegroundWindow.
 Detach every successfully attached queue on all exit paths, before waiting up to
@@ -224,8 +229,12 @@ Detach every successfully attached queue on all exit paths, before waiting up to
 unattended use, following wanctl's Focus approach; no synthetic Alt is sent.
 The existing privilege, desktop, physical-input and stop checks remain in force.
 If the target family is still not foreground, return `ACTIVATION_FAILED`; never
-send target input without verifying foreground ownership. Foreground
-identity, live process identity and desktop accessibility are checked before each
+send target input without verifying foreground ownership and a non-iconic target.
+An unrelated window in the same process is a different family: idle acquisition
+may bring the target forward, but input must never use the unrelated foreground
+as if it were the target. A family change during an operation still stops the
+remaining input with `WINDOW_FOCUS_CHANGED`; it does not trigger reacquisition.
+Foreground identity, live process identity and desktop accessibility are checked before each
 new SendInput event, Unicode character message and each UIA action. Pointer input also checks that the target
 window owns the screen point. UIA actions cannot be cancelled after entering the
 provider; events already delivered cannot be undone. Held engine keys/buttons are
@@ -427,14 +436,24 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify-engine-win.
 powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify-package-win.ps1 -Zip .\dist\opencu-win-x64.zip
 ```
 
-The GUI suite retains the explicit fixture foreground-lock refusals, then unlocks
-the fixture and checks that the same cold connection brings a background-launched
-window forward and delivers an indexed click. Its `idleForegroundAcquisition`
-evidence includes the initial idle duration, before/after foreground identity and
-click counts. It also minimizes that window and calls `activate_app` immediately
-after engine keyboard/mouse input, checking restoration without a false
-`PERSON_ACTIVE` or Escape latch. Preparation includes a 10.5-second idle wait
-before creating the cold connection; no refused input is automatically replayed.
+The GUI suite checks that an idle cold connection brings a background-launched
+window forward even while the fixture holds a foreground lock, and delivers an
+indexed click. Its `idleForegroundAcquisition` evidence includes the initial idle
+duration, before/after foreground identity and click counts. After engine
+keyboard/mouse input it minimizes that window, explicitly activates the primary
+fixture through its engine connection, then restores and activates the minimized
+background target. This verifies recent synthetic input does not cause a false
+`PERSON_ACTIVE` or Escape latch, without assuming minimization yields foreground.
+
+A separate fixture command uses [SW_SHOWMINIMIZED](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-showwindow) to display its own window
+minimized and active. The suite asserts the iconic/foreground precondition and
+records restoration by `activate_app` in `minimizedForegroundRestoration`.
+`unrelatedForegroundAcquisition` checks both indexed click and `activate_app`
+from an unrelated same-process foreground window, with target-family verification
+and unchanged unrelated click/text values. The in-flight focus-change refusal
+and owned-overlay focus checks remain in place. Preparation includes a
+10.5-second idle wait before creating the cold connection; no refused input is
+automatically replayed. These revised checks still require Windows acceptance.
 
 Manual follow-ups: use physical mouse/keyboard input before connecting and
 between calls, then request an indexed click or `activate_app` on a background
