@@ -1,6 +1,6 @@
 {
   "name": "opencu",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "type": "module",
   "description": "Independent local computer-use engine and MCP server for macOS and Windows",
   "scripts": {
