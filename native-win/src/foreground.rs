@@ -15,24 +15,35 @@ pub fn initial_quiet_until(now: u64, last_input_tick: u32) -> u64 {
     now + HUMAN_IDLE_MS.saturating_sub(age)
 }
 
-pub fn activation_required(foreground: bool, now: u64, quiet_until: u64) -> Result<bool> {
-    if foreground {
-        return Ok(false);
-    }
-    if now < quiet_until {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Activation {
+    pub restore: bool,
+    pub acquire: bool,
+}
+
+pub fn activation_plan(
+    foreground: bool,
+    iconic: bool,
+    now: u64,
+    quiet_until: u64,
+) -> Result<Activation> {
+    if !foreground && now < quiet_until {
         return Err(Error::new(
             "PERSON_ACTIVE",
             "Someone is using the computer: keyboard or mouse input occurred within the last 10 seconds. Foreground was not changed and no input was sent; do not retry automatically.",
         ));
     }
-    Ok(true)
+    Ok(Activation {
+        restore: iconic,
+        acquire: !foreground,
+    })
 }
 
-pub fn verify_activation(foreground: bool) -> Result<()> {
-    if foreground {
+pub fn verify_activation(foreground: bool, iconic: bool) -> Result<()> {
+    if foreground && !iconic {
         Ok(())
     } else {
-        Err(Error::new("ACTIVATION_FAILED", "Windows refused foreground activation. No input was sent; bring the target forward and read state again."))
+        Err(Error::new("ACTIVATION_FAILED", "Windows did not restore the target and verify foreground activation. No input was sent; bring the target forward and read state again."))
     }
 }
 
@@ -45,17 +56,27 @@ mod tests {
         let until = initial_quiet_until(30_000, 29_000);
         assert_eq!(until, 39_000);
         assert_eq!(
-            activation_required(false, 30_000, until).unwrap_err().code,
+            activation_plan(false, false, 30_000, until)
+                .unwrap_err()
+                .code,
             "PERSON_ACTIVE"
         );
         assert_eq!(
-            activation_required(false, 38_999, until).unwrap_err().code,
+            activation_plan(false, false, 38_999, until)
+                .unwrap_err()
+                .code,
             "PERSON_ACTIVE"
         );
-        assert_eq!(activation_required(true, 30_000, until), Ok(false));
+        assert_eq!(
+            activation_plan(true, false, 30_000, until),
+            Ok(Activation {
+                restore: false,
+                acquire: false
+            })
+        );
         // A monitored event extends the same deadline, even between requests.
         assert_eq!(
-            activation_required(false, 40_000, 39_500 + HUMAN_IDLE_MS)
+            activation_plan(false, false, 40_000, 39_500 + HUMAN_IDLE_MS)
                 .unwrap_err()
                 .code,
             "PERSON_ACTIVE"
@@ -65,16 +86,71 @@ mod tests {
     #[test]
     fn idle_attempts_activation_at_ten_seconds() {
         let until = initial_quiet_until(30_000, 20_000);
-        assert_eq!(activation_required(false, 30_000, until), Ok(true));
-        assert_eq!(activation_required(false, 90_000, until), Ok(true));
-        assert_eq!(verify_activation(true), Ok(()));
+        assert_eq!(
+            activation_plan(false, false, 30_000, until),
+            Ok(Activation {
+                restore: false,
+                acquire: true
+            })
+        );
+        assert_eq!(
+            activation_plan(false, false, 90_000, until),
+            Ok(Activation {
+                restore: false,
+                acquire: true
+            })
+        );
+        assert_eq!(verify_activation(true, false), Ok(()));
     }
 
     #[test]
     fn failed_verification_refuses_input() {
-        assert_eq!(activation_required(false, 30_000, 30_000), Ok(true));
         assert_eq!(
-            verify_activation(false).unwrap_err().code,
+            activation_plan(false, false, 30_000, 30_000),
+            Ok(Activation {
+                restore: false,
+                acquire: true
+            })
+        );
+        assert_eq!(
+            verify_activation(false, false).unwrap_err().code,
+            "ACTIVATION_FAILED"
+        );
+    }
+
+    #[test]
+    fn minimized_foreground_restores_without_waiting_for_idle() {
+        assert_eq!(
+            activation_plan(true, true, 30_000, 39_000),
+            Ok(Activation {
+                restore: true,
+                acquire: false
+            })
+        );
+        assert_eq!(
+            verify_activation(true, true).unwrap_err().code,
+            "ACTIVATION_FAILED"
+        );
+        assert_eq!(verify_activation(true, false), Ok(()));
+    }
+
+    #[test]
+    fn minimized_background_checks_idle_before_restoration() {
+        assert_eq!(
+            activation_plan(false, true, 30_000, 39_000)
+                .unwrap_err()
+                .code,
+            "PERSON_ACTIVE"
+        );
+        assert_eq!(
+            activation_plan(false, true, 39_000, 39_000),
+            Ok(Activation {
+                restore: true,
+                acquire: true
+            })
+        );
+        assert_eq!(
+            verify_activation(false, true).unwrap_err().code,
             "ACTIVATION_FAILED"
         );
     }
