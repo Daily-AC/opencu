@@ -421,15 +421,30 @@ impl Guard<'_> {
     pub unsafe fn activate(&mut self, w: &Window) -> Result<()> {
         self.check()?;
         target(w)?;
-        if foreground::activation_required(
+        let plan = foreground::activation_plan(
             w.contains(GetForegroundWindow()),
+            IsIconic(w.hwnd).as_bool(),
             GetTickCount64(),
             QUIET_UNTIL.load(SeqCst),
-        )? {
-            // The idle decision precedes even restoration, which can activate.
-            if IsIconic(w.hwnd).as_bool() {
-                let _ = ShowWindowAsync(w.hwnd, SW_RESTORE);
+        )?;
+        // A minimized foreground window still needs restoration. Only acquiring
+        // another family's foreground requires idle time; decide before restoring.
+        if plan.restore {
+            self.check()?;
+            w.validate()?;
+            let _ = ShowWindowAsync(w.hwnd, SW_RESTORE);
+            let deadline = Instant::now() + Duration::from_millis(500);
+            while IsIconic(w.hwnd).as_bool() && Instant::now() < deadline {
+                self.check()?;
+                w.validate()?;
+                thread::sleep(Duration::from_millis(10));
             }
+            self.check()?;
+            if IsIconic(w.hwnd).as_bool() {
+                return foreground::verify_activation(w.contains(GetForegroundWindow()), true);
+            }
+        }
+        if plan.acquire {
             self.check()?;
             let _ = SetForegroundWindow(w.hwnd);
             if !w.contains(GetForegroundWindow()) {
@@ -452,7 +467,11 @@ impl Guard<'_> {
             }
         }
         self.check()?;
-        foreground::verify_activation(w.contains(GetForegroundWindow()))?;
+        w.validate()?;
+        foreground::verify_activation(
+            w.contains(GetForegroundWindow()),
+            IsIconic(w.hwnd).as_bool(),
+        )?;
         self.target = Some(w.clone());
         self.check()
     }
