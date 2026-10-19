@@ -511,7 +511,7 @@ window forward and clicked it. Escape followed by an idle 11 seconds returned
 secure-desktop refusals still require real Windows verification.
 
 
-### v0.3.2 modal acceptance (pending Windows execution)
+### v0.3.2 modal acceptance
 
 With the v0.3.2 executable in `.build/win/opencu-engine.exe`, run the three
 PowerShell commands in the v0.3.1 acceptance section above. The GUI suite keeps
@@ -524,8 +524,14 @@ fixture must record the expected value and completion count. The report's
 `modalDialog` entry records each latency and result. Text-only coordinate input
 must separately return `SCREENSHOT_REQUIRED`.
 
-These are regression assertions, not evidence of a completed Windows run.
-WinForms may dispatch Invoke asynchronously and therefore may not reproduce Qt's
-provider blockage on the old engine. Retest OBS Studio's Add Scene button on
-Windows as well; neither WinForms provider blocking nor the OBS fix has been
-verified on this Mac. No real-app observations are published with this change.
+Accepted on 2026-10-19: all 34 checks passed in three consecutive runs on a
+fresh Windows 11 26H2 VM, each from a clean checkpoint; the three modal openings
+returned in about 250 ms each, and the package verifier passed
+([evidence](../evidence/opencu-windows-gui-2026-10-19-v0.3.2.json)). WinForms may
+dispatch Invoke asynchronously, so these checks guard the pointer path rather than
+reproduce Qt's blocking provider. The Qt case was retested by hand with OBS Studio
+32.2.2: v0.3.1 returned `UIA_TIMEOUT` for the Add Scene button and every later
+call on that connection timed out; v0.3.2 returned in 1.5 s, listed the name
+dialog, set its value and closed it with an indexed OK, and the new scene was
+listed. Physical Escape (host-injected) still latched `USER_STOPPED`, and the host
+required fresh approval instead of restarting the engine.
