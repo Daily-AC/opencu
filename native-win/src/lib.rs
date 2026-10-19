@@ -1,5 +1,6 @@
 //! Platform-independent parts of the inherited-stdio engine contract.
 pub mod observation;
+pub mod foreground;
 use serde_json::{json, Value};
 
 #[derive(Debug, Clone, PartialEq, Eq)]

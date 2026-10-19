@@ -1,5 +1,5 @@
 use super::apps::{Handle, Window};
-use opencu_engine::{Error, Result};
+use opencu_engine::{foreground, Error, Result};
 use std::{
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering::SeqCst},
@@ -29,7 +29,8 @@ static ACTING: AtomicBool = AtomicBool::new(false);
 static EVENTS: AtomicU64 = AtomicU64::new(0);
 static FAILED: AtomicBool = AtomicBool::new(false);
 static HEARTBEAT: AtomicU64 = AtomicU64::new(0);
-pub const INPUT_TAG: usize = 0x4f504355; // not an authorization token
+static QUIET_UNTIL: AtomicU64 = AtomicU64::new(0);
+pub use foreground::INPUT_TAG;
 pub fn person() -> Error {
     Error::new(
         "PERSON_ACTIVE",
@@ -147,30 +148,45 @@ unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> 
         if n != std::mem::size_of::<RAWINPUTHEADER>() as u32 {
             FAILED.store(true, SeqCst);
         } else if header.dwType <= 1 && GetMessageExtraInfo().0 as usize != INPUT_TAG {
-            if header.dwType == RIM_TYPEKEYBOARD.0 {
-                // Escape has a Raw Input path as well: Windows can silently remove
-                // low-level hooks after a timeout. Retain no typed content.
-                let mut raw = RAWINPUT::default();
-                let mut size = std::mem::size_of::<RAWINPUT>() as u32;
-                let copied = GetRawInputData(
-                    HRAWINPUT(lp.0 as _),
-                    RID_INPUT,
-                    Some(&mut raw as *mut _ as _),
-                    &mut size,
-                    std::mem::size_of::<RAWINPUTHEADER>() as u32,
-                );
-                if copied == u32::MAX {
-                    FAILED.store(true, SeqCst);
-                } else if raw.data.keyboard.VKey == 0x1b
-                    && raw.data.keyboard.Flags & RI_KEY_BREAK as u16 == 0
-                    && raw.data.keyboard.ExtraInformation as usize != INPUT_TAG
-                {
-                    STOPPED.store(true, SeqCst);
+            let mut raw = RAWINPUT::default();
+            let mut size = std::mem::size_of::<RAWINPUT>() as u32;
+            let copied = GetRawInputData(
+                HRAWINPUT(lp.0 as _),
+                RID_INPUT,
+                Some(&mut raw as *mut _ as _),
+                &mut size,
+                std::mem::size_of::<RAWINPUTHEADER>() as u32,
+            );
+            let payload_size = if header.dwType == RIM_TYPEKEYBOARD.0 {
+                std::mem::size_of::<RAWKEYBOARD>()
+            } else {
+                std::mem::size_of::<RAWMOUSE>()
+            };
+            if copied == u32::MAX
+                || (copied as usize) < std::mem::size_of::<RAWINPUTHEADER>() + payload_size
+            {
+                FAILED.store(true, SeqCst);
+            } else {
+                let extra = if header.dwType == RIM_TYPEKEYBOARD.0 {
+                    raw.data.keyboard.ExtraInformation
+                } else {
+                    raw.data.mouse.ulExtraInformation
+                };
+                // Exempt tagged keyboard AND mouse packets before updating any
+                // activity state, including the physical Escape fallback.
+                if !foreground::engine_input(GetMessageExtraInfo().0 as usize, extra as usize) {
+                    if header.dwType == RIM_TYPEKEYBOARD.0
+                        && raw.data.keyboard.VKey == 0x1b
+                        && raw.data.keyboard.Flags & RI_KEY_BREAK as u16 == 0
+                    {
+                        STOPPED.store(true, SeqCst);
+                    }
+                    QUIET_UNTIL.store(GetTickCount64() + foreground::HUMAN_IDLE_MS, SeqCst);
+                    EVENTS.fetch_add(1, SeqCst);
+                    if ACTING.load(SeqCst) {
+                        NEEDS_OBSERVATION.store(true, SeqCst);
+                    }
                 }
-            }
-            EVENTS.fetch_add(1, SeqCst);
-            if ACTING.load(SeqCst) {
-                NEEDS_OBSERVATION.store(true, SeqCst);
             }
         }
     }
@@ -233,7 +249,19 @@ impl Monitor {
                     },
                 ];
                 RegisterRawInputDevices(&devices, std::mem::size_of::<RAWINPUTDEVICE>() as u32)?;
-                HEARTBEAT.store(GetTickCount64(), SeqCst);
+                // Register first so events during initialization are queued. Seed
+                // before reporting ready: no input from this connection exists yet.
+                // Do not poll LASTINPUTINFO later: SendInput also updates it.
+                let mut last = LASTINPUTINFO {
+                    cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32,
+                    ..Default::default()
+                };
+                if !GetLastInputInfo(&mut last).as_bool() {
+                    return Err(monitor_error());
+                }
+                let now = GetTickCount64();
+                QUIET_UNTIL.store(foreground::initial_quiet_until(now, last.dwTime), SeqCst);
+                HEARTBEAT.store(now, SeqCst);
                 let _ = ready_tx.send(Ok(()));
                 let pump = || -> bool {
                     for _ in 0..256 {
@@ -393,13 +421,30 @@ impl Guard<'_> {
     pub unsafe fn activate(&mut self, w: &Window) -> Result<()> {
         self.check()?;
         target(w)?;
-        if IsIconic(w.hwnd).as_bool() {
-            let _ = ShowWindowAsync(w.hwnd, SW_RESTORE);
-        }
-        if !w.contains(GetForegroundWindow()) {
+        if foreground::activation_required(
+            w.contains(GetForegroundWindow()),
+            GetTickCount64(),
+            QUIET_UNTIL.load(SeqCst),
+        )? {
+            // The idle decision precedes even restoration, which can activate.
+            if IsIconic(w.hwnd).as_bool() {
+                let _ = ShowWindowAsync(w.hwnd, SW_RESTORE);
+            }
+            self.check()?;
             let _ = SetForegroundWindow(w.hwnd);
-            // Wait only for this one activation; never attach input queues or
-            // synthesize Alt to defeat the foreground lock.
+            if !w.contains(GetForegroundWindow()) {
+                self.check()?;
+                // Port wanctl's Focus fallback: create this OS thread's queue,
+                // temporarily share input state, raise the target, then detach.
+                // No synthetic key or pointer input is needed for activation.
+                let attached = AttachedInput::new(w.hwnd);
+                self.check()?;
+                w.validate()?;
+                let _ = BringWindowToTop(w.hwnd);
+                self.check()?;
+                let _ = SetForegroundWindow(w.hwnd);
+                drop(attached);
+            }
             let deadline = Instant::now() + Duration::from_millis(500);
             while !w.contains(GetForegroundWindow()) && Instant::now() < deadline {
                 self.check()?;
@@ -407,9 +452,7 @@ impl Guard<'_> {
             }
         }
         self.check()?;
-        if !w.contains(GetForegroundWindow()) {
-            return Err(Error::new("ACTIVATION_FAILED","Windows refused foreground activation. No input was sent; bring the target forward and read state again."));
-        }
+        foreground::verify_activation(w.contains(GetForegroundWindow()))?;
         self.target = Some(w.clone());
         self.check()
     }
@@ -435,6 +478,44 @@ impl Drop for Guard<'_> {
         self.visible.take();
         if STOPPED.load(SeqCst) {
             self.indicator.hide();
+        }
+    }
+}
+
+/// Scoped to the request's OS thread; detach on success and every early return.
+struct AttachedInput {
+    caller: u32,
+    threads: Vec<u32>,
+}
+impl AttachedInput {
+    unsafe fn new(target: HWND) -> Self {
+        let mut msg = MSG::default();
+        let _ = PeekMessageW(&mut msg, None, 0, 0, PM_NOREMOVE);
+        let mut attached = Self {
+            caller: GetCurrentThreadId(),
+            threads: Vec::new(),
+        };
+        for thread in [
+            GetWindowThreadProcessId(GetForegroundWindow(), None),
+            GetWindowThreadProcessId(target, None),
+        ] {
+            if thread != 0
+                && thread != attached.caller
+                && !attached.threads.contains(&thread)
+                && AttachThreadInput(attached.caller, thread, true).as_bool()
+            {
+                attached.threads.push(thread);
+            }
+        }
+        attached
+    }
+}
+impl Drop for AttachedInput {
+    fn drop(&mut self) {
+        for &thread in self.threads.iter().rev() {
+            unsafe {
+                let _ = AttachThreadInput(self.caller, thread, false);
+            }
         }
     }
 }
