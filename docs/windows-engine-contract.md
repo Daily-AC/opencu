@@ -6,6 +6,8 @@ from PowerShell without Node. See the [fixture evidence](../evidence/opencu-wind
 The owned-foreground regression and foreign-process refusals were additionally
 accepted in [three consecutive fixture runs](../evidence/opencu-windows-owned-foreground-2026-10-13.json).
 Physical takeover and privileged/locked-desktop cases remain manual follow-ups.
+The v0.3.1 idle foreground acquisition change is host-tested and cross-compiled;
+its real Windows acceptance is pending.
 
 ## Standalone transport and embedding
 
@@ -202,10 +204,27 @@ The same live predicate guards activation, each subsequent input safety check,
 pointer hit testing, and the focused control used for literal text.
 
 If this family already holds foreground, activation succeeds without calling
-SetForegroundWindow or changing the active overlay. Otherwise the engine makes
-the existing single SetForegroundWindow attempt and waits up to 500 ms for the
-target family. If Windows denies it, `ACTIVATION_FAILED` is returned;
-there is no synthetic Alt, AttachThreadInput, or foreground-lock bypass. Foreground
+SetForegroundWindow or changing the active overlay. Otherwise, both input and
+`activate_app` require at least **10 seconds without human keyboard or mouse
+input**. Recent activity returns `PERSON_ACTIVE` before restoring or raising the
+window, with no input sent. The Raw Input monitor tracks activity continuously,
+including between calls; a one-time `GetLastInputInfo` sample after registration
+covers input before the connection started. Its wrapping 32-bit tick count is
+converted to a 64-bit quiet deadline. The sample cannot attribute earlier input,
+so recent input from another connection or program is conservatively included.
+It is not polled after startup, because SendInput also updates it. Engine-tagged
+keyboard and mouse events are excluded before updating the activity deadline,
+interruption state or Raw Input Escape latch.
+
+On an idle desktop, restore a minimized target first and try SetForegroundWindow.
+If necessary, create the caller's message queue and temporarily AttachThreadInput
+to the foreground and target threads, then BringWindowToTop and SetForegroundWindow.
+Detach every successfully attached queue on all exit paths, before waiting up to
+500 ms for the target family. This permits foreground-lock acquisition for
+unattended use, following wanctl's Focus approach; no synthetic Alt is sent.
+The existing privilege, desktop, physical-input and stop checks remain in force.
+If the target family is still not foreground, return `ACTIVATION_FAILED`; never
+send target input without verifying foreground ownership. Foreground
 identity, live process identity and desktop accessibility are checked before each
 new SendInput event, Unicode character message and each UIA action. Pointer input also checks that the target
 window owns the screen point. UIA actions cannot be cancelled after entering the
@@ -231,7 +250,8 @@ cannot launch an app or clear the latch. There is no reset method; a host must n
 reconnect automatically to defeat the person's stop. Escape detection has both a
 low-level hook (ignoring injected events) and a Raw Input path. Ordinary physical
 input returns `PERSON_ACTIVE`; the next input needs a fresh observation. No
-system cursor scheme is changed and no foreground-lock bypass is used.
+system cursor scheme is changed. Foreground acquisition is permitted only after
+the 10-second idle threshold described above.
 
 Session 0, disconnected/locked sessions, a non-Default input/thread desktop, or
 an unreadable session/desktop return SCREEN_LOCKED. The engine does not unlock,
@@ -277,7 +297,8 @@ click. No duration, button or modifier options are added. All early returns atte
 to release the held button, including `PERSON_ACTIVE` and `USER_STOPPED`; completed
 input is never replayed. The MCP layer returns a new screenshot after success.
 The disposable WinForms fixture records both endpoints and held-button movement;
-this new check still requires Windows desktop acceptance for v0.3.0.
+this check was accepted with v0.3.0. The v0.3.1 idle foreground acquisition and
+minimized restoration checks still require Windows desktop acceptance.
 
 Paste snapshots every copyable HGLOBAL clipboard format before mutation. Temporary
 paste content is marked ExcludeClipboardContentFromMonitorProcessing so Windows
@@ -300,7 +321,7 @@ can represent partial completion; re-observe instead of automatically retrying.
 | --- | --- |
 | `USER_STOPPED` | Physical Escape disabled all further input on this connection. |
 | `INDICATOR_UNAVAILABLE` | Required visible indication could not be shown/verified. |
-| `PERSON_ACTIVE` | Human/foreign device input arrived or a key/button was held; stop. |
+| `PERSON_ACTIVE` | Human/foreign device input arrived, a key/button was held, or foreground acquisition needs 10 seconds of idle time; stop. |
 | `SAFETY_MONITOR_UNAVAILABLE` | Input monitoring failed or did not acknowledge in time. |
 | `SCREEN_LOCKED` | Locked, secure, disconnected or inaccessible interactive desktop/session. |
 | `ELEVATED_TARGET` | Target integrity is higher or cannot be verified. |
@@ -394,3 +415,31 @@ command without a shell, checks its version and 13 tools, and calls only
 The next command installs for the current user using the same script as `irm | iex`,
 with a local zip and no download. `node scripts/verify-gui-win.mjs` runs the
 foreground fixture suite, including drag, on an idle desktop.
+
+### v0.3.1 foreground acceptance
+
+On an authorized idle Windows desktop, with the source fixture scripts and the
+v0.3.1 executable in `.build/win/opencu-engine.exe`:
+
+```powershell
+node scripts/verify-gui-win.mjs
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify-engine-win.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify-package-win.ps1 -Zip .\dist\opencu-win-x64.zip
+```
+
+The GUI suite retains the explicit fixture foreground-lock refusals, then unlocks
+the fixture and checks that the same cold connection brings a background-launched
+window forward and delivers an indexed click. Its `idleForegroundAcquisition`
+evidence includes the initial idle duration, before/after foreground identity and
+click counts. It also minimizes that window and calls `activate_app` immediately
+after engine keyboard/mouse input, checking restoration without a false
+`PERSON_ACTIVE` or Escape latch. Preparation includes a 10.5-second idle wait
+before creating the cold connection; no refused input is automatically replayed.
+
+Manual follow-ups: use physical mouse/keyboard input before connecting and
+between calls, then request an indexed click or `activate_app` on a background
+fixture within 10 seconds. Expect `PERSON_ACTIVE`, unchanged foreground and click
+count (including when the target is minimized). Re-observe and explicitly permit
+continuation after the desktop is idle; do not automatically retry. Physical Esc
+must still latch `USER_STOPPED` for that connection. Elevated, locked-session and
+secure-desktop refusals also require real Windows verification.
