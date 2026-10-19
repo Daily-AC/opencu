@@ -7,7 +7,7 @@ one in front. It needs no account, model credentials or proprietary runtime: any
 MCP client can start it, and the calling agent supplies the model and decides
 what to do.
 
-**Status (v0.3.1):** macOS source builds and an unsigned Windows x64 package.
+**Status (v0.3.2):** macOS source builds and an unsigned Windows x64 package.
 On the development Mac, 9 of the last 10 runs of its 18-check background GUI
 suite passed, and it has completed a handful of real tasks. It has not been
 benchmarked at scale. Read [Limitations](#limitations) before relying on it.
@@ -210,6 +210,14 @@ engine verifies the target is foreground before sending input. Human activity
 during input stops the current call, physical Esc disables
 input for the rest of the connection, and a banner excluded from capture shows
 that OpenCU is operating.
+
+In v0.3.2, indexed clicks and Invoke/default secondary actions prefer a checked
+pointer click when the element owns its centre, avoiding synchronous modal UIA
+handlers. Covered controls retain the UIA fallback. If an engine request still
+times out, the same MCP connection can restart the engine after cleanup and a
+fresh observation; input is never replayed, and a person's stop forbids restart.
+Coordinate input without a fresh screenshot returns `SCREENSHOT_REQUIRED`.
+The new modal fixture checks and OBS retest await Windows acceptance.
 
 Missing: text selection. Elevated windows, UAC prompts and secure desktops are refused (`ELEVATED_TARGET`, `SCREEN_LOCKED`); these
 refusals have not been checked on a real desktop yet. Controls without accessible

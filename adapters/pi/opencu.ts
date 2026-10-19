@@ -42,7 +42,7 @@ export default function opencu(pi: ExtensionAPI) {
     ready ??= (async () => {
       const transport = new StdioClientTransport({ ...serverCommand(), stderr: 'pipe' });
       transport.stderr?.resume(); // Drain diagnostics without writing to pi's protocol/UI.
-      client = new Client({ name: 'opencu-pi', version: '0.3.1' });
+      client = new Client({ name: 'opencu-pi', version: '0.3.2' });
       client.onclose = () => {
         if (!closing) failure ??= new Error('OpenCU disconnected. No operation was retried; automatic reconnection is disabled.');
       };
