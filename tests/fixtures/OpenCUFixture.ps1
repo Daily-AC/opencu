@@ -24,6 +24,13 @@ public class OpenCUFixture : Form {
     [DllImport("user32.dll")] static extern IntPtr GetWindow(IntPtr hwnd,uint command);
     [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hwnd,out uint pid);
     [DllImport("user32.dll")] static extern bool LockSetForegroundWindow(uint code);
+    [DllImport("user32.dll")] static extern bool GetLastInputInfo(ref LASTINPUTINFO info);
+    struct LASTINPUTINFO { public uint Size, Time; }
+    static uint IdleMilliseconds() {
+        var info=new LASTINPUTINFO { Size=8 };
+        if(!GetLastInputInfo(ref info))throw new Exception("Cannot read fixture desktop idle time");
+        return unchecked((uint)Environment.TickCount-info.Time);
+    }
     [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr hwnd);
     [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern IntPtr FindWindow(string cls,string title);
     [DllImport("user32.dll")] static extern bool GetWindowDisplayAffinity(IntPtr hwnd,out uint affinity);
@@ -96,6 +103,8 @@ public class OpenCUFixture : Form {
                     overlay.Activate();overlayNotes.Focus();
                     if(GetForegroundWindow()!=overlay.Handle || !LockSetForegroundWindow(1))throw new Exception("Fixture could not hold foreground lock");
                 }
+                else if(cmd=="foreground-unlock") { if(!LockSetForegroundWindow(2))throw new Exception("Fixture could not release foreground lock"); }
+                else if(cmd=="minimize") { WindowState=FormWindowState.Minimized; }
                 else if(cmd=="overlay-close") { LockSetForegroundWindow(2);if(overlay!=null){var closing=overlay;overlay=null;overlayNotes=null;closing.Close();closing.Dispose();}Activate(); }
                 else if(cmd=="cover") { cover=new Form();cover.Text=Text+" Cover";cover.FormBorderStyle=FormBorderStyle.None;cover.StartPosition=FormStartPosition.Manual;cover.Bounds=Bounds;cover.BackColor=Color.Lime;cover.Show(this); }
                 else if(cmd=="uncover") { if(cover!=null){cover.Close();cover.Dispose();cover=null;} }
@@ -112,7 +121,7 @@ public class OpenCUFixture : Form {
         var family="\"foregroundOwner\":"+Q(GetWindow(foreground,4).ToInt64().ToString())+","+"\"mainHwnd\":"+Q(Handle.ToInt64().ToString())+",\"foregroundHwnd\":"+Q(foreground.ToInt64().ToString())+",\"foregroundPid\":"+foregroundPid+",\"mainRootOwner\":"+Q(GetAncestor(Handle,3).ToInt64().ToString())+",\"foregroundRootOwner\":"+Q(GetAncestor(foreground,3).ToInt64().ToString())+",\"overlayClicks\":"+overlayClicks+",\"overlayNotes\":"+Q(overlayNotes==null?"":overlayNotes.Text)+",";
         var a=dragPanel.PointToScreen(new Point(20,dragPanel.Height/2));var b=dragPanel.PointToScreen(new Point(dragPanel.Width-20,dragPanel.Height/2));
         var drag="\"dragFromX\":"+(a.X-r.Left)+",\"dragFromY\":"+(a.Y-r.Top)+",\"dragToX\":"+(b.X-r.Left)+",\"dragToY\":"+(b.Y-r.Top)+",\"dragDistance\":"+(b.X-a.X)+",\"dragDownX\":"+dragDown.X+",\"dragDownY\":"+dragDown.Y+",\"dragUpX\":"+dragUp.X+",\"dragUpY\":"+dragUp.Y+",\"dragHeld\":"+(dragHeld?"true":"false")+",\"dragMoves\":"+dragMoves+",\"drags\":"+drags+",";
-        var json="{"+drag+family+"\"pid\":"+System.Diagnostics.Process.GetCurrentProcess().Id+",\"clicks\":"+clicks+",\"notes\":"+Q(notes.Text)+",\"checked\":"+(check.Checked?"true":"false")+",\"slider\":"+slider.Value+",\"scroll\":"+(-scrolling.AutoScrollPosition.Y)+",\"wheel\":"+wheel+",\"moves\":"+moves+",\"x\":"+(p.X-r.Left)+",\"y\":"+(p.Y-r.Top)+",\"markerX\":"+(m.X-r.Left)+",\"markerY\":"+(m.Y-r.Top)+",\"width\":"+(r.Right-r.Left)+",\"height\":"+(r.Bottom-r.Top)+",\"indicatorVisible\":"+(indicatorVisible?"true":"false")+",\"indicatorReadable\":"+(indicatorReadable?"true":"false")+",\"indicatorAffinity\":"+indicatorAffinity+",\"keyChars\":"+Q(received.ToString())+",\"inputLanguage\":"+Q(InputLanguage.CurrentInputLanguage.LayoutName)+",\"clipboardDigest\":"+Q(digest)+",\"error\":"+Q(error)+"}";
+        var json="{\"idleMs\":"+IdleMilliseconds()+",\"minimized\":"+(WindowState==FormWindowState.Minimized?"true":"false")+","+drag+family+"\"pid\":"+System.Diagnostics.Process.GetCurrentProcess().Id+",\"clicks\":"+clicks+",\"notes\":"+Q(notes.Text)+",\"checked\":"+(check.Checked?"true":"false")+",\"slider\":"+slider.Value+",\"scroll\":"+(-scrolling.AutoScrollPosition.Y)+",\"wheel\":"+wheel+",\"moves\":"+moves+",\"x\":"+(p.X-r.Left)+",\"y\":"+(p.Y-r.Top)+",\"markerX\":"+(m.X-r.Left)+",\"markerY\":"+(m.Y-r.Top)+",\"width\":"+(r.Right-r.Left)+",\"height\":"+(r.Bottom-r.Top)+",\"indicatorVisible\":"+(indicatorVisible?"true":"false")+",\"indicatorReadable\":"+(indicatorReadable?"true":"false")+",\"indicatorAffinity\":"+indicatorAffinity+",\"keyChars\":"+Q(received.ToString())+",\"inputLanguage\":"+Q(InputLanguage.CurrentInputLanguage.LayoutName)+",\"clipboardDigest\":"+Q(digest)+",\"error\":"+Q(error)+"}";
         try{File.WriteAllText(output,json,new UTF8Encoding(false));}catch(IOException){}
     }
     static string ClipboardDigest(){

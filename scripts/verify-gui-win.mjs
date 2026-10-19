@@ -53,17 +53,17 @@ async function waitFor(fn, message, milliseconds = 12000) {
   while (Date.now() < until) { if (await fn()) return; await pause(100); }
   throw new Error(`Timed out: ${message}`);
 }
-async function fixtureState() {
+async function fixtureState(file = output) {
   // The fixture owns this file; a timer write can overlap our read.
   for (let attempt = 0; ; attempt++) {
-    try { return JSON.parse(await readFile(output, 'utf8')); }
+    try { return JSON.parse(await readFile(file, 'utf8')); }
     catch (error) { if (attempt === 5) throw error; await pause(20); }
   }
 }
-async function fixtureCommand(command) {
-  await waitFor(async () => { try { await access(commandFile); return false; } catch { return true; } }, 'fixture command idle');
-  await writeCommand(commandFile, command);
-  await waitFor(async () => { try { await access(commandFile); return false; } catch { return true; } }, `fixture command ${command}`);
+async function fixtureCommand(command, file = commandFile) {
+  await waitFor(async () => { try { await access(file); return false; } catch { return true; } }, 'fixture command idle');
+  await writeCommand(file, command);
+  await waitFor(async () => { try { await access(file); return false; } catch { return true; } }, `fixture command ${command}`);
   await pause(150);
 }
 function index(label) {
@@ -239,10 +239,13 @@ try {
     try { return JSON.parse(await readFile(otherOutput, 'utf8')).pid === other.pid; } catch { return false; }
   }, 'background fixture start', 30000);
   assert.equal((await fixtureState()).foregroundHwnd, family.foregroundHwnd);
-  // The main connection received Windows foreground rights from its preceding
-  // SendInput. A cold connection has no last-input grant; it must respect the
-  // other fixture process holding foreground. Neither connection is stopped or
-  // interrupted by human input, and they never act on one app concurrently.
+  // Keep the explicit foreground-lock refusal regression. Before creating a
+  // cold connection, let prior synthetic input age out of GetLastInputInfo;
+  // its startup baseline cannot attribute events from an earlier connection.
+  // This is preparation, never a retry of refused input or a physical stop.
+  await pause(10500);
+  const idleBefore = await fixtureState();
+  assert.ok(idleBefore.idleMs >= 10000, 'Desktop must be idle for 10 seconds; no input is retried');
   const primaryClient = client;
   client = new Client({ name: 'opencu-windows-foreign-fixture-client', version: '1.0' });
   connections.push(client);
@@ -253,7 +256,49 @@ try {
   await call('activate_app', otherTitle, {}, 'ACTIVATION_FAILED');
   assert.equal(JSON.parse(await readFile(otherOutput, 'utf8')).clicks, 0);
   assert.equal((await fixtureState()).foregroundHwnd, family.foregroundHwnd);
-  checks.push('cold connection refuses different-process background input and activation without input');
+  checks.push('cold connection refuses different-process background input and activation while the fixture holds the foreground lock');
+  // The same cold connection can now acquire the background target without
+  // a synthetic Alt or any fixture-side activation of that target.
+  await fixtureCommand('foreground-unlock');
+  const beforeActivation = await fixtureState(otherOutput);
+  assert.notEqual(beforeActivation.foregroundPid, other.pid);
+  await call('get_app_state', otherTitle, { disableDiff: true });
+  await call('click', otherTitle, { element_index: index('Fixture counter') });
+  await waitFor(async () => (await fixtureState(otherOutput)).clicks === 1, 'background fixture indexed click');
+  const acquired = await fixtureState(otherOutput);
+  assert.equal(acquired.foregroundPid, other.pid);
+  assert.equal(acquired.foregroundRootOwner, acquired.mainRootOwner);
+  assert.equal((await fixtureState()).clicks, 3, 'Input must not reach the previous foreground fixture');
+  report.idleForegroundAcquisition = {
+    idleThresholdMs: 10000, idleBeforeConnectionMs: idleBefore.idleMs,
+    launchedInBackground: true, sameConnectionAfterLockRefusal: true,
+    beforeForegroundPid: beforeActivation.foregroundPid, targetPid: other.pid,
+    afterForegroundPid: acquired.foregroundPid, verifiedTargetFamily: true,
+    indexedClicksBefore: beforeActivation.clicks, indexedClicksAfter: acquired.clicks,
+  };
+  checks.push('idle cold connection brings a background fixture forward and delivers an indexed click');
+
+  // Exercise both tagged keyboard and pointer input, then immediately switch
+  // families. Polling LASTINPUTINFO after SendInput would wrongly refuse this.
+  await call('press_key', otherTitle, { key: 'Escape' });
+  const otherSize = await imageState(otherTitle);
+  const otherPoint = await fixtureState(otherOutput);
+  assert.ok(otherPoint.x < otherSize.width && otherPoint.y < otherSize.height);
+  await call('click', otherTitle, { x: otherPoint.x, y: otherPoint.y });
+  await fixtureCommand('minimize', otherCommand);
+  assert.equal((await fixtureState(otherOutput)).minimized, true);
+  assert.notEqual((await fixtureState(otherOutput)).foregroundPid, other.pid);
+  const afterSynthetic = await fixtureState(otherOutput);
+  assert.ok(afterSynthetic.idleMs < 10000, 'Synthetic input must still be recent for this regression');
+  await call('activate_app', otherTitle);
+  await waitFor(async () => {
+    const s = await fixtureState(otherOutput);
+    return !s.minimized && s.foregroundPid === other.pid && s.foregroundRootOwner === s.mainRootOwner;
+  }, 'minimized background fixture restored and activated');
+  assert.equal((await fixtureState(otherOutput)).clicks, 2);
+  report.idleForegroundAcquisition.syntheticInputIdleMs = afterSynthetic.idleMs;
+  report.idleForegroundAcquisition.minimizedRestoredByActivateApp = true;
+  checks.push('recent engine keyboard and mouse input permits minimized-window activation without PERSON_ACTIVE or the Escape latch');
   await client.close(); client = primaryClient;
   await writeCommand(otherCommand, 'close');
   await waitFor(() => other.exitCode !== null, 'background fixture closed');
