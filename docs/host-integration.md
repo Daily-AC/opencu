@@ -19,7 +19,7 @@ OpenCU is installed when this per-user manifest exists:
 ```json
 {
   "name": "opencu",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "platform": "win32",
   "mcp": {
     "command": "C:\\Users\\me\\AppData\\Local\\OpenCU\\node\\node.exe",
@@ -86,7 +86,9 @@ need host action:
   reconnect would silently clear it. The host must refuse further OpenCU calls
   for that agent session, without reconnecting, until the person explicitly
   allows it again.
-- `PERSON_ACTIVE` (Windows): someone used the keyboard or mouse during the call.
+- `PERSON_ACTIVE` (Windows): someone used the keyboard or mouse during the call,
+  held a key/button, or used input within the last 10 seconds when foreground
+  activation was needed.
   The agent should ask the person before continuing rather than retry.
 
 Other codes are documented in the [Windows contract](windows-engine-contract.md#stable-error-codes)

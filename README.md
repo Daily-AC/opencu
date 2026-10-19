@@ -7,7 +7,7 @@ one in front. It needs no account, model credentials or proprietary runtime: any
 MCP client can start it, and the calling agent supplies the model and decides
 what to do.
 
-**Status (v0.3.0):** macOS source builds and an unsigned Windows x64 package.
+**Status (v0.3.1):** macOS source builds and an unsigned Windows x64 package.
 On the development Mac, 9 of the last 10 runs of its 18-check background GUI
 suite passed, and it has completed a handful of real tasks. It has not been
 benchmarked at scale. Read [Limitations](#limitations) before relying on it.
@@ -203,8 +203,11 @@ setups with external monitors are untested. See the [agent display probe](docs/a
 The Rust engine in `native-win/` implements UI Automation trees, window capture,
 indexed and coordinate clicks, drag, Unicode typing, plain-text paste, keys, scroll,
 values and secondary actions. Unlike macOS, it works in the foreground: input
-brings the target window to the front, and Windows can refuse that activation.
-Human keyboard or mouse activity stops the current call, physical Esc disables
+can bring a background or minimized target to the front after 10 seconds without
+human keyboard or mouse input. Recent activity returns `PERSON_ACTIVE` without
+changing foreground or sending input. Windows can still refuse activation; the
+engine verifies the target is foreground before sending input. Human activity
+during input stops the current call, physical Esc disables
 input for the rest of the connection, and a banner excluded from capture shows
 that OpenCU is operating.
 
@@ -214,6 +217,7 @@ names, common in media players, are listed with an index and bounds but need a
 screenshot to tell apart. Acceptance so far is 27 checks on disposable WinForms
 and Chrome fixtures, including drag, in three consecutive runs on a fresh
 Windows 11 x64 VM ([evidence](evidence/opencu-windows-gui-2026-10-17.json)).
+The v0.3.1 idle foreground acquisition changes still await real Windows acceptance.
 
 ### Install
 
