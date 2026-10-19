@@ -106,7 +106,7 @@ public class OpenCUFixture : Form {
                 }
                 // SW_SHOWMINIMIZED activates the window while displaying it minimized.
                 else if(cmd=="minimize-foreground") { ShowWindow(Handle,2); }
-                else if(cmd=="overlay-activate") { overlay.Activate();overlayNotes.Focus();if(GetForegroundWindow()!=overlay.Handle || !LockSetForegroundWindow(1))throw new Exception("Fixture could not activate overlay"); }
+                else if(cmd=="overlay-activate") { LockSetForegroundWindow(2);overlay.Activate();overlayNotes.Focus();if(GetForegroundWindow()!=overlay.Handle || !LockSetForegroundWindow(1))throw new Exception("Fixture could not activate overlay"); }
                 else if(cmd=="minimize") { WindowState=FormWindowState.Minimized; }
                 else if(cmd=="overlay-close") { LockSetForegroundWindow(2);if(overlay!=null){var closing=overlay;overlay=null;overlayNotes=null;closing.Close();closing.Dispose();}Activate(); }
                 else if(cmd=="cover") { cover=new Form();cover.Text=Text+" Cover";cover.FormBorderStyle=FormBorderStyle.None;cover.StartPosition=FormStartPosition.Manual;cover.Bounds=Bounds;cover.BackColor=Color.Lime;cover.Show(this); }
