@@ -1,0 +1,217 @@
+{
+  "test": "windows-agent-desktop",
+  "date": "2026-10-21",
+  "environment": "Windows 11 Enterprise Evaluation 26H2 (zh-CN, Microsoft Pinyin), Hyper-V VM 4 vCPU / 8 GB / 1920x1080, Defender real-time protection on, restored from a clean checkpoint, real UAC consent, one re-sign-in by reboot with autologon",
+  "package": {
+    "file": "opencu-win-x64.zip",
+    "sha256": "e958e3a3799f5f6ec211a3b0213c0c781a5cf74b5c5b454ec6ac7780f2593427",
+    "installedWith": "install.ps1 -LocalZip"
+  },
+  "engine_sha256": "8fde8450d82f359fd58b6eaf77b75be6a1aa20ac5a76fc0fa33b71a68e62c36a",
+  "guiRuns": [
+    {
+      "ok": true,
+      "checks": 40
+    },
+    {
+      "ok": true,
+      "checks": 40
+    },
+    {
+      "ok": true,
+      "checks": 40
+    }
+  ],
+  "packageVerifier": {
+    "test": "windows-package-offline",
+    "ok": true,
+    "networkUsed": false,
+    "inputCalls": 0,
+    "installedFromLocalZip": true,
+    "agentDesktopPreparation": "Child sessions disabled: automatic preparation refused without elevation.",
+    "hashMismatchPreservesInstall": true,
+    "version": "0.4.0",
+    "toolCount": 14,
+    "listAppsSucceeded": true,
+    "serverVersionMatches": true,
+    "inUseUpdatePreservesInstall": true,
+    "closedSessionUpdateSucceeded": true,
+    "agentDesktopUpdatePreparationChecked": true
+  },
+  "agentDesktopVerifier": {
+    "ok": true,
+    "parentStimulus": "SendInput in parent session; not hardware input",
+    "checks": [
+      {
+        "name": "setup-check",
+        "available": true,
+        "childSessionsEnabled": true,
+        "existingChildSession": null
+      },
+      {
+        "name": "real-pipe-authentication",
+        "ok": true,
+        "checks": [
+          "required-pointer-suppression",
+          "no-child-null",
+          "parent-session-policy",
+          "no-child-result",
+          "lf-crlf-bound",
+          "lf-writer",
+          "token-length-and-value",
+          "handshake-bound",
+          "first-pipe-instance",
+          "peer-pid-lifetime",
+          "peer-session",
+          "peer-sid",
+          "wire-token"
+        ]
+      },
+      {
+        "name": "start-child-session",
+        "childSession": 2,
+        "parentSession": 1
+      },
+      {
+        "name": "nonactivating-open-from-foreground-launcher"
+      },
+      {
+        "name": "child-launch-capture-and-inventory"
+      },
+      {
+        "name": "watch-only-hover-does-not-interrupt",
+        "stimulus": "parent SendInput mouse moves; no clicks or hardware input",
+        "moves": 35
+      },
+      {
+        "name": "watch-only-server-pointer-isolation",
+        "stimulus": "one parent SendInput move, then no parent mouse input",
+        "before": {
+          "x": 1543,
+          "y": 875
+        },
+        "after": {
+          "x": 1543,
+          "y": 875
+        }
+      },
+      {
+        "name": "concurrent-input-isolation",
+        "parent": {
+          "pid": 4748,
+          "sessionId": 1,
+          "text": "p00;p01;p02;p03;p04;p05;p06;p07;p08;p09;p10;p11;p12;p13;p14;p15;p16;p17;p18;p19;",
+          "clicks": 0,
+          "chunks": 20,
+          "expected": "p00;p01;p02;p03;p04;p05;p06;p07;p08;p09;p10;p11;p12;p13;p14;p15;p16;p17;p18;p19;",
+          "foreignForeground": 0,
+          "injectedFailures": 0,
+          "unexpectedCursor": 0,
+          "foreground": true,
+          "title": "OpenCU disposable OpenCU-Parent-Fixture",
+          "hoverMoves": 36,
+          "cursor": {
+            "x": 100,
+            "y": 133
+          },
+          "parked": true,
+          "parkedCursor": {
+            "x": 1543,
+            "y": 875
+          }
+        },
+        "child": {
+          "pid": 12396,
+          "sessionId": 2,
+          "text": "agent-0;agent-1;agent-2;agent-3;agent-4;agent-5;",
+          "clicks": 10,
+          "chunks": 0,
+          "expected": "",
+          "foreignForeground": 0,
+          "injectedFailures": 0,
+          "unexpectedCursor": 0,
+          "foreground": true,
+          "title": "OpenCU disposable OpenCU-Child-Fixture",
+          "hoverMoves": 0,
+          "cursor": {
+            "x": 308,
+            "y": 131
+          },
+          "parked": false,
+          "parkedCursor": {
+            "x": 0,
+            "y": 0
+          }
+        }
+      },
+      {
+        "name": "tool-stop-logs-off"
+      },
+      {
+        "name": "second-explicit-start"
+      },
+      {
+        "name": "window-close-latches-entire-connection"
+      }
+    ],
+    "parkedPointer": {
+      "before": {
+        "pid": 4748,
+        "sessionId": 1,
+        "text": "",
+        "clicks": 0,
+        "chunks": 0,
+        "expected": "",
+        "foreignForeground": 0,
+        "injectedFailures": 0,
+        "unexpectedCursor": 0,
+        "foreground": true,
+        "title": "OpenCU disposable OpenCU-Parent-Fixture",
+        "hoverMoves": 36,
+        "cursor": {
+          "x": 1543,
+          "y": 875
+        },
+        "parked": true,
+        "parkedCursor": {
+          "x": 1543,
+          "y": 875
+        }
+      },
+      "after": {
+        "pid": 4748,
+        "sessionId": 1,
+        "text": "",
+        "clicks": 0,
+        "chunks": 0,
+        "expected": "",
+        "foreignForeground": 0,
+        "injectedFailures": 0,
+        "unexpectedCursor": 0,
+        "foreground": true,
+        "title": "OpenCU disposable OpenCU-Parent-Fixture",
+        "hoverMoves": 36,
+        "cursor": {
+          "x": 1543,
+          "y": 875
+        },
+        "parked": true,
+        "parkedCursor": {
+          "x": 1543,
+          "y": 875
+        }
+      }
+    }
+  },
+  "manualChecks": {
+    "setup": "opencu setup agent-desktop printed the UAC line and completed after consent; a second run exited 0 with no UAC prompt.",
+    "beforeReSignIn": "agent_desktop start returned AGENT_DESKTOP_SIGN_IN_REQUIRED after 2.5 s; no credential UI appeared.",
+    "hardwareConcurrency": "Hyper-V keyboard typed 20 chunks into a foreground parent fixture while the agent ran 6 indexed-click and typing rounds in the child: parent 20/20 chunks and 0 clicks, child 6 rounds, parent foreground unchanged.",
+    "parkedPointer": "Hyper-V mouse parked over the watch-only view at (1600,800); 3 agent rounds in the child; the parent pointer did not move.",
+    "hover": "Hyper-V mouse hovering over the watch-only view did not interrupt agent rounds.",
+    "escape": "Clicking into the view and pressing Escape on the Hyper-V keyboard made the next input and every later call return USER_STOPPED.",
+    "close": "Clicking the window's close button logged the child off immediately; later calls returned USER_STOPPED; no reconnect within 20 s.",
+    "parentLocked": "While the parent was locked the child stayed running and status reported parentLocked true; input returned SCREEN_LOCKED within 30 ms with no fixture change, also after 30 s; window screenshots worked. After unlock parentLocked was false and the next round succeeded.",
+    "lockedInputProbe": "Inside the child while the parent was locked: no foreground window, SetForegroundWindow failed, SendInput keyboard and mouse events returned 0 with ERROR_ACCESS_DENIED. An MSAA default action on the fixture button took effect. The engine does not use that path in this release."
+  }
+}

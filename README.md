@@ -13,8 +13,8 @@ suite passed, and it has completed a handful of real tasks. It has not been
 benchmarked at scale. Read [Limitations](#limitations) before relying on it.
 The Windows engine uses foreground input. Version 0.4.0 adds an optional visible
 [agent desktop](#windows-agent-desktop) to isolate that input in a child session;
-its core session behavior was measured on Windows 11; the cursor-suppression and
-locked-input error fixes still need Windows re-acceptance.
+it passed acceptance on a Windows 11 VM, with input refused while the screen
+is locked.
 
 ## What it does on macOS
 
@@ -153,8 +153,9 @@ The measurements behind this section are in
 
 - **Windows agent desktop (0.4.0).** Windows 11 VM acceptance established separate
   foreground/input, no-password sign-in/refusal, Escape and close/EOF cleanup.
-  Setup, nonactivating open, watch-only hover, Escape, close and lock status were
-  accepted on the VM. The latest cursor and lock-error fixes need re-acceptance.
+  Setup, nonactivating open, watch-only hover, pointer isolation, Escape, close
+  and the locked-screen refusal were accepted on the VM
+  ([evidence](evidence/opencu-windows-agent-desktop-2026-10-21-v0.4.0.json)).
   Administrator approval is needed once, possibly followed by one sign-out/in;
   smart-card-only sign-in is unsupported and unmeasured. **While the parent screen is locked, the child stays alive for reads and
   screenshots, but input returns `SCREEN_LOCKED`.** The earlier locked-input
