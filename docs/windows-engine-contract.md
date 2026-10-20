@@ -595,15 +595,18 @@ follow-up changes still need Windows re-acceptance.** See [ADR 0002](adr/0002-wi
 - Clicking the host close button with the Hyper-V mouse immediately logged off
   the child. All later calls returned USER_STOPPED; no child reappeared within
   twenty seconds. MCP EOF also logged off the child, leaving no OpenCU process.
-- Parent LockWorkStation ended the child and latched SCREEN_LOCKED. After unlock,
-  status remained failed and nothing resumed.
+- Under the original policy, parent LockWorkStation ended the child and latched
+  SCREEN_LOCKED. This historical result precedes the owner decision below.
 
 A separate diagnostic variant **with the lock handler removed** continued child
 work while the parent displayed the lock screen: three rounds, a WGC screenshot
 containing real content (`vm-acceptance-1/locked-child.png` in the acceptance job),
-another check after thirty seconds, and work after unlock. This is a measured OS
-capability, not supported OpenCU policy. The shipped handler still ends the child
-on parent lock; no continue-on-lock option was added.
+another check after thirty seconds, and work after unlock. On 2026-10-20 the owner
+selected this as the product behavior: **the agent keeps working while the parent
+screen is locked**. Nobody at the machine can see the agent's work then, because
+the lock screen covers the host window. The new status query and final lock policy
+still require Windows re-acceptance; the diagnostic measurement is not a run of
+this final revision.
 
 The old ShowWithoutActivation-only host stole foreground when its launcher had
 foreground rights: the log saw it about 1.1 seconds after the fixture, for about
@@ -659,9 +662,24 @@ live Windows re-acceptance for rendering, hover, intentional activation and Esca
 The v9 control uses ConnectToChildSession and CredSSP. Credential prompts/saving,
 automatic reconnect, clipboard, drive/printer/port/smart-card/dynamic-device and
 audio redirection are disabled. External minimization stops the host; no global
-RemoteDesktop_SuppressWhenMinimized override is installed. Parent lock/disconnect
-ends the child without automatic resume. External minimize and disconnect still
-need dedicated measurement.
+RemoteDesktop_SuppressWhenMinimized override is installed. Parent lock (WTS event
+7) and unlock (8) do not end, replace or reconnect the child. Console/remote
+disconnect (2/4) and logoff (6) still end ownership without automatic resume.
+External minimize and disconnect still need dedicated measurement.
+
+`status` includes `parentLocked: true | false`, sampled from the parent session's
+WTSINFOEX flags by a separate metadata-only native doctor process. It works even
+before helper preparation, does not create or modify a desktop, and never infers
+lock state from an inaccessible desktop or a UAC screen. Native doctor exposes
+`sessionLocked` for its own session; unknown/query-failed state is null, and the
+MCP status call returns an explicit error instead of inventing false. This status
+query cannot stop/restart an engine or clear a person-stop latch.
+
+While locked, the child can keep reading, sending input and taking WGC screenshots;
+its engine's own desktop, foreground, human-activity and Escape guards are unchanged.
+The caller can stop it by ending the MCP connection. After unlocking, the person
+can close the still-present host window or click the view and press Escape. Unlock
+has no special recovery or input behavior, and cannot clear an earlier stop.
 
 Host close and a reported child USER_STOPPED permanently latch the MCP connection.
 Status and cleanup remain available; switching or reconnecting cannot bypass them.
@@ -707,8 +725,8 @@ remain unmeasured.
 External minimize, covered or partly off-screen viewports, GPU/video/protected
 content, smart-card sign-in and unsupported Windows editions are **unmeasured**.
 Also check the new watch/interactive transitions, physical Escape after deliberate
-activation, repeated setup, post-update automatic preparation, the new diagnostics,
-disconnect, startup crashes and real cross-user pipe ACL refusals. Earlier WGC and
+activation, repeated setup, post-update automatic preparation, `parentLocked` reporting,
+lock/unlock continuity, the new diagnostics, disconnect, startup crashes and real cross-user pipe ACL refusals. Earlier WGC and
 hardware-input results do not establish those cases. Apps still share the user's
 profiles/files, and global single-instance apps may refuse a child instance or
 start in the parent; OpenCU never follows them across sessions. There is only one
@@ -734,4 +752,10 @@ The offline package verifier additionally exercises non-elevating preparation,
 repeated setup, the extended helper self-test and rebuilding after directory
 replacement when the machine is already enabled. Otherwise it checks refusal
 without UAC. It removes only its temporary install's demand task. Neither updated
-script was run on Windows during this follow-up implementation job.
+script was run on Windows during this follow-up implementation job. Lock checks
+remain manual: the suite cannot deterministically unlock without a password and
+must not obtain one. In that manual run, verify `parentLocked` becomes true while
+child actions/capture continue, remains so after thirty seconds, becomes false on
+unlock with the same child session, and that close/Escape/MCP EOF still stop it.
+Verify disconnect/logoff still end the child and unlock never revives a stopped
+connection.

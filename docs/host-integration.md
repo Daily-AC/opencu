@@ -49,8 +49,9 @@ The package is not code-signed.
 
 - Start the process in the signed-in user's interactive session on
   `winsta0\default`, with that user's normal, non-elevated token. OpenCU cannot
-  work from session 0, a locked or disconnected session, or another user's
-  session; it reports `SCREEN_LOCKED` there.
+  operate its parent-desktop engine from session 0, a locked or disconnected
+  session, or another user's session; it reports `SCREEN_LOCKED` there. An already
+  running agent-desktop child remains usable when the parent locks, as below.
 - Connect stdin and stdout as the MCP stream and read stderr as diagnostics.
   Create no console window.
 - OpenCU opens no network port. It exits when stdin closes.
@@ -144,8 +145,15 @@ Child transport failures/timeouts do not replace its engine, reconnect RDP, or
 fall back to the parent's desktop. Parent-engine timeout recovery above is unchanged.
 Status/cleanup are available after failure; errors explain that `agent_desktop`
 with `{"action":"stop"}` is required before app tools can resume. This is not a
-person-stop reset. Locking or disconnecting the parent ends the child without
-automatic resume. Parent lock/unlock was measured; disconnect remains a follow-up. The feature is not a file/account sandbox and macOS currently returns
+person-stop reset. The agent keeps working while the parent screen is locked;
+nobody at the machine can see that work then. `status.parentLocked` (inside the
+tool's JSON text result) reports a fresh true/false snapshot. Unlock leaves the same
+child running and cannot clear a previous stop. Console/remote disconnect and
+logoff still end the child. A caller can stop it while locked by ending MCP stdin;
+after unlocking the person can close the host window or click the view and press
+Escape. The continuation was measured in a diagnostic VM variant; the final status
+query and lock/unlock policy need manual Windows re-acceptance without collecting
+an unlock password. The feature is not a file/account sandbox; macOS returns
 `UNSUPPORTED_ON_MACOS`. See the [Windows contract](windows-engine-contract.md#agent-desktop-040).
 
 ## Compatibility
