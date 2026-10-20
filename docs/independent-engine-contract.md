@@ -589,3 +589,19 @@ within the returned subtree when scoped. App/window/capture headers, summaries,
 and warnings cannot satisfy it. Existing polling deadlines and `WAIT_TIMEOUT`
 responses with the last state remain unchanged. A listed Window element's own
 name remains element text; scope to content to exclude such a root.
+
+## Wait without input (0.3.3)
+
+On both platforms `run_actions` accepts `{"method":"wait","ms":N}` with integer
+1 <= N <= 15000. Native `wait` sleeps without keyboard/mouse/clipboard input or
+app resolution/activation, consumes the prior screenshot grant, and preserves
+indexed elements. Windows keeps its existing activity guard active throughout
+the wait; physical activity returns `PERSON_ACTIVE`, and Escape returns latched
+`USER_STOPPED`. macOS waits asynchronously with its existing person-stop and
+cancellation checks (`STOPPED_BY_PERSON`). Later actions run their normal guards;
+a failure stops the batch without sending later actions or retrying anything.
+
+Coordinate input after a wait is rejected with `SCREENSHOT_REQUIRED`, just like
+coordinates after any earlier UI action; batch preflight sends no actions for
+this refusal. A standalone `wait` MCP tool is not added. Final observation and
+optional scope/waitForText behave as for other batches.

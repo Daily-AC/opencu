@@ -80,7 +80,7 @@ for (const definition of Object.values(definitions)) {
 }
 
 definitions.run_actions = {
-  description: 'Run a short known sequence and return its final state. Single-action tools already return text state; use this for several known actions or an inline final screenshot. Example: focus an observed field, select all, paste, then inspect the result. Stop when new information or approval is needed. Coordinate input must be first and use a fresh screenshot. Stops on error or an unknown AX action outcome without replay; earlier actions may have run. An unknown outcome requires an explicit get_app_state before continuing.',
+  description: 'Run a short known sequence and return its final state. Single-action tools already return text state; use this for several known actions or an inline final screenshot. Example: focus an observed field, select all, paste, then inspect the result. Stop when new information or approval is needed. Accepts {"method":"wait","ms":N} for 1–15000 ms on both platforms; wait sends no input and honours person stops. Coordinate input must be first (including before any wait) and use a fresh screenshot. Stops on error or an unknown AX action outcome without replay; earlier actions may have run. An unknown outcome requires an explicit get_app_state before continuing.',
   schema: {
     app,
     actions: z.array(z.discriminatedUnion('method', Object.entries(definitions)
@@ -88,7 +88,7 @@ definitions.run_actions = {
       .map(([method, definition]) => z.object({
         method: z.literal(method),
         ...Object.fromEntries(Object.entries(definition.schema).filter(([key]) => !['app', 'scope'].includes(key))),
-      }).strict()))).min(1).max(16),
+      }).strict()).concat([z.object({ method: z.literal('wait'), ms: z.number().int().min(1).max(15000) }).strict()]))).min(1).max(16),
     ...stateOptions,
   },
 };

@@ -3,7 +3,7 @@ import CoreGraphics
 
 /// Per-connection policy, independent of AppKit and wall-clock adjustments.
 struct PresenceState {
-    static let inputMethods: Set<String> = ["click", "drag", "press_key", "type_text", "paste", "scroll",
+    static let inputMethods: Set<String> = ["wait", "click", "drag", "press_key", "type_text", "paste", "scroll",
                                             "set_value", "select_text", "perform_secondary_action", "activate_app"]
     private(set) var stopped = false
     private(set) var connected = true

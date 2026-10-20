@@ -70,6 +70,7 @@ impl Engine {
             return apps::list();
         }
         if ![
+            "wait",
             "get_app_state",
             "activate_app",
             "click",
@@ -91,6 +92,13 @@ impl Engine {
         }
         // Invalidate screenshot even when validation/target resolution subsequently fails.
         let previous_image = self.snapshot.as_mut().and_then(|s| s.image.take());
+        if method == "wait" {
+            let ms = opencu_engine::wait_ms(args)?;
+            let mut guard = self.monitor.begin(&self.indicator)?;
+            guard.pause(ms as f64 / 1000.0)?;
+            guard.finish()?;
+            return Ok(json!({"ok":true}));
+        }
         if method == "select_text" {
             return Err(Error::new(
                 "UNSUPPORTED_ON_WINDOWS",

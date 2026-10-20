@@ -369,6 +369,15 @@ struct OpenCUInputLogicChecks {
         expect(FocusGuard.isPresenceProcess(pid: getpid(), bundleID: nil), "Own process is never a foreground restoration target")
         expect(FocusGuard.isPresenceProcess(pid: -1, bundleID: "dev.opencu.engine"), "Separate setup process is a person's focus choice")
         expect(!FocusGuard.isPresenceProcess(pid: -1, bundleID: "dev.opencu.fixture"), "Ordinary target remains guarded")
+        for ms in [1, 15000] {
+            let parsed = try waitMilliseconds(["ms": ms])
+            expect(parsed == UInt64(ms), "Wait includes boundary")
+        }
+        for ms: Any in [0, -1, 15001, 1.5, "1", true, NSNull()] {
+            fails("INVALID_ARGUMENT") { _ = try waitMilliseconds(["ms": ms]) }
+        }
+        fails("INVALID_ARGUMENT") { _ = try waitMilliseconds([:]) }
+        expect(PresenceState.requiresPermissionToContinue("wait", screenshot: false), "Wait participates in stop cancellation")
         var presence = PresenceState()
         expect(!presence.menuVisible(at: 0) && !presence.cursorVisible(at: 0), "No presence before app calls")
         presence.call(target: "fixture", now: 10)
@@ -392,7 +401,7 @@ struct OpenCUInputLogicChecks {
         presence.pointer(now: 23)
         presence.stop()
         expect(!presence.cursorVisible(at: 23), "Stop hides cursor immediately")
-        for method in ["click", "drag", "press_key", "type_text", "paste", "scroll", "set_value", "select_text",
+        for method in ["wait", "click", "drag", "press_key", "type_text", "paste", "scroll", "set_value", "select_text",
                        "perform_secondary_action", "activate_app"] {
             fails("STOPPED_BY_PERSON") { try presence.requireAllowed(method) }
         }
