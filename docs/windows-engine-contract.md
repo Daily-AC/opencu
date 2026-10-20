@@ -546,5 +546,17 @@ for retained-object `scope`, whole-window fallback, scope-aware text diffs,
 element-only `waitForText`, guarded `wait`, accurate UIA error text, launch error
 740 guidance, 50 ms default `press_key` holds and read-only native IME warnings.
 These changes do not alter foreground authorization, the ten-second idle rule,
-physical Escape latching or input routing. The new fixture cases in
-`scripts/verify-gui-win.mjs` have not yet run on a Windows desktop.
+physical Escape latching or input routing.
+
+Accepted on 2026-10-20: all 40 checks passed in three consecutive runs on a
+fresh Windows 11 26H2 VM, each from a clean checkpoint, and the package verifier
+passed ([evidence](../evidence/opencu-windows-gui-2026-10-20-v0.3.3.json)). The
+zero-size case uses a windowless MSAA fragment: UIA reports HWND-backed panels
+with their window rectangle and skips 0x0 windows, so neither reproduces
+Chromium's hidden views. By hand, a Hyper-V mouse move 2 s into an 8 s batch wait
+returned `PERSON_ACTIVE`; `regedit.exe` returned the error-740 guidance without
+elevating; Notepad with Microsoft Pinyin listed the IME line in Chinese mode and
+not after one Shift press. On a public chess site in an Edge `--app` window, 165
+zero-size elements were omitted (0.3.1 listed 135 to 165 of them, 64% of a cold
+read), a whole read was 19,900 characters and a read scoped to the page
+`Document` 13,000.

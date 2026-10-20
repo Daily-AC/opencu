@@ -1,0 +1,221 @@
+{
+ "test": "windows-foreground-fixtures",
+ "date": "2026-10-20",
+ "environment": "Windows 11 Enterprise Evaluation 26H2 (zh-CN, Microsoft Pinyin), Hyper-V VM 4 vCPU / 8 GB / 1920x1080, Defender real-time protection on, restored from a clean checkpoint before every run",
+ "package": {
+  "file": "opencu-win-x64.zip",
+  "sha256": "ccff5cd9884976af450a190de0b88d40d1e0b247fc67cbfc88d1cf209346cf6b",
+  "installedWith": "install.ps1 -LocalZip"
+ },
+ "engine_sha256": "fd6da680b5e58754f9c0adfd809aa677cd13850aaf3245b443d6b5dd0dff2f15",
+ "runs": [
+  {
+   "run": 1,
+   "ok": true,
+   "checks": 40
+  },
+  {
+   "run": 2,
+   "ok": true,
+   "checks": 40
+  },
+  {
+   "run": 3,
+   "ok": true,
+   "checks": 40
+  }
+ ],
+ "packageVerifier": {
+  "ok": true,
+  "hashMismatchPreservesInstall": true,
+  "toolCount": 13,
+  "version": "0.3.3",
+  "inUseUpdatePreservesInstall": true,
+  "closedSessionUpdateSucceeded": true,
+  "networkUsed": false,
+  "inputCalls": 0
+ },
+ "fixtureCorrection": "The first two runs of the new zero-size case failed in the fixture, not the engine: UIA reports HWND-backed panels with their window rectangle and skips 0x0 windows entirely. The fixture now hosts a windowless MSAA fragment with empty bounds and a positive-size child, like Chromium's hidden views; the assertion is unchanged.",
+ "manualChecks": {
+  "batchWait": "run_actions [wait 3000] on a browser window returned its scoped state after the wait; no input was sent",
+  "personDuringWait": "Hyper-V synthetic mouse 2 s into run_actions [wait 8000] returned PERSON_ACTIVE after 3.3 s",
+  "elevationRequired": "get_app_state on C:\\Windows\\regedit.exe from a non-elevated session returned LAUNCH_FAILED with the administrator-rights guidance; nothing was elevated",
+  "imeWarning": "Notepad with Microsoft Pinyin in Chinese mode listed the IME line; after one press_key shift (English mode) the line was gone",
+  "realSiteStateSize": "Measured on a public website in Edge --app; numbers stay in ignored caches and the issue, not in this fixture evidence"
+ },
+ "lastRun": {
+  "test": "windows-foreground-fixtures",
+  "timestamp": "2026-10-20T04:22:53.249Z",
+  "checks": [
+   "tree read and physical-size window PNG",
+   "native password text is redacted",
+   "zero-size accessibility container omitted while positive-size child remains indexed",
+   "scoped nested panel read retains only its subtree with dense indexes from 1",
+   "indexed action accepts scope and retains a scoped final state",
+   "window header title cannot satisfy scoped waitForText",
+   "1500 ms batch wait measurably waits with unchanged fixture input counters and scoped final state",
+   "removed retained scope falls back to whole window with a notice",
+   "covered-window capture preserves target pixels",
+   "indexed click",
+   "key chord and Unicode typing",
+   "visible operation indicator is excluded from capture",
+   "target pixels remain intact beneath the visible indicator",
+   "engine-injected Escape does not trigger the physical stop latch",
+   "plain-text paste and original clipboard digest restored",
+   "RangeValue and exposed secondary action",
+   "scroll",
+   "fresh screenshot coordinate click",
+   "engine refuses moved-window coordinates before input",
+   "fresh screenshot drag holds left button along path and releases at endpoint",
+   "unsupported text selection refused",
+   "text-only observation refuses coordinate input with SCREENSHOT_REQUIRED",
+   "click opens a synchronous modal promptly; fresh state, value input and indexed OK work on the same connection",
+   "perform_secondary_action opens a synchronous modal promptly; fresh state, value input and indexed OK work on the same connection",
+   "run_actions opens a synchronous modal promptly; fresh state, value input and indexed OK work on the same connection",
+   "owned foreground overlay permits main-window indexed click and activation without stealing focus",
+   "keyboard and literal Unicode input use the foreground family focus",
+   "coordinate hit testing accepts the owned overlay at the main-window point",
+   "cold connection reads a different-process background window without taking foreground",
+   "idle cold connection takes the foreground lock, brings a background fixture forward and delivers an indexed click",
+   "recent engine keyboard and mouse input permits minimized-window activation without PERSON_ACTIVE or the Escape latch",
+   "activate_app restores an iconic window that already holds foreground",
+   "unrelated foreground transition stops in-flight input and releases held keys",
+   "idle input and activate_app acquire the target family from an unrelated same-process window without sending it input",
+   "owned non-popup window is accepted through the actual owner chain",
+   "web password value is redacted",
+   "Chrome native UIA reaches local page text and links without accessibility flags",
+   "Chrome indexed link action",
+   "Chrome literal Unicode typing preserves spaces and dispatches input",
+   "all temporary fixture and browser processes closed"
+  ],
+  "ok": true,
+  "engine_sha256": "fd6da680b5e58754f9c0adfd809aa677cd13850aaf3245b443d6b5dd0dff2f15",
+  "fixtureWindow": {
+   "Id": 5656,
+   "MainWindowTitle": "OpenCU Fixture 9b215b8d-b75d-461f-bfa2-2f44a560d98e",
+   "hwnd": 262848
+  },
+  "lastFixtureImage": "screenshot-60.png",
+  "waitMilliseconds": 1620.2082999999993,
+  "unicode": {
+   "inputMessages": 11,
+   "scopeClicks": 1,
+   "scopePresent": false,
+   "modalOpen": false,
+   "modalCompletions": 0,
+   "modalValue": "",
+   "idleMs": 141,
+   "minimized": false,
+   "dragFromX": 281,
+   "dragFromY": 73,
+   "dragToX": 541,
+   "dragToY": 73,
+   "dragDistance": 260,
+   "dragDownX": 0,
+   "dragDownY": 0,
+   "dragUpX": 0,
+   "dragUpY": 0,
+   "dragHeld": true,
+   "dragMoves": 0,
+   "drags": 0,
+   "foregroundOwner": "0",
+   "mainHwnd": "262848",
+   "foregroundHwnd": "262848",
+   "foregroundPid": 5656,
+   "mainRootOwner": "262848",
+   "foregroundRootOwner": "262848",
+   "overlayClicks": 0,
+   "overlayNotes": "",
+   "pid": 5656,
+   "clicks": 1,
+   "notes": "Windows 涓枃 馃榾",
+   "checked": false,
+   "slider": 0,
+   "scroll": 0,
+   "wheel": 0,
+   "moves": 0,
+   "x": 131,
+   "y": 73,
+   "markerX": 616,
+   "markerY": 73,
+   "width": 682,
+   "height": 592,
+   "indicatorVisible": false,
+   "indicatorReadable": false,
+   "indicatorAffinity": 0,
+   "keyChars": "0001,0057,0069,006e,0064,006f,0077,0073,0020,4e2d,6587,0020,d83d,de00,",
+   "inputLanguage": "涓枃(绠€浣? - 缇庡紡閿洏",
+   "clipboardDigest": "",
+   "error": ""
+  },
+  "indicator": {
+   "visible": true,
+   "affinity": 17,
+   "readable": true
+  },
+  "modalDialog": {
+   "handler": "WinForms synchronous ShowDialog",
+   "boundMs": 15000,
+   "cases": [
+    {
+     "method": "click",
+     "elapsedMs": 253,
+     "value": "modal-result-click",
+     "closed": true
+    },
+    {
+     "method": "perform_secondary_action",
+     "elapsedMs": 259,
+     "value": "modal-result-perform_secondary_action",
+     "closed": true
+    },
+    {
+     "method": "run_actions",
+     "elapsedMs": 249,
+     "value": "modal-result-run_actions",
+     "closed": true
+    }
+   ]
+  },
+  "ownedForeground": {
+   "sameProcess": true,
+   "sameRootOwner": true,
+   "distinctHwnd": true
+  },
+  "idleForegroundAcquisition": {
+   "idleThresholdMs": 10000,
+   "idleBeforeConnectionMs": 11766,
+   "launchedInBackground": true,
+   "foregroundLockHeld": true,
+   "beforeForegroundPid": 5656,
+   "targetPid": 8040,
+   "afterForegroundPid": 8040,
+   "verifiedTargetFamily": true,
+   "indexedClicksBefore": 0,
+   "indexedClicksAfter": 1,
+   "syntheticInputIdleMs": 688,
+   "minimizedRestoredByActivateApp": true
+  },
+  "minimizedForegroundRestoration": {
+   "beforeMinimized": true,
+   "afterMinimized": false,
+   "beforeForegroundHwnd": "66402",
+   "afterForegroundHwnd": "66402",
+   "targetHwnd": "66402",
+   "clicksBefore": 2,
+   "clicksAfter": 2
+  },
+  "unrelatedForegroundAcquisition": {
+   "beforeForegroundHwnd": "1310812",
+   "targetHwnd": "262848",
+   "afterClickForegroundHwnd": "262848",
+   "afterActivateForegroundHwnd": "262848",
+   "clicksBefore": 3,
+   "clicksAfter": 4,
+   "unrelatedClicksBefore": 1,
+   "unrelatedClicksAfter": 1,
+   "unrelatedNotesUnchanged": true
+  },
+  "evidence": "C:\\bench\\gui\\.cache\\windows-acceptance-9b215b8d-b75d-461f-bfa2-2f44a560d98e"
+ }
+}
