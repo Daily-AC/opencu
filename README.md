@@ -13,8 +13,8 @@ suite passed, and it has completed a handful of real tasks. It has not been
 benchmarked at scale. Read [Limitations](#limitations) before relying on it.
 The Windows engine uses foreground input. Version 0.4.0 adds an optional visible
 [agent desktop](#windows-agent-desktop) to isolate that input in a child session;
-its core session behavior was measured on Windows 11; the follow-up startup and
-watch-only fixes still need Windows re-acceptance.
+its core session behavior was measured on Windows 11; the cursor-suppression and
+locked-input error fixes still need Windows re-acceptance.
 
 ## What it does on macOS
 
@@ -153,10 +153,13 @@ The measurements behind this section are in
 
 - **Windows agent desktop (0.4.0).** Windows 11 VM acceptance established separate
   foreground/input, no-password sign-in/refusal, Escape and close/EOF cleanup.
-  Follow-up startup, watch-only and lock-status changes need re-acceptance.
+  Setup, nonactivating open, watch-only hover, Escape, close and lock status were
+  accepted on the VM. The latest cursor and lock-error fixes need re-acceptance.
   Administrator approval is needed once, possibly followed by one sign-out/in;
-  smart-card-only sign-in is unsupported and unmeasured. **The agent keeps working
-  while the parent screen is locked; nobody at the machine can see its work then.**
+  smart-card-only sign-in is unsupported and unmeasured. **While the parent screen is locked, the child stays alive for reads and
+  screenshots, but input returns `SCREEN_LOCKED`.** The earlier locked-input
+  success report was not reproducible; nobody at the machine can see the child
+  while the lock screen is shown.
   Status reports `parentLocked`. After unlocking, close the host window or click
   the view and press Escape to stop; the caller can also end the MCP connection.
   Console/remote disconnect and logoff still end the child. One child session per
@@ -313,14 +316,18 @@ The agent can call `agent_desktop` with `{"action":"start"}` to open the visible
 using ordinary foreground input while your desktop remains separate. The view
 starts in **Watch only** mode: hovering does not forward mouse input. Click the
 view to interact (the first click selects the mode); switching to another window
-returns it to Watch only. The label shows the current mode. Read fresh
+returns it to Watch only. The label shows the current mode. Server-requested local
+cursor warps are disabled for the whole connection, including interactive mode;
+this protection requires a supported RDP setting and still needs Windows recheck.
+Read fresh
 app state after starting. `{"action":"status"}` reports state and availability;
 `{"action":"stop"}` logs off the child apps, so save their work first.
 
-Locking the parent screen does not pause or stop the child. Its window stays in
-the session but is hidden by the lock screen, so nobody at the machine can see the
-agent's work while locked. `status` reports `parentLocked: true` or `false`.
+Locking the parent screen keeps the child alive for reading and screenshots.
+Input is refused with `SCREEN_LOCKED` until the person unlocks; it is never replayed.
+The child window is hidden by the lock screen, so nobody at the machine can see it. `status` reports `parentLocked: true` or `false`.
 Unlocking does not restart anything: the same child and host window remain.
+The agent must issue a new call, under the normal input rules.
 The caller can stop it while locked by ending the MCP connection. After unlocking,
 close the host window or click into its view and press Escape.
 

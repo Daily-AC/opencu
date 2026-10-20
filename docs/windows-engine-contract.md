@@ -565,56 +565,46 @@ read), a whole read was 19,900 characters and a read scoped to the page
 
 ## Agent desktop (0.4.0)
 
-On 2026-10-20 the owner's acceptance session installed candidate `29a0991` from
-its byte-for-byte reproduced ZIP (`b05014a0...`) on the clean `base` snapshot of
-the cu-bench Windows 11 26H2 VM. Setup used the real UAC prompt. Four defects
-(no-child result mapping, CRLF bounds, repeated-setup ACLs, and foreground theft)
-blocked the candidate. With a local diagnostic patch, all eight checks in the
-original agent-desktop acceptance script passed. The follow-up implementation
-fixes these and adds watch-only input and automatic update preparation. **Those
-follow-up changes still need Windows re-acceptance.** See [ADR 0002](adr/0002-windows-agent-desktop-child-session.md).
+The latest cu-bench Windows 11 26H2 acceptance used the reproduced `4b6c40d2...`
+package on clean `base`, with commits through `987d042` plus acceptance-tool fixes
+`69a1dae` and `4b7db3b`. The owner ran real UAC setup and rebooted with autologon.
+The new pointer-suppression and native lock-error fixes described below have **not**
+run on Windows in this implementation job. See [ADR 0002](adr/0002-windows-agent-desktop-child-session.md)
+and the [input investigation](windows-agent-desktop-input-findings.md).
 
-### Measured on the Windows VM
+### Latest measured results (2026-10-20)
 
-- Non-elevated RunEx with AS_SELF and USE_SESSION_ID repeatedly started the bridge
-  in the child at Medium integrity, including the second explicit start. No SYSTEM
-  task was needed.
-- After enabling and signing in again (reboot with autologon), start reached
-  running without a password in about 3.3 seconds. Before that sign-in it returned
-  `AGENT_DESKTOP_SIGN_IN_REQUIRED` in 2.5 seconds without a visible credential dialog.
-- The real-pipe self-test passed after fixing CRLF handling: token, handshake
-  bound, first instance, peer PID/session/SID and wire-token checks.
-- With a Hyper-V mouse click giving the parent fixture real foreground, the agent
-  ran six child rounds of indexed click, click and type_text (about 0.55 seconds
-  per round). Twenty Hyper-V keyboard chunks and continuous mouse movement stayed
-  in the parent. Parent and child received exactly their own text, with unchanged
-  parent foreground. This used hardware input, not SendInput.
-- Physical Escape through the focused view returned USER_STOPPED on the next
-  input action; later list_apps, get_app_state and start were refused. Reads before
-  that next input action still succeeded, matching the engine's existing contract.
-- Clicking the host close button with the Hyper-V mouse immediately logged off
-  the child. All later calls returned USER_STOPPED; no child reappeared within
-  twenty seconds. MCP EOF also logged off the child, leaving no OpenCU process.
-- Under the original policy, parent LockWorkStation ended the child and latched
-  SCREEN_LOCKED. This historical result precedes the owner decision below.
+- The normal Windows GUI suite passed three runs of 40/40. Offline package
+  verification passed, including fourteen tools, update preservation and refusal
+  of automatic preparation without elevation when child sessions were disabled.
+- Setup printed the UAC explanation and succeeded. A second setup exited zero
+  without another UAC prompt. Before re-sign-in, start returned
+  AGENT_DESKTOP_SIGN_IN_REQUIRED in 2.5 seconds without credential UI; the error
+  explained the stop needed after failed startup.
+- Real-pipe self-test, repeated Medium-integrity RunEx launch, child capture and
+  child-only inventory passed. The foreground-terminal suite confirmed no host
+  foreground theft. Hardware hover over the watch-only view caused no PERSON_ACTIVE.
+- Hyper-V hardware concurrency delivered exactly twenty parent text chunks and
+  six child rounds, with unchanged parent foreground. **Pointer isolation was not
+  complete:** when parked over the view, the parent's pointer followed child click
+  positions. With the pointer outside the view it did not move. The synthetic
+  concurrent-input check failed only on unexpectedCursor=1; both texts, child
+  click count, parent click count and foreground checks were otherwise correct.
+- Deliberate view click followed by physical Escape returned USER_STOPPED on the
+  next input and all later app/start calls. A physical close-button click logged
+  off immediately; no child reappeared within twenty seconds. MCP EOF cleanup was
+  also established in the prior acceptance.
+- `status.parentLocked` was true during lock and false after unlock; the child
+  survived both. However, **input while locked failed in five trials**: an initial
+  PERSON_ACTIVE, then ACTIVATION_FAILED even after thirty seconds. Disabling
+  watch-only, omitting status and locking an interactive focused view did not help.
+  Reads and WGC screenshots with real content worked, with an inactive fixture
+  title bar. The next input round after unlock succeeded.
 
-A separate diagnostic variant **with the lock handler removed** continued child
-work while the parent displayed the lock screen: three rounds, a WGC screenshot
-containing real content (`vm-acceptance-1/locked-child.png` in the acceptance job),
-another check after thirty seconds, and work after unlock. On 2026-10-20 the owner
-selected this as the product behavior: **the agent keeps working while the parent
-screen is locked**. Nobody at the machine can see the agent's work then, because
-the lock screen covers the host window. The new status query and final lock policy
-still require Windows re-acceptance; the diagnostic measurement is not a run of
-this final revision.
-
-The old ShowWithoutActivation-only host stole foreground when its launcher had
-foreground rights: the log saw it about 1.1 seconds after the fixture, for about
-4.3 seconds; three runs counted 39, 18 and 10 foreground violations. A headless
-launcher did not reproduce this. WS_EX_TOPMOST alone did not fix it; holding
-WS_EX_NOACTIVATE through startup and clearing it at readiness did in the probe.
-Hovering an inactive old view also caused PERSON_ACTIVE in the child, which is why
-the follow-up defaults to watch-only.
+The earlier report of working locked-parent input could not be reproduced and is
+unreliable. It does not establish a supported input path. The chosen behavior now
+keeps the child alive for reading/screenshots and refuses input while locked.
+Nobody at the machine can see the child behind the parent lock screen.
 
 ### Setup and updates
 
@@ -641,27 +631,39 @@ receipt is revalidated before launching. Preparation is serialized per installat
 tasks include a hash of the installation path so temporary verification installs
 do not overwrite the normal install's task. Doctor/status report availability
 without compiling or elevating. Errors include an executable PowerShell command
-using the real installation path when initial enablement is required.
+using the real installation path when initial enablement is required. In
+particular, childSessionsEnabled=false reports that one-time setup is required,
+even if no helper exists. A successful probe reports existingChildSession=null
+when there is no child; the internal DWORD sentinel is not exposed.
 
 ### Routing, view and stopping
 
 MCP `agent_desktop` accepts only `action: start | stop | status`. Start opens a
 visible topmost window and waits for an authenticated bridge and accessible engine.
 All app tools, including inventory, launches, batches and final observations, then
-use the child. There is no per-app parent override. Windows engine input guards,
-including the ten-second foreground rule, remain unchanged.
+use the child. There is no per-app parent override. Ordinary parent-desktop input
+rules remain unchanged. The child retains foreground/idle/person-stop rules and
+adds the parent-lock restriction below.
 
 The host holds WS_EX_NOACTIVATE during startup, then removes it without activation.
 The view starts **Watch only**. Its disabled native input ancestor prevents hover
 or keyboard messages reaching ActiveX children. Clicking the view deliberately
 enables **Interactive** mode and focuses RDP; the mode-selection click is consumed,
 not replayed into an app. Deactivation returns to Watch only, and the label shows
-the mode. The close button is always available. This follow-up mechanism needs
-live Windows re-acceptance for rendering, hover, intentional activation and Escape.
+the mode. The close button is always available. Rendering, nonactivation, hover,
+intentional activation and Escape passed the latest acceptance; they must not
+regress with the new pointer setting.
 
 The v9 control uses ConnectToChildSession and CredSSP. Credential prompts/saving,
 automatic reconnect, clipboard, drive/printer/port/smart-card/dynamic-device and
-audio redirection are disabled. External minimization stops the host; no global
+audio redirection are disabled. Before Connect, the host also requires
+IgnoreServerGeneratedMouseMoves=true and a true Boolean readback. Unsupported or
+unconfirmed suppression refuses startup. The setting blocks server-requested
+local cursor warps and cannot change after connection, so it stays on in both
+watch-only and interactive modes; no reconnect or move-back fallback is used.
+Interactive local input still forwards normally, but apps depending on remote
+cursor warps may behave differently. This fix needs Windows verification.
+External minimization stops the host; no global
 RemoteDesktop_SuppressWhenMinimized override is installed. Parent lock (WTS event
 7) and unlock (8) do not end, replace or reconnect the child. Console/remote
 disconnect (2/4) and logoff (6) still end ownership without automatic resume.
@@ -675,11 +677,28 @@ lock state from an inaccessible desktop or a UAC screen. Native doctor exposes
 MCP status call returns an explicit error instead of inventing false. This status
 query cannot stop/restart an engine or clear a person-stop latch.
 
-While locked, the child can keep reading, sending input and taking WGC screenshots;
-its engine's own desktop, foreground, human-activity and Escape guards are unchanged.
-The caller can stop it by ending the MCP connection. After unlocking, the person
-can close the still-present host window or click the view and press Escape. Unlock
-has no special recovery or input behavior, and cannot clear an earlier stop.
+While locked, the child keeps reading and taking WGC screenshots. The authenticated
+bridge starts its engine with the internal `serve --agent-parent-session <id>`
+argument and requires doctor to confirm `agentParentSession` and a Boolean
+`agentParentLocked`. The engine re-queries that verified parent before input and
+at safety fences. A locked/unknown parent refuses input, activation and guarded
+batch waits with SCREEN_LOCKED before the ordinary incidental activity/focus error.
+Read/list/capture paths remain available. USER_STOPPED still takes precedence.
+
+A preflight refusal says: "The person's screen is locked. Reading and screenshots
+still work; input is available after they unlock. No input was sent." If lock
+occurs during an action, the message instead states that earlier input may have
+run. Activity/activation/focus failures racing with the lock receive the same
+stable code without replay or a false zero-input claim. Unknown parent state is
+reported as unverified, not asserted to be unlocked. These are per-request
+refusals, not a terminal host failure: state can stay running with parentLocked=true.
+
+Unlock permits later explicit input through the normal foreground/human-activity
+rules, with a fresh screenshot when required. It never retries an action or
+clears a person stop. The caller can end the MCP connection while locked; after
+unlocking the person can close the still-present window or click the view and
+press Escape. No supported foreground-activation mechanism for the locked case
+was established; see the [research and verification boundary](windows-agent-desktop-input-findings.md).
 
 Host close and a reported child USER_STOPPED permanently latch the MCP connection.
 Status and cleanup remain available; switching or reconnecting cannot bypass them.
@@ -719,14 +738,17 @@ remain unmeasured.
 | `AGENT_DESKTOP_LOST` | Host, child or pipe ended; no reconnect/fallback. |
 | `AGENT_DESKTOP_CLEANUP_FAILED` | Child logoff was not confirmed. |
 | `USER_STOPPED` | Person stop, including host close; cannot be cleared by desktop switching. |
+| `SCREEN_LOCKED` | A child input is refused while its parent is locked/unverifiable; reads/screenshots remain available. A parent disconnect/logoff still ends the host. |
 
 ### Remaining acceptance
 
 External minimize, covered or partly off-screen viewports, GPU/video/protected
 content, smart-card sign-in and unsupported Windows editions are **unmeasured**.
-Also check the new watch/interactive transitions, physical Escape after deliberate
-activation, repeated setup, post-update automatic preparation, `parentLocked` reporting,
-lock/unlock continuity, the new diagnostics, disconnect, startup crashes and real cross-user pipe ACL refusals. Earlier WGC and
+Recheck required pointer-property support/readback and parked-pointer isolation,
+interactive takeover/Escape, the child engine's Medium-integrity query of its
+parent, stable lock refusals (including partial outcomes), and explicit post-unlock
+input. Retain the already-passed setup/update/foreground/hardware checks. Disconnect,
+startup crashes and real cross-user pipe ACL refusals still need verification. Earlier WGC and
 hardware-input results do not establish those cases. Apps still share the user's
 profiles/files, and global single-instance apps may refuse a child instance or
 start in the parent; OpenCU never follows them across sessions. There is only one
@@ -743,7 +765,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts\verify-package-win.p
 
 The GUI script needs a foreground launcher to reproduce the activation bug. It
 checks real pipe authentication, child launch/capture/inventory, nonactivating open,
-parent SendInput mouse moves over the watch-only view without PERSON_ACTIVE, six
+parent SendInput mouse moves over the watch-only view without PERSON_ACTIVE, a
+stationary parent cursor while the agent clicks different child controls, six
 concurrent child rounds and twenty parent chunks, tool logoff, second start and
 exact-host WM_CLOSE latching. These synthetic stimuli are not hardware-input
 measurements. Evidence remains under ignored `.cache/agent-desktop-acceptance-*`.
@@ -755,7 +778,9 @@ without UAC. It removes only its temporary install's demand task. Neither update
 script was run on Windows during this follow-up implementation job. Lock checks
 remain manual: the suite cannot deterministically unlock without a password and
 must not obtain one. In that manual run, verify `parentLocked` becomes true while
-child actions/capture continue, remains so after thirty seconds, becomes false on
-unlock with the same child session, and that close/Escape/MCP EOF still stop it.
+reads/capture remain available but input returns SCREEN_LOCKED with unchanged
+fixture text/counters, including after thirty seconds. Verify parentLocked becomes
+false on unlock, explicit input can proceed on that same child, and close/Escape/
+MCP EOF still stop it. A lock mid-action must preserve partial-outcome wording.
 Verify disconnect/logoff still end the child and unlock never revives a stopped
 connection.
