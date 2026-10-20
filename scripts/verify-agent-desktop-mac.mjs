@@ -14,6 +14,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as pause } from 'node:timers/promises';
 import { applicationSerialNumbers, applicationPID } from './agent-display-probe-support.mjs';
+import { assertDisplayAdded, assertDisplayRemoved } from './agent-desktop-acceptance-support.mjs';
 import { imageSize } from '../src/coordinate-state.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -26,7 +27,7 @@ const labels = [
   'Stage Manager: indexed/coordinate/CJK/shortcut/menu effects; foreground/pointer unchanged',
   'manual return: input revoked and cleanup leaves the window there',
   'tool stop: exact restoration, apps open, fresh removal, idempotence',
-  'idle host close: permanent person stop and confirmed cleanup',
+  'idle host close: later calls observe permanent person stop; cleanup confirmed',
   'EOF: pending consent and idle leave no host, stream, display or worker',
 ];
 const report = { checks: Object.fromEntries(labels.map(label => [label, 'NOT RUN'])), startedAt: new Date().toISOString(), calls: [], samples: [], cleanupErrors: [] };
@@ -34,6 +35,7 @@ await mkdir(path.join(root, '.cache/agent-desktop-mac'), { recursive: true });
 const run = await mkdtemp(path.join(root, '.cache/agent-desktop-mac/run-'));
 const temporary = path.join(run, 'temporary'); await mkdir(temporary);
 const fixtures = [], clients = [];
+const displayBaselines = new Map();
 let pointer, pointerProcess, sampleTimer, sampling, activeGuard, failure;
 let pointerClosing = false, pointerAt = 0;
 const abort = reason => {
@@ -160,17 +162,26 @@ async function guarded(operation) {
   finally { activeGuard = undefined; }
 }
 async function consent(client, fixture, approve) {
-  console.log(`In the OpenCU consent card for Fixture ${fixture.app.split('Fixture ')[1]}, click ${approve ? 'Move once' : 'Keep here'} within 60 seconds. Do not click the preview.`);
-  const pending = client.call('get_app_state', { app: fixture.app, includeScreenshot: false, disableDiff: true });
+  console.log(`In the OpenCU consent card for Fixture ${fixture.app.split('Fixture ')[1]}, click ${approve ? 'Move once' : 'Keep here'} within 60 seconds. Do not click the preview. Keep hands off the mouse for 2 seconds after clicking Move once, then wait for the result.`);
+  const pending = client.call('get_app_state', { app: fixture.app, includeScreenshot: !approve, disableDiff: true });
   // Attach error handling immediately while polling the independent control lane.
   pending.catch(() => {});
   await until(async () => (await client.desktop('status')).consent != null, 'visible pending consent');
   const reply = await pending;
   assert.equal(reply._meta?.['opencu/agentDesktop']?.windowState, approve ? 'admitted' : 'reduced');
+  console.log(`Consent result: ${approve ? 'moved' : 'reduced'}.`);
   return reply;
+}
+async function startDesktop(client) {
+  const before = await freshDisplays();
+  const status = await client.desktop('start');
+  assertDisplayAdded(before, await freshDisplays(), status.displayID);
+  displayBaselines.set(status.displayID, before);
+  return status;
 }
 async function assertGone(status, workerGone = false) {
   await until(async () => !(await freshDisplays()).some(display => display.id === status.displayID), 'fresh process display removal', 15_000, true);
+  assertDisplayRemoved(displayBaselines.get(status.displayID), await freshDisplays(), status.displayID);
   if (status.preview.windowID != null) assert.equal((await metadata(status.preview.windowID)).present, false, 'Host window still exists');
   if (workerGone) await until(async () => { try { process.kill(status.workerPID, 0); return false; } catch (error) { if (error.code === 'ESRCH') return true; throw error; } }, 'worker exit (stream owner gone)', 15_000, true);
 }
@@ -198,13 +209,15 @@ try {
   pointerProcess.stderr.on('data', bytes => abort(bytes.toString()));
   await until(async () => pointer != null, 'pointer sampler');
   sampleTimer = setInterval(() => sample().catch(abort), 50);
-  const a = await guarded(() => makeFixture('declined', binary)), b = await guarded(() => makeFixture('returned', binary)), c = await guarded(() => makeFixture('restored', binary));
   const initialDisplays = await freshDisplays();
+  assert.equal(initialDisplays.length, 1, 'External monitors are untested; run this acceptance with one physical display');
+  await ask('Compilation is complete. Fixtures will now launch in the background. After yes, keep hands off the mouse and leave the foreground unchanged until the next question.');
+  const a = await guarded(() => makeFixture('declined', binary)), b = await guarded(() => makeFixture('returned', binary)), c = await guarded(() => makeFixture('restored', binary));
   const client = new MCP(); await client.initialize();
   let started, beforeStop, returnedFrame;
   await check(0, async () => {
     await ask('Ready to start automatically. After typing yes, leave the pointer and foreground unchanged.');
-    started = await guarded(() => client.desktop('start'));
+    started = await guarded(() => startDesktop(client));
     assert.equal(started.state, 'running'); assert.equal(started.windows.length, 0);
     assert.ok(started.preview.running && started.preview.frames > 0);
     assert.equal(started.preview.interactive, false);
@@ -221,9 +234,10 @@ try {
     assert.equal((await client.desktop('status')).consent, null, 'Decline must not re-offer');
     assert.equal((await client.call('click', { app: a.app, element_index: 1 }, true))._meta['opencu/error'], 'AGENT_DESKTOP_CONSENT_REQUIRED');
     await consent(client, b, true);
-    assert.equal((await fixtureState(b)).screenID, started.displayID);
+    await until(async () => (await fixtureState(b)).screenID === started.displayID, 'fixture display after approved move');
     assert.ok(sameFrame((await fixtureState(c)).windowFrame, c.original.windowFrame), 'Second window moved before its consent');
     await consent(client, c, true);
+    await until(async () => (await fixtureState(c)).screenID === started.displayID, 'second fixture display after approved move');
     const status = await client.desktop('status');
     assert.deepEqual(status.windows.map(window => window.windowID).sort(), [b.original.windowNumber, c.original.windowNumber].sort());
   });
@@ -262,7 +276,7 @@ try {
     });
   });
   await check(3, async () => {
-    await ask('Manually drag Fixture returned OFF the agent display onto your physical desktop (use macOS display navigation/Mission Control; the preview is watch-only). Do not move Fixture restored.');
+    await ask('Select Fixture returned yourself (for example from the Dock), then use its Window > Move to display > Main display command. The invisible display cannot be dragged through the watch-only preview. Do not move Fixture restored. The host/menu-bar Stop returns all windows, but this check needs only the fixture app command.');
     returnedFrame = (await fixtureState(b)).windowFrame;
     assert.notEqual((await fixtureState(b)).screenID, started.displayID);
     await client.call('get_app_state', { app: b.app });
@@ -280,7 +294,7 @@ try {
     assert.deepEqual((await freshDisplays()).map(item => item.id).sort(), initialDisplays.map(item => item.id).sort());
   });
   await check(5, async () => {
-    const status = await client.desktop('start');
+    const status = await startDesktop(client);
     await ask('No tool call is in flight. Close the OpenCU agent desktop window using its close button, then type yes here.');
     await until(async () => (await client.desktop('status')).stoppedByPerson === true, 'idle person-stop event');
     for (const [name, args] of [['get_app_state', { app: a.app }], ['agent_desktop', { action: 'start' }]]) {
@@ -292,7 +306,7 @@ try {
   await check(6, async () => {
     await ask('The previous MCP connection is permanently stopped. Authorize two NEW disposable verification connections solely for the pending-consent and idle EOF checks (this is not a reconnect of the stopped connection).');
     for (const pendingConsent of [true, false]) {
-      const fresh = new MCP(); await fresh.initialize(); const status = await fresh.desktop('start');
+      const fresh = new MCP(); await fresh.initialize(); const status = await startDesktop(fresh);
       let pending;
       if (pendingConsent) {
         console.log('Leave this consent card unanswered: the test will end MCP stdin.');

@@ -347,7 +347,24 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegat
         dynamicMenu.delegate = self
         dynamicItem.submenu = dynamicMenu
         menu.addItem(dynamicItem)
+        let windowItem = NSMenuItem()
+        let windowMenu = NSMenu(title: "Window")
+        let move = NSMenuItem(title: "Move to display", action: nil, keyEquivalent: "")
+        move.submenu = NSMenu(title: "Move to display")
+        let mainDisplay = NSMenuItem(title: "Main display", action: #selector(moveToPhysicalDisplay), keyEquivalent: "")
+        mainDisplay.target = self
+        move.submenu?.addItem(mainDisplay)
+        windowMenu.addItem(move); windowItem.submenu = windowMenu; menu.addItem(windowItem)
         NSApp.mainMenu = menu
+    }
+
+    // Person-operated fixture command; acceptance never invokes it through OpenCU.
+    @objc private func moveToPhysicalDisplay() {
+        guard let screen = NSScreen.screens.first(where: {
+            ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? UInt32) == CGMainDisplayID()
+        }) else { return }
+        window.setFrameOrigin(NSPoint(x: screen.visibleFrame.minX + 80, y: screen.visibleFrame.minY + 80))
+        writeState()
     }
 
     func menuNeedsUpdate(_ menu: NSMenu) {
