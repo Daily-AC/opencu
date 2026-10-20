@@ -109,6 +109,7 @@ try {
   }
   const parentAfter = await waitFor(async () => { const s = await state(parentExe); return s?.chunks === 20 && s.text === s.expected && s; }, '20 parent chunks');
   const childAfter = await state(childExe);
+  Object.assign(report, { parentAfter, childAfter }); // kept in result.json even if an assertion below fails
   assert.equal(parentAfter.foreignForeground, 0); assert.equal(parentAfter.injectedFailures, 0);
   assert.equal(parentAfter.unexpectedCursor, 0); assert.equal(parentAfter.clicks, 0);
   assert.equal(childAfter.clicks, 7); // One hover check, then six concurrent rounds.
