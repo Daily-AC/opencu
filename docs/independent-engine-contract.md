@@ -654,9 +654,13 @@ tool stop completes. The Windows engine's JSON-lines methods and foreground
 guards are unchanged. macOS returns `UNSUPPORTED_ON_MACOS` for this tool; normal
 macOS tools and the experimental direct display methods retain their behavior.
 
-Setup is an explicit local command, `opencu setup agent-desktop`, with a Windows
-UAC prompt for enabling child sessions and ordinary-user helper/task preparation.
-The MCP tool cannot elevate, accept credentials or select an arbitrary endpoint.
+One-time enablement uses normal PowerShell:
+`& "$env:LOCALAPPDATA\OpenCU\bin\opencu.cmd" setup agent-desktop`.
+Errors show the actual installation path. Explicit setup explains and requests
+Windows UAC only to enable child sessions. The first start after an update can
+prepare missing/stale helpers and the ordinary-user task automatically if child
+sessions are enabled; the automatic path never elevates. Doctor/status only read
+availability. The MCP tool cannot accept credentials or select an arbitrary endpoint.
 Windows automatic child sign-in is required. Missing setup returns
 `AGENT_DESKTOP_UNAVAILABLE` with that command; credential refusal returns
 `AGENT_DESKTOP_SIGN_IN_REQUIRED` with sign-out/in guidance and the smart-card limit.
@@ -673,4 +677,12 @@ MCP connection, including late replies during teardown. Status and cleanup can
 still run; switching or reconnecting cannot clear a person's stop. Parent lock or
 disconnect ends the child without automatic resume. Failed cleanup prevents return
 to the parent route. See the [Windows contract](windows-engine-contract.md#agent-desktop-040)
-for IPC, setup, limits and pending real-device acceptance.
+for IPC, setup, measured Windows VM results and the remaining acceptance checks.
+
+The Windows view starts watch-only: its RDP input ancestor is disabled, so mouse
+travel over native ActiveX children is not forwarded. A deliberate click in the
+view enables input and focuses the control; that mode-selection click is consumed.
+Deactivation restores watch-only. Startup also holds WS_EX_NOACTIVATE until the
+bridge is ready, then removes it without activation. These follow-up UI changes
+need Windows re-acceptance, including physical Escape after entering interactive
+mode. They do not change the child or parent engine's input guards.

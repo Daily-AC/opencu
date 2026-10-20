@@ -13,7 +13,8 @@ suite passed, and it has completed a handful of real tasks. It has not been
 benchmarked at scale. Read [Limitations](#limitations) before relying on it.
 The Windows engine uses foreground input. Version 0.4.0 adds an optional visible
 [agent desktop](#windows-agent-desktop) to isolate that input in a child session;
-its Windows acceptance is still pending.
+its core session behavior was measured on Windows 11; the follow-up startup and
+watch-only fixes still need Windows re-acceptance.
 
 ## What it does on macOS
 
@@ -150,14 +151,15 @@ The measurements behind this section are in
 
 ### Background operation
 
-- **Windows agent desktop (0.4.0).** This implementation has not yet run its Windows
-  acceptance. It needs administrator approval once and may need one sign-out/in;
-  smart-card-only sign-in is unsupported. There is one child session per machine.
-  Its window stays visible; focusing it sends your keyboard into the child. Closing
-  it stops the connection permanently. Apps still share your account, profiles and
-  files; single-instance apps may refuse a second instance. GPU/video, RDP capture,
-  covered rendering and parent lock/disconnect require real-device checks. This is
-  UI isolation, not a security sandbox. macOS does not expose this shared tool yet.
+- **Windows agent desktop (0.4.0).** Windows 11 VM acceptance established separate
+  foreground/input, no-password sign-in/refusal, Escape, close/EOF cleanup and
+  ending on parent lock. Follow-up startup and watch-only fixes need re-acceptance.
+  Administrator approval is needed once, possibly followed by one sign-out/in;
+  smart-card-only sign-in is unsupported and unmeasured. One child session per
+  machine; apps still share your account, profiles and files. Single-instance apps
+  can refuse another instance. External minimize, covered/partly off-screen views,
+  GPU/video apps and unsupported Windows editions remain unmeasured. This is UI
+  isolation, not a security sandbox. macOS does not expose this shared tool yet.
 - **Stage Manager.** A window in the Stage Manager strip cannot become the key
   window: many commands are disabled, Chromium stops rendering its pages, and a
   screenshot may show only the thumbnail. Reading and indexed actions still work.
@@ -275,7 +277,8 @@ The package is unsigned; SmartScreen or Defender may warn or block it. Check the
 release source and your local policy; the installer does not disable protection.
 To uninstall, close OpenCU sessions and delete `%LOCALAPPDATA%\OpenCU`.
 If agent-desktop setup was used, also remove its demand-only task
-`OpenCU-AgentDesktop-<your Windows SID>` in Task Scheduler. Child-session enablement
+`OpenCU-AgentDesktop-<your Windows SID>-<installation hash>` in Task Scheduler
+(the exact name is in doctor output). Older candidates used the SID-only name. Child-session enablement
 is a machine setting and is not automatically reversed for other applications.
 
 Programs that start OpenCU on an agent's behalf, such as remote-control services,
@@ -295,20 +298,28 @@ After installing 0.4.0, run this once from a **normal**, non-administrator termi
 Windows asks for UAC approval to enable child sessions. Setup then prepares the
 helper offline using the built-in .NET Framework compiler; no extra runtime is
 downloaded. If your sign-in predates enablement, sign out and back in once.
-OpenCU never asks for, accepts or stores a session password. Helper updates may
-require running setup again.
+OpenCU never asks for, accepts or stores a session password. Before UAC, setup
+explains that Windows will ask to let Microsoft Windows PowerShell make changes
+only to enable child sessions. Once enabled, a first start after an OpenCU update
+rebuilds missing or outdated helpers automatically, offline and without elevation.
+Doctor/status remain read-only; setup can also be run again manually.
 
 The agent can call `agent_desktop` with `{"action":"start"}` to open the visible
 **OpenCU agent desktop** window. All app tools then operate inside that session,
-using ordinary foreground input while your desktop remains separate. Read fresh
+using ordinary foreground input while your desktop remains separate. The view
+starts in **Watch only** mode: hovering does not forward mouse input. Click the
+view to interact (the first click selects the mode); switching to another window
+returns it to Watch only. The label shows the current mode. Read fresh
 app state after starting. `{"action":"status"}` reports state and availability;
 `{"action":"stop"}` logs off the child apps, so save their work first.
 
 Closing the window or physical Escape inside its focused view permanently stops
 that MCP connection. The agent must not reconnect or restart without your explicit
 permission. A failed start or broken connection never falls back to your desktop.
-The owner-reported spike demonstrated isolation, but this implementation's startup,
-IPC and lifecycle still need the [Windows acceptance](docs/windows-engine-contract.md#agent-desktop-040).
+After a failed start, app tools remain blocked until `agent_desktop` with
+`{"action":"stop"}` finishes cleanup. This never clears a person's stop. The
+[Windows contract](docs/windows-engine-contract.md#agent-desktop-040) separates the
+measured VM results from the follow-up fixes still awaiting Windows acceptance.
 
 ## Development
 
