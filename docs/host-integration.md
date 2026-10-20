@@ -116,8 +116,9 @@ and the [engine contract](independent-engine-contract.md).
 
 ## Authorization
 
-OpenCU has no approval step, allowlist or blocklist. The host decides which
-calls to allow. `annotations.readOnlyHint` marks tools that send no input, but
+The host decides which tasks/calls to allow; OpenCU has no app allowlist or
+blocklist. macOS agent desktop additionally requires the local window consent
+described below. `annotations.readOnlyHint` marks tools that send no input, but
 `get_app_state` can launch the requested app. A useful approval summary is the
 tool name plus its `app` argument.
 
@@ -176,7 +177,11 @@ start automatically creates a nonactivating watch-only preview and a virtual
 display. It does not use a sharing picker or introduce a second login session.
 Normal per-window screenshots remain unchanged. The macOS 15+ periodic capture
 confirmation may take foreground, approximately monthly per executable location;
-OpenCU stops input if it does. Preview uses the existing Screen Recording grant
+OpenCU refuses or interrupts the current input with `AGENT_DISPLAY_PERSON_ACTIVE`
+if it does; an already running desktop and its windows remain. This also applies
+to foreground SecurityAgent/UserNotificationCenter prompts. Status stays running
+and may report `inputPause`; dismiss the prompt and explicitly read state before
+continuing. Preview uses the existing Screen Recording grant
 and independently verified worker responsibility.
 
 Only explicit `get_app_state` may show a local 60-second per-window Move once / Keep
@@ -184,7 +189,14 @@ here card. Agent arguments cannot approve it. A decline/expiry returns text-only
 reduced state (`_meta["opencu/agentDesktop"].windowState`); mutations are refused with
 `AGENT_DESKTOP_CONSENT_REQUIRED`. Internal reads and batch final reads never prompt.
 Do not replay an input after consent or after a timeout. A host may cancel the
-pending tool; its approval cannot subsequently move the window. Status/stop use a
+pending tool; its approval cannot subsequently move the window. Lock/cancel/tool
+stop are not declines: another explicit read may ask. Nonmovable windows return
+reduced text-only state (including final reads) and the specific move refusal in
+`opencu/agentDesktop.consent`. A new already-present window of an admitted process
+inherits admission without movement or restoration. An already-present window of
+another process gets an Allow this window card on an explicit read; no implicit
+read shows it. Consent is a person-facing check, not protection from other local
+automation running as the same user. Status/stop use a
 control lane and remain callable while the normal tool is waiting. Allow at least
 90 seconds for a call awaiting local consent; cancellation is not approval.
 
@@ -196,13 +208,27 @@ This is narrower than Windows' session isolation and click-to-interact behavior.
 
 Tool stop restores the admitted windows' saved frames and sizes, leaves apps and
 unsaved documents open, and confirms virtual-display removal in a fresh process.
-Windows dragged back by the person lose admission and are left there. Host close,
+Windows leaving the agent display by any means lose admission for that desktop
+lifetime and are left there. The person returns all windows with host/menu-bar
+Stop, or one through the app's own Window > Move to display command; the invisible
+monitor cannot be dragged through the preview. Host close,
 its Stop button and menu-bar Stop send a native event and permanently latch
 `STOPPED_BY_PERSON` even while idle. All app tools/start are then refused; only
-status/cleanup remain available. Tool stop cannot clear that latch. MCP EOF cleans
+status/cleanup remain available. A macOS preview Stop Sharing action (SCK's
+`userStopped` error) uses this same latch. Other stream deaths use
+`AGENT_DESKTOP_LOST` and cleanup, never stream restart. Tool stop cannot clear that latch. MCP EOF cleans
 up without another tool call. Failed cleanup retains diagnostics and blocks normal
 routing. No worker replacement, stream restart, display recreation or action replay
 is allowed in desktop mode. Normal macOS mode's existing recovery is unchanged.
+
+Start and relocation keep the quiet-desktop guard. After Move once, wait one
+second before sampling a new baseline; ask the person to keep hands off the mouse
+for 2 seconds. A move interrupted by `AGENT_DISPLAY_PERSON_ACTIVE` rolls back only
+that window, keeps the desktop/other admissions and permits another consent on a
+later explicit read. Never replay it automatically. Failed restoration remains a
+cleanup error; an interrupted start removes its resources and fails cleanly.
+`OBSERVATION_REQUIRED` means an admitted window needs a fresh read;
+`AGENT_DESKTOP_CONSENT_REQUIRED` means its admission is actually missing.
 
 Unlike Windows, macOS pauses while locked: `parentLocked: true`, `ready: false`,
 `SCREEN_LOCKED`; ownership survives for cleanup and a fresh observation is required

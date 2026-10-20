@@ -13,13 +13,13 @@ operations and per-window capture on this display; they did not verify this new
 product path. External monitors remain untested.
 
 Start creates the host/display automatically. An SCStream captures only the owned
-display, with no audio, a small queue and roughly 10 fps, downsampled locally with
-no disk recording. Existing independently captured window screenshots remain in
+display, at preview resolution, with no audio, a small queue and roughly 10 fps,
+with no full-frame rescaling or disk recording. Existing independently captured window screenshots remain in
 MacObserver. Both paths require CaptureSafety's verified worker responsibility and
 existing Screen Recording grant. Do not add a sharing picker, legacy capture API,
 entitlement, account, helper service or macOS 15.2 requirement. The macOS 15+
 periodic confirmation remains a documented limitation: it can take foreground
-about monthly per executable path on the owner's Mac; input then stops.
+about monthly per executable path on the owner's Mac; the current input is refused/interrupted, while an already running desktop stays.
 
 A virtual display shares the person's GUI session, foreground, clipboard, apps
 and files. The preview never forwards input. Opaque/foreground-only apps retain
@@ -34,18 +34,23 @@ move. The nonactivating host shows one card, Move once and Keep here, with a
 60-second monotonic deadline. Approval binds the exact process lifetime, AX object,
 WindowServer ID and proposed original geometry. Revalidate before writes and keep
 the original before the first write. Denial/expiry remains reduced for that
-lifetime; input returns AGENT_DESKTOP_CONSENT_REQUIRED. No re-offer row, blanket
+lifetime; input returns AGENT_DESKTOP_CONSENT_REQUIRED. Lock and cancellation are not declines. Nonmovable windows return reduced text
+with a reason. New windows already on the monitor inherit admission only from an
+admitted window of the same process; other processes require an Allow this window
+card. Neither case writes geometry or creates a restoration record. No re-offer row, blanket
 consent, MCP consent parameter or prompts from waits/internal/final reads.
 
 Move once includes return of that exact window on stop/close/EOF. A multi-window
-ledger preserves distinct originals. Manual return revokes admission and
-restoration; never pull that window back or substitute another window. Normal
+ledger preserves distinct originals. Any departure from the agent display revokes admission and
+restoration; never pull that window back or substitute another window. Return all
+windows using host/menu-bar Stop, or one using the app's own Window > Move to display
+command. The watch-only preview cannot drag windows from an invisible monitor. Normal
 cleanup restores frames/sizes and leaves apps/unsaved content running. Bound
 restoration, release even on AX failure, and confirm removal using a fresh process
 for each poll. Cleanup failures retain recovery evidence and block normal routing.
 Crashes rely on OS resource lifetime; exact restoration cannot run after SIGKILL.
 
-Close, native Stop and the persistent menu-bar Stop latch STOPPED_BY_PERSON for
+Close, native Stop, macOS preview Stop Sharing and the persistent menu-bar Stop latch STOPPED_BY_PERSON for
 the MCP connection, including when idle. Native events notify Node immediately.
 Status/stop/cancellation bypass a pending consent through a narrow control lane;
 ordinary app and geometry mutations remain serialized. Stop/EOF cancel pending
@@ -66,3 +71,31 @@ The opt-in `scripts/verify-agent-desktop-mac.mjs --owner-present` uses disposabl
 fixtures for startup/preview, consent, background actions, manual return, stop,
 close-latching and EOF cleanup. It must be run by an owner on an authorized idle
 Mac; build/unit-test success is not a claim of GUI acceptance.
+
+
+## Review refinements
+
+A terminal or never-started preview is already stopped; release its reference
+without a redundant stop call. Only an in-flight stop is awaited. Completed
+capture-stop diagnostics are warnings, not permanent cleanup failure after the
+window/display resources are confirmed gone. `SCStreamError.userStopped` is a
+person stop; other terminal errors are desktop loss, never auto-restarted.
+
+A foreground system confirmation pauses/refuses input with
+`AGENT_DISPLAY_PERSON_ACTIVE`; it does not tear down the desktop. A consented move
+settles for one second before taking the quiet-desktop baseline. Activity rolls
+back only that move and allows a later explicit consent request. Other approved
+windows stay; restoration failure still fails closed. Start interruption cleans
+up its newly created resources.
+
+Admission/identity checks run at action and batch-step boundaries. Per-key waits
+check stop, lock and generation; pointer events also check geometry. Monitor AX
+reads have bounded timeouts and run off the main actor, at most two targets per
+nonoverlapping tick. Observation generation is captured before asynchronous reads;
+queued cancellation is retained before dispatch. Normal workers do not construct
+the desktop controller/UI. Repeated cleanup uses its confirmed fresh snapshot.
+
+The old experimental native methods, single-record compatibility fields and
+probe entry point were removed. The person consent UI is not a security barrier
+against local automation with the same user's permissions. No hardware-only
+approval filter was added.

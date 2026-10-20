@@ -1,6 +1,7 @@
 # Experimental agent display probe
 
-> Historical feasibility evidence. The product path now uses `agent_desktop` with
+> Historical feasibility evidence. **The experimental engine methods and
+> `scripts/probe-agent-display.mjs` have been removed.** The product path now uses `agent_desktop` with
 > a native preview, local per-window consent, multiple restoration records and a
 > connection-wide stop latch. Run `scripts/verify-agent-desktop-mac.mjs --owner-present`
 > for product acceptance; do not treat the old two-connection probe as product
@@ -18,9 +19,10 @@ the foreground; run 9 passed all 15 checks. In runs 6 and 7, creating the displa
 moved a window from the person's stage into the Stage Manager strip.
 It does not introduce MCP tools or consent UI.
 
-## Direct engine API
+## Historical direct engine API (removed)
 
-Run `bin/opencu engine`. Each line is `{id, method, params}`; responses use the
+The following describes the old probe protocol, not available commands. It used
+`bin/opencu engine`. Each line is `{id, method, params}`; responses use the
 existing `{id, result}` / `{id, error}` contract. Errors from window relocation include structured `error.data.move` diagnostics.
 One connection owns at most one
 display and one outstanding window restoration. Methods are:
@@ -235,12 +237,13 @@ macOS may relocate windows when a display disappears. This private API has no
 Apple-supported crash-cleanup contract; removal timing, abrupt-exit behavior and
 absence of leaked displays still need live confirmation on the reviewer's OS.
 
-## Reviewer run and evidence
+## Historical reviewer run and evidence
 
 On an authorized idle Mac, with Stage Manager already on and OpenCU's Accessibility
 and Screen Recording grants already present, from this worktree run:
 
 ```sh
+# Historical command; the script and experimental methods have been removed.
 node scripts/probe-agent-display.mjs
 ```
 

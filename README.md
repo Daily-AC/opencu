@@ -119,13 +119,20 @@ behavior is in the [engine contract](docs/independent-engine-contract.md).
 
 ## Stopping it
 
-The V appears in the menu bar while an agent is using OpenCU and disappears after
-15 seconds without calls. Choose **Stop** from it. That connection then refuses
-input, app activation and screenshots with `STOPPED_BY_PERSON`; text reads still
-work. Stop applies to that connection only: input already delivered is not undone,
-and a new connection starts unstopped. Agents are instructed to wait for your
-permission and never to reconnect on their own, but Stop is not a barrier against
-a client that ignores this.
+In ordinary macOS mode, the V appears while an agent is using OpenCU and hides
+15 seconds after its last call. Menu-bar **Stop** refuses input, activation and
+screenshots with `STOPPED_BY_PERSON`; text-only reads remain available in that mode.
+
+In **agent desktop** mode the menu-bar item stays for the desktop lifetime.
+Closing the host, its **Stop** button, menu-bar **Stop**, or a macOS Stop Sharing
+control for the preview permanently stops that MCP connection. All app calls,
+including text reads, then fail; only desktop status and cleanup remain available.
+Windows return to their recorded frames when eligible; apps and unsaved content
+stay open. A tool-requested stop alone permits a later explicit start.
+
+Stop does not undo delivered input and applies to its connection. Agents must
+never reconnect around it without permission. It is a person-facing brake, not a
+barrier against another local client or automation running as the same user.
 
 The cursor hides three seconds after the last pointer action and the badge three
 seconds after the last call. Neither appears in OpenCU's own screenshots.
@@ -144,7 +151,11 @@ The measurements behind this section are in
   answer, and the prompt comes back. macOS keeps the answer per engine location,
   so the first screenshot after building in a new directory asks again; after
   that, about every 30 days. This confirmation can take the foreground; OpenCU
-  stops input when it does. Agent desktop preview uses the same existing Screen
+  refuses or interrupts the current input with `AGENT_DISPLAY_PERSON_ACTIVE` when
+  it does. A foreground SecurityAgent or UserNotificationCenter prompt does not
+  destroy an already running agent desktop or return its windows. Dismiss the
+  prompt, then explicitly observe before continuing; input is never replayed.
+  Agent desktop preview uses the same existing Screen
   Recording permission and verified worker responsibility; it does not suppress
   or replace this macOS reminder with a sharing picker.
 - A caller sandbox that denies networking also blocks the local socket, so
@@ -227,11 +238,15 @@ The measurements behind this section are in
 
 ### Safety and privacy
 
-- There is no per-app approval, blocklist or confirmation step. The calling agent
-  is responsible for what it asks OpenCU to do.
+- There is no per-app allowlist or task approval system. The calling agent is
+  responsible for its requests. macOS agent desktop adds local consent before
+  moving each window, and before using an already-present window of another
+  process. That card is a person-facing check, not a barrier against other local
+  automation running as the same user (including Accessibility automation).
 - OpenCU's signature identifies it to macOS; it does not restrict callers. Any
   local process that can run `bin/opencu` uses OpenCU's permissions.
-- On macOS, the menu-bar **Stop** is the only built-in brake.
+- macOS agent desktop also stops through its host close/Stop controls or a macOS
+  preview Stop Sharing control. See [Stopping it](#stopping-it).
 - `paste` temporarily replaces the clipboard and restores it afterwards, unless
   another app changed it meanwhile.
 - The title-bar badge shows up to 16 characters of text being typed or pasted
@@ -241,13 +256,14 @@ The measurements behind this section are in
   browsers so their pages are readable. This slows window moves by window
   managers; OpenCU turns it off again on disconnect.
 
-### Experimental
+### Virtual display compatibility
 
-An engine-level virtual display can take a window out of the Stage Manager strip
-onto a display you cannot see, so the agent can use it fully in the background.
-It passed its full probe on test fixtures but is not exposed through MCP.
-Creating the display can make macOS move a window from your stage into the strip;
-setups with external monitors are untested. See the [agent display probe](docs/agent-display-probe.md).
+The macOS virtual display is exposed through the consented `agent_desktop` product
+path. Its OS-exported display SPI remains a compatibility boundary. Creating it
+can put a window from your current stage into the Stage Manager strip; external
+monitors are untested. The old consent-free experimental engine commands and their
+probe script have been removed. [The probe record](docs/agent-display-probe.md)
+is historical evidence, not a command to run or acceptance of the product UI.
 
 ## Windows preview
 
@@ -391,14 +407,27 @@ opens a small **OpenCU agent desktop** window and a virtual monitor. The preview
 always **watch-only**: clicking it never forwards input. Start moves no app window.
 An explicit `get_app_state` on a window outside the monitor presents **Move once**
 and **Keep here** in that nonactivating window. The card expires after 60 seconds.
-Declined or expired windows stay text-only/read-only for that desktop's lifetime;
-internal reads, waits and final action reads never ask or move a new window.
+Declined or expired windows stay text-only/read-only for that desktop's lifetime.
+Lock or request cancellation is not a decline; a later explicit read may ask again.
+Full-screen, minimized and other nonmovable windows remain readable as reduced
+text-only state, with the refusal reason in `opencu/agentDesktop` metadata. Internal
+reads, waits and final action reads never ask or move a new window.
+
+A new window already on the agent display can inherit admission from an admitted
+window of the same process; OpenCU does not move it and records no return frame.
+A window of a different process already there gets an **Allow this window for the
+agent?** card on an explicit read. Approval admits it without moving or restoring
+it. macOS chooses where such unmoved windows go when the virtual display is
+removed. Declined or previously returned windows cannot inherit admission.
 
 Move once permits that exact window's move and its disclosed return on stop,
 close or MCP EOF. Every new move asks again. All input is restricted to admitted
-windows still on the virtual monitor; `activate_app` is refused there. To take a
-window back, drag it off the agent display: admission is revoked and cleanup leaves
-it where you put it. No input is replayed. Apps, accounts, clipboard and files are
+windows still on the virtual monitor; `activate_app` is refused there. Return all
+moved windows with the host or menu-bar **Stop**. To return just one, use that app's
+own **Window > Move to display** command when available. The invisible monitor
+cannot be dragged through the watch-only preview. If a window leaves the agent
+display by any means, admission is revoked for this desktop lifetime and cleanup
+leaves it where it went. No input is replayed. Apps, accounts, clipboard and files are
 still shared with your session; this is not an isolation/security boundary.
 
 Tool stop restores eligible windows, leaves apps and unsaved content open, and
@@ -412,7 +441,19 @@ macOS pauses while locked (`SCREEN_LOCKED`, `status.parentLocked: true`) and kee
 ownership for cleanup. Unlock requires a fresh observation; queued input never
 resumes. Preview errors and display-layout changes fail closed and clean up,
 without recreating a worker/display or falling back to the person's windows.
-Status/stop remain responsive while a consent card is waiting. One agent display
+Status/stop remain responsive while a consent card is waiting. The preview may
+show macOS's screen-recording indicator for its lifetime. If the person stops
+preview sharing through macOS, `STOPPED_BY_PERSON` latches; other stream failures
+return `AGENT_DESKTOP_LOST` and clean up without restarting the stream.
+
+Start and moves retain the quiet-desktop guard. Keep the pointer/foreground still
+during start and for 2 seconds after **Move once**. A move waits one second after
+the consent click before taking its baseline. If activity interrupts it,
+`AGENT_DISPLAY_PERSON_ACTIVE` affects that move only: OpenCU restores that window,
+keeps the other approved windows and the desktop, and leaves the target reduced.
+A later explicit read may ask again; there is no automatic retry. If restoring that
+window fails, cleanup fails rather than losing its recovery record. An interrupted
+start fails cleanly and removes its display. One agent display
 per GUI session; another connection receives `AGENT_DISPLAY_BUSY`.
 
 On an authorized idle Mac, the owner can run the fixture-only acceptance:
@@ -422,7 +463,8 @@ node scripts/verify-agent-desktop-mac.mjs --owner-present
 ```
 
 The script needs Stage Manager already enabled and existing OpenCU permissions.
-It asks the person to answer consent cards, drag a fixture back and close the host;
+It asks the person to answer consent cards, use a fixture's Window > Move to display
+command and close the host;
 it never targets personal applications. See [ADR 0003](docs/adr/0003-macos-agent-desktop-virtual-display.md).
 
 ## Development

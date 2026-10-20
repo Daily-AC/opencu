@@ -37,11 +37,12 @@ returns `CAPTURE_RESPONSIBILITY_UNVERIFIED` before ScreenCaptureKit. Error
 reports that context too. On macOS 15 and later the system may show its periodic
 private-window-picker reminder even with a grant; capture is not refused for that. See [capture evidence and policy](agent-display-probe.md#capture-boundary-and-the-private-picker-prompt).
 
-The direct macOS engine also exposes opt-in `experimental_agent_display_*`
-methods described in [the agent display probe note](agent-display-probe.md).
-They are not MCP tools. Display geometry mutations invalidate the connection's
-observation; callers must serialize them with ordinary input and observe again.
-The probe requires separate live reviewer acceptance and has no consent UI yet.
+The former `experimental_agent_display_*` methods and `scripts/probe-agent-display.mjs`
+were removed. The only display lifecycle exposed by the native engine is the
+product `agent_desktop_start/stop/status` path used by MCP, with native per-window
+consent/admission and a connection stop latch. Retired methods return
+`METHOD_NOT_FOUND`; there is no consent-free relocation command. The
+[probe record](agent-display-probe.md) remains historical evidence.
 
 Pointer routing uses the system-exported CGEventSetWindowLocation SPI after
 public NSEvent/CGEvent creation. Actual received events showed that public
