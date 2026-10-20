@@ -13,8 +13,9 @@ suite passed, and it has completed a handful of real tasks. It has not been
 benchmarked at scale. Read [Limitations](#limitations) before relying on it.
 The Windows engine uses foreground input. Version 0.4.0 adds an optional visible
 [agent desktop](#windows-agent-desktop) to isolate that input in a child session;
-it passed acceptance on a Windows 11 VM, with input refused while the screen
-is locked.
+the 0.4.0 baseline passed acceptance on a Windows 11 VM with locked-parent
+input refused. This branch adds limited indexed control patterns while locked;
+that new path **needs Windows acceptance** and is not a release.
 
 ## What it does on macOS
 
@@ -157,9 +158,13 @@ The measurements behind this section are in
   and the locked-screen refusal were accepted on the VM
   ([evidence](evidence/opencu-windows-agent-desktop-2026-10-21-v0.4.0.json)).
   Administrator approval is needed once, possibly followed by one sign-out/in;
-  smart-card-only sign-in is unsupported and unmeasured. **While the parent screen is locked, the child stays alive for reads and
-  screenshots, but input returns `SCREEN_LOCKED`.** The earlier locked-input
-  success report was not reproducible; nobody at the machine can see the child
+  smart-card-only sign-in is unsupported and unmeasured. While the parent screen
+  is locked, the child stays alive for reads and screenshots. This branch also
+  permits indexed single-left click, ValuePattern `set_value` and listed secondary
+  actions through supported accessibility patterns. **The new pattern path needs
+  Windows acceptance.** Synthetic input and foreground acquisition failed in the
+  locked-child probe; an MSAA button default action took effect. Other input and
+  launches return `SCREEN_LOCKED`. Nobody at the machine can see the child
   while the lock screen is shown.
   Status reports `parentLocked`. After unlocking, close the host window or click
   the view and press Escape to stop; the caller can also end the MCP connection.
@@ -239,7 +244,8 @@ setups with external monitors are untested. See the [agent display probe](docs/a
 
 The Rust engine in `native-win/` implements UI Automation trees, window capture,
 indexed and coordinate clicks, drag, Unicode typing, plain-text paste, keys, scroll,
-values and secondary actions. Unlike macOS, it works in the foreground: input
+values and secondary actions. Ordinary Windows operation uses the foreground
+(the limited [locked-parent patterns](#windows-agent-desktop) are an exception): input
 can bring a background or minimized target to the front after 10 seconds without
 human keyboard or mouse input. Recent activity returns `PERSON_ACTIVE` without
 changing foreground or sending input. Windows can still refuse activation; the
@@ -314,18 +320,35 @@ Doctor/status remain read-only; setup can also be run again manually.
 
 The agent can call `agent_desktop` with `{"action":"start"}` to open the visible
 **OpenCU agent desktop** window. All app tools then operate inside that session,
-using ordinary foreground input while your desktop remains separate. The view
+using ordinary foreground input while the parent is unlocked and your desktop remains separate. The view
 starts in **Watch only** mode: hovering does not forward mouse input. Click the
 view to interact (the first click selects the mode); switching to another window
 returns it to Watch only. The label shows the current mode. Server-requested local
 cursor warps are disabled for the whole connection, including interactive mode;
-this protection requires a supported RDP setting and still needs Windows recheck.
+this protection requires a supported RDP setting and passed the 0.4.0 VM acceptance.
 Read fresh
 app state after starting. `{"action":"status"}` reports state and availability;
 `{"action":"stop"}` logs off the child apps, so save their work first.
 
 Locking the parent screen keeps the child alive for reading and screenshots.
-Input is refused with `SCREEN_LOCKED` until the person unlocks; it is never replayed.
+Only the locked child uses supported patterns for a single left indexed `click`
+without modifiers or duration, `set_value` via ValuePattern, and listed
+`perform_secondary_action`. Click chooses Invoke, Toggle, SelectionItem.Select,
+ExpandCollapse (expand collapsed/partially expanded, collapse expanded), then a
+nonempty MSAA default action. Selection uses capabilities, never control names.
+It calls one action, with no synthetic-input fallback or replay. Missing patterns
+return `UNSUPPORTED_ACTION`. Coordinate or modified/multiple clicks, typing, keys,
+scroll, drag, paste, activation, batch waits and launches still return `SCREEN_LOCKED`.
+
+Each completed pattern call returns fresh state/diff. No observed accessibility
+change means an unknown outcome and stops the batch; explicitly read state before
+continuing. A three-second provider deadline also returns unknown, and a still
+outstanding call blocks further writes. Provider success does not prove the intended
+effect. The owner measured an MSAA button click while locked; Invoke/Value/Toggle
+worked on WinForms, WPF and Chromium in earlier unlocked tests, but could activate
+their windows. Those focus changes are acceptable inside the agent child. **This
+new engine path still needs Windows acceptance**, including its Toggle fix and
+provider timeout behavior. The ordinary and unlocked paths are unchanged.
 The child window is hidden by the lock screen, so nobody at the machine can see it. `status` reports `parentLocked: true` or `false`.
 Unlocking does not restart anything: the same child and host window remain.
 The agent must issue a new call, under the normal input rules.

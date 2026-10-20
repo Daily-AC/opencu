@@ -11,6 +11,10 @@ three consecutive 30-check fixture runs on a fresh Windows 11 VM, with the
 10-second rule and physical Escape checked through host-injected input
 ([evidence](../evidence/opencu-windows-gui-2026-10-19.json)).
 
+The locked-parent indexed-pattern path on `feat/win-locked-patterns` is new and
+**needs Windows acceptance**. Version stays 0.4.0; this branch is not a release.
+Earlier acceptance below applies to the baseline, not this new path.
+
 ## Standalone transport and embedding
 
 Run `.build/win/opencu-engine.exe serve` with inherited stdin/stdout pipes in the
@@ -35,12 +39,17 @@ Example requests (send one line, await its reply before sending the next):
 ```
 
 `list_apps`, `get_app_state`, `activate_app` and input names/parameters match the
-shared engine contract. An input response is `{ok:true, app}`; it is not a new
-observation. The MCP server supplies post-action observation, diffs, text polling
+shared engine contract. Ordinary input returns `{ok:true, app}`; it is not a new
+observation. Locked-parent patterns additionally return `lockedPattern:true`, the
+chosen `pattern`, and fresh `state` after confirmed completion. An unconfirmed
+call returns `outcome:"unknown"` and `message`, with `state` if the read succeeded.
+A provider timeout returns unknown without automatic observation. The MCP server supplies post-action observation, diffs, text polling
 and `run_actions` batching. Native `wait` accepts integer `ms` from 1 to 15000,
 sends no input, consumes screenshot coordinates and honours the activity/stop guard. A non-Node host must implement those conveniences itself.
 `doctor` (or `--doctor`) reports version, platform, executable path, desktop accessibility,
-foreground-only operation, and no account/proprietary-runtime requirement.
+whether the current mode requires foreground, and no account/proprietary-runtime
+requirement. `foregroundOnly` is false only for a guarded child with a positively
+locked parent; the limited action set below still applies.
 
 ## Observations and targeting
 
@@ -194,7 +203,8 @@ not establish a general success rate.
 
 ## Input and engine-side safety
 
-Every input verifies that the actual foreground window belongs to the target's
+Except for the locked-parent child patterns described below, every input verifies
+that the actual foreground window belongs to the target's
 top-level ownership family: normalize children with `GetAncestor(GA_ROOT)`, then
 walk `GetWindow(GW_OWNER)` to the ultimate owner (at most 64 steps). Both windows
 must reach the same live owner, and every HWND visited must belong to the target
@@ -565,14 +575,16 @@ read), a whole read was 19,900 characters and a read scoped to the page
 
 ## Agent desktop (0.4.0)
 
-The latest cu-bench Windows 11 26H2 acceptance used the reproduced `4b6c40d2...`
+The 2026-10-20 cu-bench Windows 11 26H2 acceptance used the reproduced `4b6c40d2...`
 package on clean `base`, with commits through `987d042` plus acceptance-tool fixes
 `69a1dae` and `4b7db3b`. The owner ran real UAC setup and rebooted with autologon.
-The new pointer-suppression and native lock-error fixes described below have **not**
-run on Windows in this implementation job. See [ADR 0002](adr/0002-windows-agent-desktop-child-session.md)
+Those pointer-suppression and lock-error fixes subsequently passed the owner's
+2026-10-21 0.4.0 acceptance at `1cf23f8`
+([evidence](../evidence/opencu-windows-agent-desktop-2026-10-21-v0.4.0.json)).
+The new locked-parent pattern implementation has not run on Windows. See [ADR 0002](adr/0002-windows-agent-desktop-child-session.md)
 and the [input investigation](windows-agent-desktop-input-findings.md).
 
-### Latest measured results (2026-10-20)
+### Historical measured results (2026-10-20)
 
 - The normal Windows GUI suite passed three runs of 40/40. Offline package
   verification passed, including fourteen tools, update preservation and refusal
@@ -602,8 +614,14 @@ and the [input investigation](windows-agent-desktop-input-findings.md).
   title bar. The next input round after unlock succeeded.
 
 The earlier report of working locked-parent input could not be reproduced and is
-unreliable. It does not establish a supported input path. The chosen behavior now
+unreliable. It does not establish a supported input path. The accepted baseline
 keeps the child alive for reading/screenshots and refuses input while locked.
+A separate 2026-10-21 probe measured NULL child foreground, failed
+SetForegroundWindow and zero SendInput delivery with ERROR_ACCESS_DENIED, while
+an MSAA button default action incremented the fixture counter from 1 to 2.
+Earlier unlocked tests found Invoke/Value/Toggle functional on WinForms, WPF and
+Chromium but activating the target. These facts motivate the limited child-only
+pattern path below; they are not acceptance of that implementation.
 Nobody at the machine can see the child behind the parent lock screen.
 
 ### Setup and updates
@@ -642,8 +660,8 @@ MCP `agent_desktop` accepts only `action: start | stop | status`. Start opens a
 visible topmost window and waits for an authenticated bridge and accessible engine.
 All app tools, including inventory, launches, batches and final observations, then
 use the child. There is no per-app parent override. Ordinary parent-desktop input
-rules remain unchanged. The child retains foreground/idle/person-stop rules and
-adds the parent-lock restriction below.
+rules remain unchanged. The unlocked child retains foreground/idle/person-stop rules. Only its locked
+parent enables the restricted pattern path below; person-stop latches always remain.
 
 The host holds WS_EX_NOACTIVATE during startup, then removes it without activation.
 The view starts **Watch only**. Its disabled native input ancestor prevents hover
@@ -662,7 +680,7 @@ unconfirmed suppression refuses startup. The setting blocks server-requested
 local cursor warps and cannot change after connection, so it stays on in both
 watch-only and interactive modes; no reconnect or move-back fallback is used.
 Interactive local input still forwards normally, but apps depending on remote
-cursor warps may behave differently. This fix needs Windows verification.
+cursor warps may behave differently. The 2026-10-21 baseline acceptance verified this fix.
 External minimization stops the host; no global
 RemoteDesktop_SuppressWhenMinimized override is installed. Parent lock (WTS event
 7) and unlock (8) do not end, replace or reconnect the child. Console/remote
@@ -677,28 +695,68 @@ lock state from an inaccessible desktop or a UAC screen. Native doctor exposes
 MCP status call returns an explicit error instead of inventing false. This status
 query cannot stop/restart an engine or clear a person-stop latch.
 
+### Locked-parent control patterns (branch implementation; acceptance pending)
+
 While locked, the child keeps reading and taking WGC screenshots. The authenticated
-bridge starts its engine with the internal `serve --agent-parent-session <id>`
-argument and requires doctor to confirm `agentParentSession` and a Boolean
-`agentParentLocked`. The engine re-queries that verified parent before input and
-at safety fences. A locked/unknown parent refuses input, activation and guarded
-batch waits with SCREEN_LOCKED before the ordinary incidental activity/focus error.
-Read/list/capture paths remain available. USER_STOPPED still takes precedence.
+bridge starts its engine with `serve --agent-parent-session <id>` and requires
+doctor to confirm `agentParentSession` and a Boolean `agentParentLocked`. Only a
+positive parent-lock query on that connection permits the following pattern calls:
 
-A preflight refusal says: "The person's screen is locked. Reading and screenshots
-still work; input is available after they unlock. No input was sent." If lock
-occurs during an action, the message instead states that earlier input may have
-run. Activity/activation/focus failures racing with the lock receive the same
-stable code without replay or a false zero-input claim. Unknown parent state is
-reported as unverified, not asserted to be unlocked. These are per-request
-refusals, not a terminal host failure: state can stay running with parentLocked=true.
+| Request | Delivery while parent is locked |
+| --- | --- |
+| Indexed single-left `click`, no modifier/duration | First supported Invoke, Toggle, SelectionItem.Select, ExpandCollapse, then nonempty Legacy MSAA default action |
+| Indexed `set_value` | Writable ValuePattern only; no RangeValue or text-input fallback |
+| Indexed `perform_secondary_action` | A listed Invoke, Toggle, Select/AddToSelection/RemoveFromSelection, Expand/Collapse, or DoDefaultAction; live pattern required |
+| All other input, activation, waits and launches | SCREEN_LOCKED; reads/list/capture of existing apps remain available |
 
-Unlock permits later explicit input through the normal foreground/human-activity
-rules, with a fresh screenshot when required. It never retries an action or
-clears a person stop. The caller can end the MCP connection while locked; after
-unlocking the person can close the still-present window or click the view and
-press Escape. No supported foreground-activation mechanism for the locked case
-was established; see the [research and verification boundary](windows-agent-desktop-input-findings.md).
+ExpandCollapse expands collapsed/partially expanded controls, collapses expanded
+controls and skips leaf nodes. Selection uses live supported interfaces, never
+names, roles or framework allowlists. Unsupported capability returns
+UNSUPPORTED_ACTION; disabled/read-only controls retain ELEMENT_DISABLED or
+ATTRIBUTE_NOT_SETTABLE. Once a provider call starts, no other pattern or synthetic
+input is attempted as fallback. The query treats successful null interface output
+as absence, fixing the old background branch's zero-HRESULT error before Toggle.
+Real HRESULT failures are propagated.
+
+The locked path uses its own guard and MTA worker. It neither requires nor changes
+foreground, calls SetFocus, nor synthesizes mouse/keyboard/WM_CHAR/clipboard input.
+An application provider may activate a window in the child; this is acceptable
+within that agent-owned session. Ordinary device activity/held keys, including
+RDP lock-transition events, do not block this path. Escape, monitor liveness,
+indicator availability, child interactive desktop, target integrity, HWND/process
+identity and live element attachment remain checked. A prior interrupted action
+still needs a fresh read. Parent lock is rechecked immediately before mutation;
+a change/unknown state stops the operation without switching delivery modes.
+
+Preparation and mutation have a three-second worker deadline. Timeout returns
+unknown outcome and invalidates indexes; a provider already entered may finish
+later and cannot be cancelled. Only one call can be outstanding. While it remains,
+further writes/activation/waits return PATTERN_ACTION_PENDING, including after
+unlock; read-triggered launches are disabled. Explicit reads and doctor remain
+available. USER_STOPPED takes precedence. No automatic reconnect or input replay
+is introduced.
+
+Every confirmed pattern return is followed by a fresh observation using the
+existing scope. Compare window summaries and indexed accessibility state, ignoring
+capture/lock guidance. A change returns normal state/diff; no observable change
+returns that state with unknown outcome. A failed follow-up read also returns
+unknown. This is not a claim that every UIA success had the intended effect;
+asynchronous, off-scope or provider-internal effects may be invisible. Unknown
+outcome stops run_actions, clears native indexes and requires explicit
+get_app_state before further input. MCP reuses the returned state rather than
+silently replacing those indexes; an explicit final screenshot/poll/scope can
+still request another observation after a confirmed outcome.
+
+A rejected ordinary input says the person's screen is locked and names indexed
+click, set_value (ValuePattern) and listed perform_secondary_action as the limited
+alternatives. Preflight says no input was sent; a lock during ordinary input
+preserves the existing partial-outcome wording. Unknown parent state refuses
+input without asserting a lock. These refusals do not stop or replace the child.
+Ordinary parent-desktop and unlocked-child behavior remain unchanged. Unlock
+permits later explicit ordinary input subject to foreground/idle rules, but never
+retries input, revives a stopped connection or bypasses an outstanding provider.
+The caller can end the MCP connection while locked; after unlock the person can
+close the window or click the interactive view and press Escape.
 
 Host close and a reported child USER_STOPPED permanently latch the MCP connection.
 Status and cleanup remain available; switching or reconnecting cannot bypass them.
@@ -738,16 +796,16 @@ remain unmeasured.
 | `AGENT_DESKTOP_LOST` | Host, child or pipe ended; no reconnect/fallback. |
 | `AGENT_DESKTOP_CLEANUP_FAILED` | Child logoff was not confirmed. |
 | `USER_STOPPED` | Person stop, including host close; cannot be cleared by desktop switching. |
-| `SCREEN_LOCKED` | A child input is refused while its parent is locked/unverifiable; reads/screenshots remain available. A parent disconnect/logoff still ends the host. |
+| `SCREEN_LOCKED` | Ordinary child input/launch refused while parent is locked/unverifiable, or parent lock changed during a pattern. Reads/screenshots remain available. Disconnect/logoff still ends the host. |
+| `PATTERN_ACTION_PENDING` | An earlier timed-out provider still occupies the only write slot; read state and let the person resolve it, never reconnect to bypass the fence. |
 
 ### Remaining acceptance
 
 External minimize, covered or partly off-screen viewports, GPU/video/protected
 content, smart-card sign-in and unsupported Windows editions are **unmeasured**.
-Recheck required pointer-property support/readback and parked-pointer isolation,
-interactive takeover/Escape, the child engine's Medium-integrity query of its
-parent, stable lock refusals (including partial outcomes), and explicit post-unlock
-input. Retain the already-passed setup/update/foreground/hardware checks. Disconnect,
+Keep the accepted pointer-property/readback, parked-pointer isolation,
+interactive takeover/Escape and cross-session lock query regressions. Verify the
+new pattern path, stable refusals (including partial outcomes) and explicit post-unlock input. Retain the already-passed setup/update/foreground/hardware checks. Disconnect,
 startup crashes and real cross-user pipe ACL refusals still need verification. Earlier WGC and
 hardware-input results do not establish those cases. Apps still share the user's
 profiles/files, and global single-instance apps may refuse a child instance or
@@ -774,13 +832,26 @@ measurements. Evidence remains under ignored `.cache/agent-desktop-acceptance-*`
 The offline package verifier additionally exercises non-elevating preparation,
 repeated setup, the extended helper self-test and rebuilding after directory
 replacement when the machine is already enabled. Otherwise it checks refusal
-without UAC. It removes only its temporary install's demand task. Neither updated
-script was run on Windows during this follow-up implementation job. Lock checks
-remain manual: the suite cannot deterministically unlock without a password and
-must not obtain one. In that manual run, verify `parentLocked` becomes true while
-reads/capture remain available but input returns SCREEN_LOCKED with unchanged
-fixture text/counters, including after thirty seconds. Verify parentLocked becomes
-false on unlock, explicit input can proceed on that same child, and close/Escape/
-MCP EOF still stop it. A lock mid-action must preserve partial-outcome wording.
-Verify disconnect/logoff still end the child and unlock never revives a stopped
-connection.
+without UAC. It removes only its temporary install's demand task.
+The new optional locked-parent case was not run on Windows during this job.
+On the already enabled VM, run:
+
+```powershell
+node scripts/verify-agent-desktop-win.mjs --allow-desktop --locked-parent
+```
+
+The suite first runs its normal checks, then stops parent stimuli and prompts for
+manual Win+L. It waits up to three minutes for parentLocked=true, verifies child
+capture, one indexed button click, ValuePattern text replacement and a refused
+type_text with unchanged counter/text. Keep the parent locked until prompted to
+unlock. It then verifies the same child/host and no replay before normal cleanup.
+No password is collected and no automatic lock/unlock is attempted.
+
+Additional owner checks: Toggle with absent Invoke, SelectionItem, ExpandCollapse,
+MSAA-only controls, listed secondary actions, no-op/disabled/read-only/missing
+patterns, a blocking/modal provider, late completion and pending-write refusal,
+lock/unlock mid-action, unknown parent state and physical Escape. Run the normal
+Windows GUI suite to guard unlocked behavior. Disconnect/logoff must end the child;
+unlock must not revive a stopped connection. See the
+[input findings](windows-agent-desktop-input-findings.md) for measured facts and
+provider/observation limits.
