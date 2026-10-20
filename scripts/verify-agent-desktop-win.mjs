@@ -99,8 +99,11 @@ try {
   await command(parentExe, 'begin');
   for (let round = 0; round < 6; round++) {
     let current = await call('get_app_state', { app: childExe, disableDiff: true });
-    current = await call('click', { app: childExe, element_index: index(current, 'Increment fixture') });
-    current = await call('click', { app: childExe, element_index: index(current, 'Fixture text') });
+    await call('click', { app: childExe, element_index: index(current, 'Increment fixture') });
+    // A click result is a diff against the previous state; unchanged fields are
+    // absent from it, so look the text field up in a full state.
+    current = await call('get_app_state', { app: childExe, disableDiff: true });
+    await call('click', { app: childExe, element_index: index(current, 'Fixture text') });
     await call('type_text', { app: childExe, text: `agent-${round};` });
     await pause(600);
   }
