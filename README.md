@@ -86,7 +86,7 @@ The pi coding agent can load OpenCU as an extension (tested with pi 0.83):
 
 `list_apps`, `get_app_state`, `activate_app`, `click`, `drag`, `press_key`,
 `type_text`, `paste`, `scroll`, `set_value`, `select_text`,
-`perform_secondary_action`, `run_actions` and `agent_desktop` (Windows only for now).
+`perform_secondary_action`, `run_actions` and `agent_desktop`.
 
 Start with `get_app_state`. It takes a bundle identifier, app name or `.app`
 path, launches the app in the background if needed, and returns indexed
@@ -143,7 +143,10 @@ The measurements behind this section are in
   picker…"). Choose **Allow**. **Open System Settings** does not count as an
   answer, and the prompt comes back. macOS keeps the answer per engine location,
   so the first screenshot after building in a new directory asks again; after
-  that, about every 30 days.
+  that, about every 30 days. This confirmation can take the foreground; OpenCU
+  stops input when it does. Agent desktop preview uses the same existing Screen
+  Recording permission and verified worker responsibility; it does not suppress
+  or replace this macOS reminder with a sharing picker.
 - A caller sandbox that denies networking also blocks the local socket, so
   OpenCU cannot run from such a sandbox. Conversely, the worker runs outside any
   caller sandbox: a sandbox does not confine what OpenCU does.
@@ -170,11 +173,19 @@ The measurements behind this section are in
   machine; apps still share your account, profiles and files. Single-instance apps
   can refuse another instance. External minimize, covered/partly off-screen views,
   GPU/video apps and unsupported Windows editions remain unmeasured. This is UI
-  isolation, not a security sandbox. macOS does not expose this shared tool yet.
+  isolation, not a security sandbox.
+- **macOS agent desktop.** A watch-only virtual monitor in the same macOS session,
+  not a Windows-style separate session. Each window move needs local consent;
+  background-capable windows only. Blender and other opaque/foreground-only apps
+  retain `BACKGROUND_INPUT_UNSUPPORTED`. App launch may appear on your display
+  first. Creating the display can push an on-stage window into the Stage Manager
+  strip. External monitors are untested; unsupported layouts are refused. The
+  product path needs owner-run GUI acceptance; probe results do not verify its UI.
 - **Stage Manager.** A window in the Stage Manager strip cannot become the key
   window: many commands are disabled, Chromium stops rendering its pages, and a
   screenshot may show only the thumbnail. Reading and indexed actions still work.
-  Use `activate_app` or turn Stage Manager off. For apps that accept background
+  The macOS agent desktop can move a window with your consent to keep it rendered
+  for background work. Outside that mode, use `activate_app` or turn Stage Manager off. For apps that accept background
   input, putting the app full screen in its own Space also worked (Keynote); it
   does not help custom-drawn apps.
 - A Chromium window that is fully covered by other windows also stops rendering
@@ -372,6 +383,47 @@ After a failed start, app tools remain blocked until `agent_desktop` with
 `{"action":"stop"}` finishes cleanup. This never clears a person's stop. The
 [Windows contract](docs/windows-engine-contract.md#agent-desktop-040) separates the
 measured VM results from the remaining provider and follow-up regression checks.
+
+### macOS agent desktop
+
+The same `agent_desktop({action: "start" | "stop" | "status"})` tool automatically
+opens a small **OpenCU agent desktop** window and a virtual monitor. The preview is
+always **watch-only**: clicking it never forwards input. Start moves no app window.
+An explicit `get_app_state` on a window outside the monitor presents **Move once**
+and **Keep here** in that nonactivating window. The card expires after 60 seconds.
+Declined or expired windows stay text-only/read-only for that desktop's lifetime;
+internal reads, waits and final action reads never ask or move a new window.
+
+Move once permits that exact window's move and its disclosed return on stop,
+close or MCP EOF. Every new move asks again. All input is restricted to admitted
+windows still on the virtual monitor; `activate_app` is refused there. To take a
+window back, drag it off the agent display: admission is revoked and cleanup leaves
+it where you put it. No input is replayed. Apps, accounts, clipboard and files are
+still shared with your session; this is not an isolation/security boundary.
+
+Tool stop restores eligible windows, leaves apps and unsaved content open, and
+confirms display removal from a fresh process. A later explicit start may ask
+again. Closing the host, its **Stop** button or menu-bar **Stop** permanently latches
+`STOPPED_BY_PERSON` for the MCP connection, including when no tool call is running.
+Only status/cleanup remain available; never reconnect to bypass a stop. EOF also
+cleans up. A crash relies on OS resource cleanup and cannot restore exact frames.
+
+macOS pauses while locked (`SCREEN_LOCKED`, `status.parentLocked: true`) and keeps
+ownership for cleanup. Unlock requires a fresh observation; queued input never
+resumes. Preview errors and display-layout changes fail closed and clean up,
+without recreating a worker/display or falling back to the person's windows.
+Status/stop remain responsive while a consent card is waiting. One agent display
+per GUI session; another connection receives `AGENT_DISPLAY_BUSY`.
+
+On an authorized idle Mac, the owner can run the fixture-only acceptance:
+
+```sh
+node scripts/verify-agent-desktop-mac.mjs --owner-present
+```
+
+The script needs Stage Manager already enabled and existing OpenCU permissions.
+It asks the person to answer consent cards, drag a fixture back and close the host;
+it never targets personal applications. See [ADR 0003](docs/adr/0003-macos-agent-desktop-virtual-display.md).
 
 ## Development
 

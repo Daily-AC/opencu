@@ -494,6 +494,19 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegat
 }
 
 let arguments = Array(CommandLine.arguments.dropFirst())
+// Metadata-only acceptance query. Branch before creating NSApplication.
+if arguments.count == 2, arguments[0] == "--window-metadata", let id = UInt32(arguments[1]) {
+    let rows = CGWindowListCopyWindowInfo(.optionIncludingWindow, id) as? [[String: Any]] ?? []
+    let row = rows.first { ($0[kCGWindowNumber as String] as? UInt32) == id }
+    var result: [String: Any] = ["present": row != nil]
+    if let row {
+        result["pid"] = row[kCGWindowOwnerPID as String]
+        result["frame"] = row[kCGWindowBounds as String]
+        result["onScreen"] = row[kCGWindowIsOnscreen as String]
+    }
+    print(String(decoding: try JSONSerialization.data(withJSONObject: result), as: UTF8.self))
+    exit(0)
+}
 // Non-GUI image inspection for the agent-display probe. Inspect the actual PNG
 // bytes rather than accepting screenshot metadata as proof of rendered content.
 if arguments.count == 4, arguments[0] == "--inspect-image",
