@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 import path from 'node:path';
-import { OpenCURuntime } from './opencu-runtime.mjs';
+import { OpenCURuntime, defaultEnginePath } from './opencu-runtime.mjs';
 
 export const agentDesktopSetupCommand = root => root
   ? `& '${path.win32.join(root, 'bin', 'opencu.cmd').replaceAll("'", "''")}' setup agent-desktop`
@@ -60,6 +60,16 @@ export async function runAgentDesktopHelper(command, args, { timeoutMs = 10_000 
       try { resolve(parseAgentDesktopOutput(stdout, code, stderr)); } catch (cause) { reject(cause); }
     });
   });
+}
+
+export async function parentSessionLocked(root, run = runAgentDesktopHelper) {
+  // Run the metadata-only doctor in this MCP process's parent session. This
+  // remains available before helper preparation and never touches a GUI/window.
+  const doctor = await run(defaultEnginePath(root, 'win32'), ['--doctor']);
+  if (typeof doctor.sessionLocked !== 'boolean') {
+    throw error('AGENT_DESKTOP_UNAVAILABLE', 'Windows could not report the parent session lock state. No desktop was started or stopped.');
+  }
+  return doctor.sessionLocked;
 }
 
 export async function agentDesktopAvailability(root, platform = process.platform) {
@@ -232,8 +242,10 @@ export class AgentDesktopRuntime {
     if ((this.#options.platform ?? process.platform) !== 'win32') throw error('UNSUPPORTED_ON_MACOS', 'Agent desktop is not available on macOS yet.');
     if (args.action === 'status') {
       const availability = this.#options.availability ?? agentDesktopAvailability;
+      const lockState = this.#options.parentLockState ?? parentSessionLocked;
+      const [capability, parentLocked] = await Promise.all([availability(this.#options.root), lockState(this.#options.root)]);
       return reply({ state: this.#state, ...this.#identity, stoppedByPerson: !!this.#personStop,
-        error: this.#failure?.code, availability: await availability(this.#options.root) });
+        parentLocked, error: this.#failure?.code, availability: capability });
     }
     if (args.action === 'stop') {
       if (this.#state === 'inactive') return reply({ state: 'inactive', stoppedByPerson: !!this.#personStop });

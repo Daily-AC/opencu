@@ -765,3 +765,25 @@ mod feedback_tests {
         assert!(key_duration(&json!({"duration":31})).is_err());
     }
 }
+
+/// WTSINFOEX session flags on Windows 8+ (the child-session minimum).
+/// Unknown flags must never be reported as an unlocked session.
+pub fn session_locked_flag(flags: i32) -> Option<bool> {
+    match flags {
+        0 => Some(true),
+        1 => Some(false),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod session_state_tests {
+    use super::session_locked_flag;
+    #[test]
+    fn lock_unlock_and_unknown_flags_remain_distinct() {
+        assert_eq!(session_locked_flag(0), Some(true));
+        assert_eq!(session_locked_flag(1), Some(false));
+        assert_eq!(session_locked_flag(-1), None);
+        assert_eq!(session_locked_flag(2), None);
+    }
+}

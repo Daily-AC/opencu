@@ -190,6 +190,27 @@ impl Engine {
         Ok(json!({"ok":true,"app":s.app.json()}))
     }
 }
+unsafe fn session_locked(session: u32) -> Option<bool> {
+    let mut buffer = PWSTR::null();
+    let mut bytes = 0;
+    if WTSQuerySessionInformationW(None, session, WTSSessionInfoEx, &mut buffer, &mut bytes).is_err() {
+        return None;
+    }
+    let result = if !buffer.is_null() && bytes as usize >= std::mem::size_of::<WTSINFOEXW>() {
+        let info = &*(buffer.0 as *const WTSINFOEXW);
+        if info.Level == 1 && info.Data.WTSInfoExLevel1.SessionId == session {
+            opencu_engine::session_locked_flag(info.Data.WTSInfoExLevel1.SessionFlags)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    if !buffer.is_null() {
+        WTSFreeMemory(buffer.0 as _);
+    }
+    result
+}
 fn doctor() -> Value {
     let status = unsafe { safety::desktop() };
     let mut enabled = windows::core::BOOL::default();
@@ -201,7 +222,8 @@ fn doctor() -> Value {
     let session_id = unsafe { ProcessIdToSessionId(GetCurrentProcessId(), &mut session) }
         .ok()
         .map(|_| session);
-    json!({"engine":"independent","version":env!("CARGO_PKG_VERSION"),"platform":"win32","desktopAccessible":status.is_ok(),"desktopError":status.err().map(|e| e.json()),"accountRequired":false,"proprietaryRuntimeRequired":false,"foregroundOnly":true,"sessionId":session_id,"childSessionsEnabled":child_sessions,"executable":std::env::current_exe().ok()})
+    let locked = session_id.and_then(|id| unsafe { session_locked(id) });
+    json!({"engine":"independent","version":env!("CARGO_PKG_VERSION"),"platform":"win32","desktopAccessible":status.is_ok(),"desktopError":status.err().map(|e| e.json()),"accountRequired":false,"proprietaryRuntimeRequired":false,"foregroundOnly":true,"sessionId":session_id,"sessionLocked":locked,"childSessionsEnabled":child_sessions,"executable":std::env::current_exe().ok()})
 }
 pub fn main() {
     // The GUI subsystem suppresses a console window; inherited standard handles
