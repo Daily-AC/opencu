@@ -355,3 +355,16 @@ fn scope_retains_object_and_falls_back_when_missing_or_detached() {
     assert_eq!(scope_gone_line(true, true), "");
     assert_eq!(scope_gone_line(false, false), "");
 }
+
+#[test]
+fn ime_warning_requires_positive_open_and_native_mode_evidence() {
+    for (open, mode) in [(None, Some(1)), (Some(1), None), (Some(0), Some(1)), (Some(1), Some(0)), (Some(1), Some(8))] {
+        assert_eq!(ime_warning(open, mode), "");
+    }
+    for mode in [1, 9, 17] {
+        let warning = ime_warning(Some(1), Some(mode));
+        assert_eq!(warning.lines().count(), 1);
+        assert!(warning.contains("press_key"));
+        assert!(warning.contains("type_text and paste are unaffected"));
+    }
+}

@@ -605,3 +605,32 @@ Coordinate input after a wait is rejected with `SCREENSHOT_REQUIRED`, just like
 coordinates after any earlier UI action; batch preflight sends no actions for
 this refusal. A standalone `wait` MCP tool is not added. Final observation and
 optional scope/waitForText behave as for other batches.
+
+## Windows input feedback (0.3.3)
+
+UIA HRESULT messages explicitly describe timeout (`0x80131505`, `0x800705B4`),
+disabled (`0x80040200`), unavailable/virtualized (`0x80040201`), and unsupported
+property/pattern (`0x80040204`) failures. Their existing stable error codes remain
+unchanged; unknown HRESULTs retain system text. Meanings follow Microsoft's
+[UIA error definitions](https://learn.microsoft.com/en-us/windows/win32/winauto/uiauto-error-codes).
+Executable and shortcut-target launch error 740 stays `LAUNCH_FAILED`, explaining
+administrator rights, the elevated-window input limitation, and that the person
+may start it non-elevated (for example `__COMPAT_LAYER=RunAsInvoker`) or run it
+themselves. OpenCU never sets that variable or requests elevation.
+
+Windows `press_key` without `duration` holds keys for 50 ms before release, using
+the same guarded hold/release path. Explicit 0–30 second durations and mouse
+hold defaults are unchanged. No IME mode is changed. A read-only query of the
+target window thread's focused HWND/default IME window adds one `IME:` state
+warning only when both open status and native conversion mode are reported.
+The warning says letter keys from `press_key` may reach the input method instead
+of the app, while `type_text` and `paste` are unaffected.
+
+Detection uses [ImmGetDefaultIMEWnd](https://learn.microsoft.com/en-us/windows/win32/api/imm/nf-imm-immgetdefaultimewnd)
+and bounded (100 ms each) `WM_IME_CONTROL` IMM queries `IMC_GETOPENSTATUS` (5) and
+`IMC_GETCONVERSIONMODE` (1), checking the native bit from Microsoft's
+[conversion mode definitions](https://learn.microsoft.com/en-us/windows/win32/intl/ime-conversion-mode-values).
+These legacy status queries depend on the IME's IMM compatibility support;
+missing/failed queries produce no warning, not a claim of alphanumeric mode.
+No thread attachment, focus change, mode setter or input is used for detection.
+Live Windows IME/provider coverage still needs acceptance.
