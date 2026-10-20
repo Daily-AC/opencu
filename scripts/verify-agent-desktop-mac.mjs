@@ -35,6 +35,7 @@ const run = await mkdtemp(path.join(root, '.cache/agent-desktop-mac/run-'));
 const temporary = path.join(run, 'temporary'); await mkdir(temporary);
 const fixtures = [], clients = [];
 let pointer, pointerProcess, sampleTimer, sampling, activeGuard, failure;
+let pointerClosing = false, pointerAt = 0;
 const abort = reason => {
   if (failure) return;
   failure = reason instanceof Error ? reason : new Error(String(reason));
@@ -141,9 +142,10 @@ async function makeFixture(name, sourceBinary) {
 async function sample() {
   if (sampling) return sampling;
   sampling = (async () => {
-    const value = { at: performance.now(), front: await command('/usr/bin/lsappinfo', ['front']), pointer };
+    const value = { at: performance.now(), front: (await exec('/usr/bin/lsappinfo', ['front'], { timeout: 1000 })).stdout.trim(), pointer };
     report.samples.push(value);
     if (activeGuard) {
+      if (performance.now() - pointerAt > 2000) abort('Pointer sampler stopped reporting during fixture work');
       if (value.front !== activeGuard.front) abort('Foreground changed during automatic fixture work');
       if (!pointer || Math.hypot(pointer.x - activeGuard.pointer.x, pointer.y - activeGuard.pointer.y) > 1) abort('Pointer changed during automatic fixture work');
     }
@@ -187,10 +189,12 @@ try {
   pointerProcess = spawn(monitor, [], { stdio: ['ignore', 'pipe', 'pipe'] });
   createInterface({ input: pointerProcess.stdout }).on('line', line => {
     try {
-      pointer = JSON.parse(line);
+      pointer = JSON.parse(line); pointerAt = performance.now();
       if (activeGuard && Math.hypot(pointer.x - activeGuard.pointer.x, pointer.y - activeGuard.pointer.y) > 1) abort('Physical pointer moved during automatic fixture work');
     } catch (error) { abort(error); }
   });
+  pointerProcess.on('error', abort);
+  pointerProcess.once('close', () => { if (!pointerClosing) abort('Pointer sampler exited unexpectedly'); });
   pointerProcess.stderr.on('data', bytes => abort(bytes.toString()));
   await until(async () => pointer != null, 'pointer sampler');
   sampleTimer = setInterval(() => sample().catch(abort), 50);
@@ -286,6 +290,7 @@ try {
     await assertGone(status); await client.eof();
   });
   await check(6, async () => {
+    await ask('The previous MCP connection is permanently stopped. Authorize two NEW disposable verification connections solely for the pending-consent and idle EOF checks (this is not a reconnect of the stopped connection).');
     for (const pendingConsent of [true, false]) {
       const fresh = new MCP(); await fresh.initialize(); const status = await fresh.desktop('start');
       let pending;
@@ -304,7 +309,7 @@ finally {
     try { if (client.child.exitCode == null && client.child.signalCode == null) await client.eof(); }
     catch (error) { report.cleanupErrors.push(error.message); }
   }
-  pointerProcess?.kill('SIGTERM');
+  pointerClosing = true; pointerProcess?.kill('SIGTERM');
   for (const fixture of fixtures) {
     try {
       const pid = await pidFor(fixture);
