@@ -674,8 +674,10 @@ apply to ordinary operation. Tool stop logs off child apps and can lose unsaved 
 
 Host close and child physical Escape permanently latch `USER_STOPPED` across the
 MCP connection, including late replies during teardown. Status and cleanup can
-still run; switching or reconnecting cannot clear a person's stop. Parent lock or
-disconnect ends the child without automatic resume. Failed cleanup prevents return
+still run; switching or reconnecting cannot clear a person's stop. Parent locking
+keeps the child running; unlock does not restart or replace it. Console/remote
+disconnect and logoff still end the child without automatic resume. Failed cleanup
+prevents return
 to the parent route. See the [Windows contract](windows-engine-contract.md#agent-desktop-040)
 for IPC, setup, measured Windows VM results and the remaining acceptance checks.
 
@@ -686,3 +688,13 @@ Deactivation restores watch-only. Startup also holds WS_EX_NOACTIVATE until the
 bridge is ready, then removes it without activation. These follow-up UI changes
 need Windows re-acceptance, including physical Escape after entering interactive
 mode. They do not change the child or parent engine's input guards.
+
+Windows agent-desktop status reports `parentLocked: true | false` from a read-only
+query of the parent's session, including before helper preparation. Native doctor
+reports `sessionLocked` for its own session; an unknown lock state produces an
+explicit MCP status error, not a guessed false. The child engine's input rules are
+unchanged. While the parent screen is locked the agent keeps working and nobody
+at the machine can see its work. Stop by ending the MCP connection, or after
+unlocking by closing the host window or pressing Escape inside its interactive
+view. Lock/unlock validation stays manual because OpenCU must not obtain a password
+to unlock the parent.

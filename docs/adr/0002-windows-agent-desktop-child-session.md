@@ -24,8 +24,9 @@ Six child rounds of click/click/type_text took about 0.55 seconds each while the
 parent received all twenty Hyper-V keyboard chunks and continuous hardware mouse
 movement, with unchanged parent foreground and no text leakage. Physical Escape
 latched on the next input action, host close logged off immediately without a
-reappearing child in twenty seconds, and MCP EOF left no OpenCU process. Parent
-lock ended the child and nothing resumed after unlock. These are Windows acceptance
+reappearing child in twenty seconds, and MCP EOF left no OpenCU process. Under the original policy, parent
+lock ended the child and nothing resumed after unlock; the owner later changed
+that policy as recorded below. These are Windows acceptance
 measurements, not assumptions inferred from the earlier spike. They do not prove
 the follow-up fixes; see the [measurement details and limits](../windows-engine-contract.md#agent-desktop-040).
 
@@ -93,8 +94,10 @@ clears observations and requires a fresh state read.
 A failed start or lost child transport never falls back to the parent engine.
 Explicit stop must confirm cleanup before routing can return to the parent.
 Normal parent timeout recovery is unchanged; child engine replacement is disabled.
-Host EOF ends ownership. Parent lock/disconnect also stops the child: the child
-itself cannot lock, so its own desktop guard is insufficient.
+Host EOF ends ownership. Following the 2026-10-20 owner decision, parent lock is
+not a stop: the child keeps working. Unlock has no recovery/reconnect behavior.
+Console/remote disconnect and logoff still end ownership. The child's existing
+input and desktop guards remain unchanged.
 
 ## Trade-offs and verification boundary
 
@@ -122,5 +125,12 @@ This follow-up implementation job ran no new Windows GUI acceptance.
 
 A diagnostic variant with the lock handler removed could continue child work and
 WGC capture while the parent was locked, including after thirty seconds and after
-unlock. This is a measured capability only. The chosen policy still ends the child
-on parent lock; no option or behavior change was added.
+unlock. The owner chose this behavior on 2026-10-20: locking means the person has
+stepped away. The agent keeps working while the screen is locked, and nobody at
+the machine can see its work then. The caller can stop it by ending the MCP
+connection; after unlocking the person can close the host window or click its
+view and press Escape. Status exposes a fresh `parentLocked` boolean through a
+read-only query of the parent's session. An unavailable query is an error, not a
+guessed unlocked state. The final policy/status implementation still needs manual
+Windows re-acceptance. The automatic suite does not lock the parent because it
+cannot deterministically unlock without a password, which OpenCU must never obtain.

@@ -3,6 +3,8 @@
 // The parent fixture and launcher need foreground rights to test nonactivation.
 // Disposable fixtures only; do not run this suite from a headless shell.
 // Parent stimuli are SendInput, NOT evidence of hardware/physical Escape behavior.
+// Lock/unlock remains manual: the suite cannot unlock without a password and must
+// never obtain one. Check child continuity plus parentLocked true/false manually.
 import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
 import { cp, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
@@ -24,7 +26,7 @@ const childExe = path.join(temporary, 'OpenCU-Child-Fixture.exe');
 const report = { test: 'windows-agent-desktop', ok: false, checks: [],
   parentStimulus: 'SendInput in parent session; not hardware input',
   manualFollowups: ['deliberate click enables interaction; deactivation returns to watch-only; physical Escape still stops',
-    'parent lock/disconnect regression', 'smart-card sign-in', 'host crash during startup',
+    'parent lock keeps child running; parentLocked true/false; disconnect/logoff still stop (manual unlock only)', 'smart-card sign-in', 'host crash during startup',
     'external minimize, covered or partly off-screen viewport, GPU/video', 'unsupported Windows editions/policies'] };
 let client, parent;
 const check = (name, data = {}) => { report.checks.push({ name, ...data }); console.log(name); };

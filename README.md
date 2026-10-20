@@ -152,10 +152,14 @@ The measurements behind this section are in
 ### Background operation
 
 - **Windows agent desktop (0.4.0).** Windows 11 VM acceptance established separate
-  foreground/input, no-password sign-in/refusal, Escape, close/EOF cleanup and
-  ending on parent lock. Follow-up startup and watch-only fixes need re-acceptance.
+  foreground/input, no-password sign-in/refusal, Escape and close/EOF cleanup.
+  Follow-up startup, watch-only and lock-status changes need re-acceptance.
   Administrator approval is needed once, possibly followed by one sign-out/in;
-  smart-card-only sign-in is unsupported and unmeasured. One child session per
+  smart-card-only sign-in is unsupported and unmeasured. **The agent keeps working
+  while the parent screen is locked; nobody at the machine can see its work then.**
+  Status reports `parentLocked`. After unlocking, close the host window or click
+  the view and press Escape to stop; the caller can also end the MCP connection.
+  Console/remote disconnect and logoff still end the child. One child session per
   machine; apps still share your account, profiles and files. Single-instance apps
   can refuse another instance. External minimize, covered/partly off-screen views,
   GPU/video apps and unsupported Windows editions remain unmeasured. This is UI
@@ -312,6 +316,13 @@ view to interact (the first click selects the mode); switching to another window
 returns it to Watch only. The label shows the current mode. Read fresh
 app state after starting. `{"action":"status"}` reports state and availability;
 `{"action":"stop"}` logs off the child apps, so save their work first.
+
+Locking the parent screen does not pause or stop the child. Its window stays in
+the session but is hidden by the lock screen, so nobody at the machine can see the
+agent's work while locked. `status` reports `parentLocked: true` or `false`.
+Unlocking does not restart anything: the same child and host window remain.
+The caller can stop it while locked by ending the MCP connection. After unlocking,
+close the host window or click into its view and press Escape.
 
 Closing the window or physical Escape inside its focused view permanently stops
 that MCP connection. The agent must not reconnect or restart without your explicit
