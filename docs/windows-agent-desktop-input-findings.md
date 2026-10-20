@@ -1,11 +1,11 @@
 # Windows agent-desktop input findings
 
-2026-10-20, follow-up 3. Scope: the system RDP ActiveX child session, normal user
+2026-10-21, locked-pattern follow-up (not a release). Scope: the system RDP ActiveX child session, normal user
 privileges, no synthetic input on the parent's desktop, no reconnect workaround.
 The Windows measurements below came from the owner's cu-bench acceptance session;
 this implementation job researched APIs and ran local tests, not Windows GUI tests.
 
-## The current evidence
+## Earlier evidence (2026-10-20)
 
 Candidate `987d042` plus acceptance fixes `69a1dae`/`4b7db3b`, packaged as
 `4b6c40d2...`, preserved parent foreground and isolated keyboard text in the
@@ -67,8 +67,8 @@ desktop names passed the Default checks before activation failed. That is an
 inference from the executed guard path, not a captured trace of every handle.
 [OpenInputDesktop](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-openinputdesktop)
 returns a desktop handle; having such a handle is not a foreground authorization.
-The exact foreground HWND/thread and internal Windows reason for refusal were not
-measured here.
+The 2026-10-21 probe below measured NULL foreground and SendInput denial;
+it did not establish an internal Windows explanation for the restriction.
 
 [RDP input synchronization](https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-rdpbcgr/f0ea088b-1398-43f0-af42-f4e027ab2009)
 includes keyboard-state synchronization around client focus changes. This is a
@@ -80,32 +80,100 @@ accepts client-side input without client focus; it does not document a server-si
 foreground grant. Enabling it would also work against watch-only input isolation.
 Rendering suppression is not the observed failure: WGC still returned real content.
 
-No reliable mechanism satisfying the requested boundaries was established. No
+No reliable foreground/synthetic-input mechanism satisfying the requested boundaries was established. No
 focus-bypass candidate, parent input, desktop switch, policy change, elevation or
 automatic reconnect is implemented. This is not a claim that all Windows versions
 can never support locked-parent input; a future mechanism needs reproducible
 Windows evidence before it becomes a supported path.
 
-## Shipped behavior and Windows verification
+## New measurements (owner, 2026-10-21)
 
-The child stays alive while the parent is locked, allowing reads and screenshots.
-The authenticated bridge configures the native engine with its verified parent
-session ID. Only that mode adds a parent-lock guard, before action dispatch and
-at input safety fences. A locked parent returns SCREEN_LOCKED before input instead
-of the incidental PERSON_ACTIVE/ACTIVATION_FAILED. If locking occurs mid-action,
-the error says earlier input may have run; it never falsely promises zero input.
-Person-stop latches take precedence. Ordinary parent-desktop input rules are unchanged.
+The owner ran a disposable WinForms fixture in the child of cu-bench Windows 11
+26H2 while the parent was locked. GetForegroundWindow was NULL, SetForegroundWindow
+failed, and keyboard down/up and absolute mouse SendInput returned zero with
+ERROR_ACCESS_DENIED (5). The supplied summary also reports Unicode-key denial;
+the retained `lockfg-probe.ps1` / `locked-probe-output.txt` log skips typing because
+there was no foreground. These private job artifacts are not published here.
+An MSAA `accDoDefaultAction` returned and the fixture's click counter went from
+1 to 2, while text stayed unchanged. WGC still returned real content. Unlock
+restored ordinary explicit input on the same child.
 
-Readiness confirms that the child engine installed the guard and can query its
-parent's WTS lock state at Medium integrity. Unknown state refuses input. Unlocking
-allows later explicit calls through the existing foreground/human-activity rules;
-nothing is replayed. A refused input still consumes its screenshot grant.
+This distinguishes synthetic input from semantic accessibility calls. The earlier
+2026-10-20 measurements in the unlocked parent found UIA Invoke, Value.SetValue
+and Toggle functional on WinForms, WPF and Chromium (Edge --app), but activating
+the target. That disqualified general same-desktop background UIA. Activation
+inside an agent-owned child is acceptable; it does not authorize UIA operations
+on the person's desktop while locked. Neither measurement accepts the new engine
+implementation across providers.
 
-On Windows verify: required pointer-property setter/readback; the parked-pointer
-check and hardware counterpart; ordinary interactive takeover/Escape; readiness
-and cross-session WTS queries; immediate and thirty-second lock refusals with
-stable SCREEN_LOCKED, unchanged fixture text/counters and retained screenshots;
-explicit post-unlock input on the same connection; and a lock during a long input,
-where partial-outcome wording and held-input cleanup must remain correct. Keep
-foreground-only acceptance, no-activation, setup/sign-in, update, close/EOF and
-no-reconnect checks. Lock/unlock remains manual without supplying OpenCU a password.
+## Branch behavior and acceptance boundary
+
+The 0.4.0 baseline at `1cf23f8` accepted pointer isolation and explicit locked-input
+refusal. This branch keeps version 0.4.0 and has not been released. Only a child
+configured by the authenticated bridge with `--agent-parent-session` and a
+positively verified locked parent enters the new pattern path. Ordinary desktop
+and unlocked-child routing remain unchanged. Unknown parent state refuses input.
+
+Supported actions are plain single-left indexed click (no modifiers/duration),
+ValuePattern `set_value`, and listed `perform_secondary_action`. Click selects
+Invoke, Toggle, SelectionItem.Select, ExpandCollapse, then a nonempty Legacy MSAA
+default action. ExpandCollapse expands collapsed/partially expanded controls,
+collapses expanded controls, and skips leaf nodes. Names and roles do not choose
+a pattern. A failed provider call never triggers another pattern or input replay.
+Missing capability returns UNSUPPORTED_ACTION; read-only Value returns
+ATTRIBUTE_NOT_SETTABLE. RangeValue, scroll, coordinate/modified/multiple clicks,
+typing, keys, paste, drag, activation, waits and launches are not enabled while locked.
+Their SCREEN_LOCKED message identifies the indexed actions that remain available.
+
+A dedicated MTA worker reuses the bounded delivery from the unmerged background
+branch, without that branch's general background mode, scroll or foreground
+comparison. It retains the observed COM identity and validates live attachment,
+window identity, integrity, child desktop, parent lock, monitor and Escape at the
+mutation boundary. Ordinary activity/held keys are ignored only on this locked
+path; a prior interrupted action still requires a read. The normal visible child
+indicator remains, though the parent lock screen hides the child from the person.
+
+The provider deadline is three seconds; an already entered call cannot be
+cancelled. Timeout returns the existing unknown-outcome notice, invalidates
+indexes and stops a batch, with no automatic read or replay. Only one worker can
+be outstanding; further writes (including after unlock) and read-triggered
+launches are blocked until it finishes. Explicit reads remain available. This
+uses the documented [MTA sharing model](https://learn.microsoft.com/en-us/windows/win32/com/processes--threads--and-apartments)
+and accounts for [blocking Invoke providers](https://learn.microsoft.com/en-us/dotnet/api/system.windows.automation.invokepattern.invoke).
+
+After a completed call, the engine reads fresh state using the existing scope.
+Window summaries and accessibility element lines are compared, excluding capture
+and lock guidance. If nothing changed, the response includes that state plus an
+unknown-outcome notice and requires an explicit read. A change is an observation,
+not proof of the requested business effect; asynchronous/provider-internal effects
+can be missed. Failed follow-up reads also report unknown without replay.
+
+The old branch's zero-code Toggle failure is explained by the pinned windows-rs
+0.62.2 source: a successful null pattern pointer becomes `Error::empty()` with
+code zero. The old query treated it as a fatal error while checking Invoke,
+before trying Toggle. The new query inspects raw HRESULT and pointer separately;
+only successful null or UIA_E_NOTSUPPORTED means absent. Actual failures propagate.
+The offline regression exercises this distinction; the real checkbox still needs
+Windows verification.
+
+**New path: Windows acceptance required.** From an authorized idle VM's foreground
+terminal with child sessions already set up, run:
+
+```powershell
+node scripts/verify-agent-desktop-win.mjs --allow-desktop --locked-parent
+```
+
+At the prompt, manually lock the parent with Win+L and leave it locked. The suite
+waits for parentLocked=true, captures the child, clicks the fixture button once,
+sets its text through ValuePattern, and confirms type_text returns SCREEN_LOCKED
+with unchanged counter/text. It asks for manual unlock only after those checks,
+then checks the same session/host and no replay. It never collects credentials or
+unlocks automatically. Evidence stays in ignored `.cache/agent-desktop-acceptance-*`.
+
+Also verify Toggle (including absent Invoke), SelectionItem, ExpandCollapse and
+MSAA-only controls, named secondary actions, disabled/read-only/missing patterns,
+a no-op provider, modal/late completion, pending-write refusal, lock/unlock during
+action, unknown lock state, and physical Escape. Keep the unlocked 40-check suite
+and setup/update/watch-only/pointer isolation/close/EOF regressions. Disconnect and
+logoff must still end the child; unlocking must never revive a stopped connection.
+No Windows GUI test was run from the implementation Mac.
