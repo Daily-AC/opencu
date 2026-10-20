@@ -651,7 +651,8 @@ are not evidence of their GUI/provider behavior.
 MCP exposes `agent_desktop({action: "start" | "stop" | "status"})`. Windows uses
 a visible loopback child session and routes **all** app tools to its engine until
 tool stop completes. The Windows engine's JSON-lines methods and foreground
-guards are unchanged. macOS returns `UNSUPPORTED_ON_MACOS` for this tool; normal
+guards are unchanged. macOS implements the same action-only lifecycle using a consented virtual display
+(see [ADR 0003](adr/0003-macos-agent-desktop-virtual-display.md)); normal
 macOS tools and the experimental direct display methods retain their behavior.
 
 One-time enablement uses normal PowerShell:

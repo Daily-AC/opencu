@@ -1,5 +1,13 @@
 # Experimental agent display probe
 
+> Historical feasibility evidence. The product path now uses `agent_desktop` with
+> a native preview, local per-window consent, multiple restoration records and a
+> connection-wide stop latch. Run `scripts/verify-agent-desktop-mac.mjs --owner-present`
+> for product acceptance; do not treat the old two-connection probe as product
+> consent or lifecycle verification. This history and its measured limitations
+> remain relevant. External monitors and the new product UI are not yet verified.
+
+
 This is a feasibility experiment, not a claim that macOS offers an invisible or
 isolated desktop. Reviewer run 7 on 2026-10-16 passed all window/input checks and preserved the
 foreground and pointer; only display-removal observation failed (the subsequent
@@ -236,9 +244,12 @@ and Screen Recording grants already present, from this worktree run:
 node scripts/probe-agent-display.mjs
 ```
 
-On the owner's macOS 26, the screenshot check is now expected to fail clearly
-before capture and enter cleanup; it must not pass based on the old PNG evidence.
-This still exercises create/move/restore/removal for reviewer revalidation.
+Historical note: an earlier capture-responsibility implementation expected this
+check to refuse capture on macOS 26. The current independent launchd worker permits
+capture with verified responsibility and an existing Screen Recording grant. The
+periodic macOS 15+ confirmation can still take foreground (about every 30 days per
+executable location on the owner's machine); neither preview nor window capture
+suppresses it. Product acceptance must stop input if the confirmation appears.
 
 The script uses `bin/opencu engine` for the experimental API and a separate normal
 `bin/opencu` MCP connection for observation/input. It compiles a disposable AppKit

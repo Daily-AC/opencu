@@ -160,7 +160,7 @@ Console/remote disconnect and logoff still end the child. A caller can stop it
 while locked by ending MCP stdin; after unlocking the person can close the host
 window or click the view and press Escape. Lock/error validation remains manual
 without collecting an unlock password. The feature is not a file/account sandbox;
-macOS returns `UNSUPPORTED_ON_MACOS`.
+macOS uses the virtual-display lifecycle below.
 
 When Windows reports childSessionsEnabled=false, doctor/availability explicitly
 requires one-time setup and gives the installed launcher command. Missing derived
@@ -168,6 +168,49 @@ helpers on an already-enabled machine still prepare automatically. A successful
 probe reports `existingChildSession: null` when none exists, not a DWORD sentinel.
 See the [Windows contract](windows-engine-contract.md#agent-desktop-040) and
 [focus/cursor investigation](windows-agent-desktop-input-findings.md).
+
+## macOS agent desktop
+
+Keep the same strict action-only schema and existing tool annotations. macOS
+start automatically creates a nonactivating watch-only preview and a virtual
+display. It does not use a sharing picker or introduce a second login session.
+Normal per-window screenshots remain unchanged. The macOS 15+ periodic capture
+confirmation may take foreground, approximately monthly per executable location;
+OpenCU stops input if it does. Preview uses the existing Screen Recording grant
+and independently verified worker responsibility.
+
+Only explicit `get_app_state` may show a local 60-second per-window Move once / Keep
+here card. Agent arguments cannot approve it. A decline/expiry returns text-only
+reduced state (`_meta["opencu/agentDesktop"].windowState`); mutations are refused with
+`AGENT_DESKTOP_CONSENT_REQUIRED`. Internal reads and batch final reads never prompt.
+Do not replay an input after consent or after a timeout. A host may cancel the
+pending tool; its approval cannot subsequently move the window. Status/stop use a
+control lane and remain callable while the normal tool is waiting. Allow at least
+90 seconds for a call awaiting local consent; cancellation is not approval.
+
+All mutating app tools are restricted to exact admitted windows on that display.
+Read-only inventory/state outside it is necessary for choosing a consent target.
+`activate_app` is refused; opaque/foreground-only apps remain unsupported. An app
+may initially launch on the person's display. The preview never forwards input.
+This is narrower than Windows' session isolation and click-to-interact behavior.
+
+Tool stop restores the admitted windows' saved frames and sizes, leaves apps and
+unsaved documents open, and confirms virtual-display removal in a fresh process.
+Windows dragged back by the person lose admission and are left there. Host close,
+its Stop button and menu-bar Stop send a native event and permanently latch
+`STOPPED_BY_PERSON` even while idle. All app tools/start are then refused; only
+status/cleanup remain available. Tool stop cannot clear that latch. MCP EOF cleans
+up without another tool call. Failed cleanup retains diagnostics and blocks normal
+routing. No worker replacement, stream restart, display recreation or action replay
+is allowed in desktop mode. Normal macOS mode's existing recovery is unchanged.
+
+Unlike Windows, macOS pauses while locked: `parentLocked: true`, `ready: false`,
+`SCREEN_LOCKED`; ownership survives for cleanup and a fresh observation is required
+after unlock. External monitors remain untested. Layout changes fail and clean up
+with `AGENT_DISPLAY_LAYOUT_CHANGED`. There is one display per connection/GUI
+session; a second owner gets `AGENT_DISPLAY_BUSY`. Status reports the native worker,
+preview health, pending consent, restoration records, generation and cleanup result;
+it does not invent a Windows session ID.
 
 ## Compatibility
 
