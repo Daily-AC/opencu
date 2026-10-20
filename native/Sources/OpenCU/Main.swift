@@ -166,7 +166,7 @@ final class Engine {
 }
 
 func permissions() -> [String: Any] {
-    ["engine": "opencu", "version": "0.3.2", "platform": "macos",
+    ["engine": "opencu", "version": "0.3.3", "platform": "macos",
      "accessibility": AXIsProcessTrusted(), "screenRecording": CGPreflightScreenCaptureAccess(), "screenLocked": desktopLocked(),
      "ownPermissions": EngineResponsibility.verified, "captureContext": EngineResponsibility.json,
      "workerPID": getpid(), "responsiblePID": EngineResponsibility.responsiblePID().map { $0 as Any } ?? NSNull(),
@@ -202,7 +202,7 @@ struct OpenCUMain {
             }
             return
         }
-        if CommandLine.arguments.contains("--version") { print("opencu-engine 0.3.2"); return }
+        if CommandLine.arguments.contains("--version") { print("opencu-engine 0.3.3"); return }
         let arguments = Array(CommandLine.arguments.dropFirst())
         if arguments == ["serve"] { exit(WorkerLauncher.relay(mode: "serve")) }
         if arguments == ["--doctor"] { exit(WorkerLauncher.relay(mode: "doctor")) }
