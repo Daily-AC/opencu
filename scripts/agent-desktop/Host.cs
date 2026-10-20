@@ -23,6 +23,13 @@ namespace OpenCUAgentDesktop {
     sealed class SetupRequiredException : IOException {
         internal SetupRequiredException(string reason) : base(reason + " Run in PowerShell: " + Tasks.SetupCommand) { }
     }
+    static class ParentSessionPolicy {
+        internal static bool EndsDesktop(int reason) {
+            // Lock (7) and unlock (8) preserve the existing child and transport.
+            // Console/remote disconnect (2/4) and logoff (6) still end ownership.
+            return reason == 2 || reason == 4 || reason == 6;
+        }
+    }
     static class Native {
         [DllImport("wtsapi32.dll", SetLastError=true)] internal static extern bool WTSIsChildSessionsEnabled(out bool enabled);
         [DllImport("wtsapi32.dll", SetLastError=true)] internal static extern bool WTSGetChildSessionId(out uint session);
@@ -301,8 +308,9 @@ namespace OpenCUAgentDesktop {
             base.OnHandleCreated(e); Native.Check(Native.WTSRegisterSessionNotification(Handle, 0));
         }
         protected override void WndProc(ref Message message) {
-            if (message.Msg == 0x2B1 && (message.WParam.ToInt32() == 7 || message.WParam.ToInt32() == 4 || message.WParam.ToInt32() == 2))
-                Fail("SCREEN_LOCKED", "The parent desktop locked or disconnected. Agent desktop ended; it will not resume automatically.");
+            if (!closing && message.Msg == 0x2B1 && message.LParam.ToInt32() == parent.SessionId &&
+                ParentSessionPolicy.EndsDesktop(message.WParam.ToInt32()))
+                Fail("SCREEN_LOCKED", "The parent session disconnected or logged off. Agent desktop ended; it will not resume automatically.");
             base.WndProc(ref message);
         }
         void Connect() {
@@ -496,6 +504,12 @@ namespace OpenCUAgentDesktop {
         }
         static void SelfTest() {
             // Real Windows named pipes, no window, task, child session or input.
+            foreach (int reason in new int[] { 2, 4, 6 }) {
+                if (!ParentSessionPolicy.EndsDesktop(reason)) throw new Exception("Disconnect/logoff must end the agent desktop.");
+            }
+            foreach (int reason in new int[] { 1, 3, 5, 7, 8, 9, 10, 11 }) {
+                if (ParentSessionPolicy.EndsDesktop(reason)) throw new Exception("Lock/unlock or another notification must not end the agent desktop.");
+            }
             string token = Protocol.Token();
             if (Native.ChildResult(false, UInt32.MaxValue, 50) != UInt32.MaxValue ||
                 Native.ChildResult(true, UInt32.MaxValue, 0) != UInt32.MaxValue ||
@@ -551,7 +565,7 @@ namespace OpenCUAgentDesktop {
                     if (!Protocol.Equal(token, Protocol.Deadline(() => Protocol.Read(reader, 64), 3000))) throw new Exception("Valid wire token refused.");
                 }
             }
-            Protocol.Output(new { ok=true, checks=new string[] { "no-child-result", "lf-crlf-bound", "lf-writer", "token-length-and-value", "handshake-bound", "first-pipe-instance", "peer-pid-lifetime", "peer-session", "peer-sid", "wire-token" } });
+            Protocol.Output(new { ok=true, checks=new string[] { "parent-session-policy", "no-child-result", "lf-crlf-bound", "lf-writer", "token-length-and-value", "handshake-bound", "first-pipe-instance", "peer-pid-lifetime", "peer-session", "peer-sid", "wire-token" } });
         }
         static void Bridge(string descriptor) {
             if (new FileInfo(descriptor).Length > 16384) throw new IOException("Descriptor too large.");
