@@ -72,11 +72,18 @@ export async function parentSessionLocked(root, run = runAgentDesktopHelper) {
   return doctor.sessionLocked;
 }
 
-export async function agentDesktopAvailability(root, platform = process.platform) {
+export async function agentDesktopAvailability(root, platform = process.platform, { run = runAgentDesktopHelper, helperPath = agentDesktopHelper } = {}) {
   if (platform !== 'win32') return { available: false, code: 'UNSUPPORTED_ON_MACOS' };
   try {
-    const helper = await agentDesktopHelper(root);
-    return await runAgentDesktopHelper(helper, ['probe']);
+    const native = await run(defaultEnginePath(root, 'win32'), ['--doctor']);
+    if (native.childSessionsEnabled === false) {
+      return { available: false, childSessionsEnabled: false, code: 'AGENT_DESKTOP_UNAVAILABLE', setupRequired: true,
+        setupCommand: agentDesktopSetupCommand(root),
+        message: `Windows child sessions are disabled; one-time setup is required. Run in PowerShell: ${agentDesktopSetupCommand(root)}` };
+    }
+    if (native.childSessionsEnabled !== true) throw error('AGENT_DESKTOP_UNAVAILABLE', 'Windows could not report whether child sessions are enabled.');
+    const helper = await helperPath(root);
+    return await run(helper, ['probe']);
   } catch (cause) {
     return { available: false, code: cause.code ?? 'AGENT_DESKTOP_UNAVAILABLE', message: cause.message,
       setupRequired: cause.setupRequired === true,
@@ -88,7 +95,7 @@ const preparations = new Map();
 export async function prepareAgentDesktop(root, { availability = agentDesktopAvailability, run = runAgentDesktopHelper } = {}) {
   const capability = await availability(root);
   if (capability.available) return capability;
-  if (!capability.setupRequired) throw error(capability.code ?? 'AGENT_DESKTOP_UNAVAILABLE', capability.message);
+  if (!capability.setupRequired || capability.childSessionsEnabled === false) throw error(capability.code ?? 'AGENT_DESKTOP_UNAVAILABLE', capability.message);
   // Same-process callers share preparation; the script also holds an installation
   // mutex across processes. Preparation never connects a child or replays input.
   if (!preparations.has(root)) preparations.set(root, (async () => {

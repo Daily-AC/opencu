@@ -65,7 +65,7 @@ public class OpenCUTypeLibrary : ITypeLibImporterNotifySink {
     if (!$enabled) {
         # This branch must refuse before any elevation when called by the runtime.
         if ($PrepareOnly) {
-            $missing = New-Object InvalidOperationException("Windows child sessions are disabled. Run in PowerShell: $setupCommand")
+            $missing = New-Object InvalidOperationException("Windows child sessions are disabled; one-time setup is required. Run in PowerShell: $setupCommand")
             $missing.Data['setupRequired'] = $true
             throw $missing
         }
