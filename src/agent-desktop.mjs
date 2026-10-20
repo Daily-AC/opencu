@@ -74,7 +74,7 @@ export async function parentSessionLocked(root, run = runAgentDesktopHelper) {
 }
 
 export async function agentDesktopAvailability(root, platform = process.platform, { run = runAgentDesktopHelper, helperPath = agentDesktopHelper } = {}) {
-  if (platform === 'darwin') return { available: true, kind: 'virtual_display', verification: 'native start validates permissions and display capability' };
+  if (platform === 'darwin') return { kind: 'virtual_display', verification: 'native start validates permissions and display capability' };
   if (platform !== 'win32') return { available: false, code: 'AGENT_DESKTOP_UNAVAILABLE' };
   try {
     const native = await run(defaultEnginePath(root, 'win32'), ['--doctor']);
