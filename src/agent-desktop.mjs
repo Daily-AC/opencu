@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 import { createInterface } from 'node:readline';
 import path from 'node:path';
 import { OpenCURuntime, defaultEnginePath } from './opencu-runtime.mjs';
+import { MacAgentDesktopRuntime } from './agent-desktop-mac.mjs';
 
 export const agentDesktopSetupCommand = root => root
   ? `& '${path.win32.join(root, 'bin', 'opencu.cmd').replaceAll("'", "''")}' setup agent-desktop`
@@ -73,7 +74,8 @@ export async function parentSessionLocked(root, run = runAgentDesktopHelper) {
 }
 
 export async function agentDesktopAvailability(root, platform = process.platform, { run = runAgentDesktopHelper, helperPath = agentDesktopHelper } = {}) {
-  if (platform !== 'win32') return { available: false, code: 'UNSUPPORTED_ON_MACOS' };
+  if (platform === 'darwin') return { available: true, kind: 'virtual_display', verification: 'native start validates permissions and display capability' };
+  if (platform !== 'win32') return { available: false, code: 'AGENT_DESKTOP_UNAVAILABLE' };
   try {
     const native = await run(defaultEnginePath(root, 'win32'), ['--doctor']);
     if (native.childSessionsEnabled === false) {
@@ -181,6 +183,7 @@ export class NativeAgentDesktop {
 
 // One router per MCP connection; there is deliberately no target-session option.
 export class AgentDesktopRuntime {
+  #mac;
   #options;
   #parent;
   #childRuntime;
@@ -194,6 +197,7 @@ export class AgentDesktopRuntime {
   #fresh = false;
   #closing = false;
   constructor(options = {}) {
+    if ((options.platform ?? process.platform) === 'darwin') { this.#mac = new MacAgentDesktopRuntime(options); return; }
     this.#options = options;
     this.#factory = options.runtimeFactory ?? (config => new OpenCURuntime(config));
     this.#parent = this.#newRuntime();
@@ -216,6 +220,7 @@ export class AgentDesktopRuntime {
     this.#state = this.#personStop ? 'stopped' : 'failed';
   };
   async call(method, args = {}, signal) {
+    if (this.#mac) return await this.#mac.call(method, args, signal);
     const run = this.#tail.then(async () => {
       if (this.#closing) throw new Error('OpenCU is closing.');
       if (signal?.aborted) throw new Error('Request cancelled; no operation was retried.');
@@ -250,7 +255,7 @@ export class AgentDesktopRuntime {
     if (Object.keys(args).some(key => key !== 'action') || !['start', 'stop', 'status'].includes(args.action)) {
       throw error('INVALID_ARGUMENT', 'agent_desktop accepts only action: start, stop or status. No credentials or connection parameters are accepted.');
     }
-    if ((this.#options.platform ?? process.platform) !== 'win32') throw error('UNSUPPORTED_ON_MACOS', 'Agent desktop is not available on macOS yet.');
+    if ((this.#options.platform ?? process.platform) !== 'win32') throw error('AGENT_DESKTOP_UNAVAILABLE', 'Agent desktop supports macOS and Windows.');
     if (args.action === 'status') {
       const availability = this.#options.availability ?? agentDesktopAvailability;
       const lockState = this.#options.parentLockState ?? parentSessionLocked;
@@ -300,6 +305,7 @@ export class AgentDesktopRuntime {
     this.#childRuntime = undefined; this.#host = undefined;
   }
   async close() {
+    if (this.#mac) return await this.#mac.close();
     this.#closing = true;
     await this.#disposeDesktop();
     await this.#parent?.close();
