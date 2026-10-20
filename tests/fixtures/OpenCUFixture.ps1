@@ -10,18 +10,35 @@ using System.Windows.Forms;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
-// Real positive-size child geometry under an intentionally zero-size accessibility
-// container. Layout remains visible so provider clipping cannot hide the child.
-public class ZeroBoundsPanel : Panel {
-    protected override AccessibleObject CreateAccessibilityInstance() { return new ZeroBoundsAccessible(this); }
-    class ZeroBoundsAccessible : ControlAccessibleObject {
-        readonly ZeroBoundsPanel panel;
-        public ZeroBoundsAccessible(ZeroBoundsPanel p) : base(p) { panel=p; }
+// Chromium-style zero-size accessibility fragment without its own HWND: UIA
+// reports MSAA bounds for these, unlike HWND-backed panels whose window rect wins.
+public class ZeroHost : Control {
+    protected override AccessibleObject CreateAccessibilityInstance() { return new HostAccessible(this); }
+    class HostAccessible : ControlAccessibleObject {
+        readonly ZeroContainer container;
+        public HostAccessible(ZeroHost h) : base(h) { container=new ZeroContainer(this, h); }
+        public override int GetChildCount() { return 1; }
+        public override AccessibleObject GetChild(int index) { return index==0 ? container : null; }
+    }
+    class ZeroContainer : AccessibleObject {
+        readonly AccessibleObject parent; readonly ZeroChild child;
+        public ZeroContainer(AccessibleObject p, ZeroHost h) { parent=p; child=new ZeroChild(this, h); }
+        public override string Name { get { return "Fixture zero container"; } set { } }
+        public override AccessibleRole Role { get { return AccessibleRole.Grouping; } }
+        public override AccessibleStates State { get { return AccessibleStates.None; } }
         public override Rectangle Bounds { get { return Rectangle.Empty; } }
-        public override int GetChildCount() { return panel.Controls.Count; }
-        public override AccessibleObject GetChild(int index) {
-            return index>=0 && index<panel.Controls.Count ? panel.Controls[index].AccessibilityObject : null;
-        }
+        public override AccessibleObject Parent { get { return parent; } }
+        public override int GetChildCount() { return 1; }
+        public override AccessibleObject GetChild(int index) { return index==0 ? child : null; }
+    }
+    class ZeroChild : AccessibleObject {
+        readonly AccessibleObject parent; readonly ZeroHost host;
+        public ZeroChild(AccessibleObject p, ZeroHost h) { parent=p; host=h; }
+        public override string Name { get { return "Fixture zero child"; } set { } }
+        public override AccessibleRole Role { get { return AccessibleRole.StaticText; } }
+        public override AccessibleStates State { get { return AccessibleStates.ReadOnly; } }
+        public override Rectangle Bounds { get { return host.RectangleToScreen(host.ClientRectangle); } }
+        public override AccessibleObject Parent { get { return parent; } }
     }
 }
 public class FixtureInputCounter : IMessageFilter {
@@ -131,8 +148,7 @@ public class OpenCUFixture : Form {
         var scopeButton=new Button();scopeButton.AccessibleName="Fixture scope counter";scopeButton.Text="Fixture scope counter";scopeButton.Dock=DockStyle.Fill;
         scopeButton.Click += delegate { scopeClicks++;Save(); };
         nested.Controls.Add(scopeButton);scopePanel.Controls.Add(nested);
-        var zero=new ZeroBoundsPanel();zero.AccessibleName="Fixture zero container";zero.SetBounds(20,535,620,20);
-        var zeroChild=new Label();zeroChild.AccessibleName="Fixture zero child";zeroChild.Text="Fixture zero child";zeroChild.SetBounds(0,0,600,20);zero.Controls.Add(zeroChild);
+        var zero=new ZeroHost();zero.AccessibleName="Fixture zero host";zero.SetBounds(20,535,620,20);
         Controls.AddRange(new Control[]{counter,notes,check,password,marker,slider,scrolling,dragPanel,modalButton,scopePanel,zero});
         timer.Interval=100;timer.Tick += delegate {
             if(File.Exists(command)) { string cmd; try { cmd=File.ReadAllText(command).Trim();File.Delete(command); } catch(IOException) { return; } // Antivirus or the writer may still hold it; retry next tick.
