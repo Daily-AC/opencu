@@ -448,3 +448,61 @@ test('gone-scope fallback cannot satisfy waitForText with text outside the retai
   assert.equal(result._meta['opencu/error'], 'WAIT_TIMEOUT');
   assert.ok(result.content.some(c => c.text?.includes('Scope element is gone')));
 });
+
+// Protocol/routing tests only; provider behavior requires Windows acceptance.
+const lockedResult = next => ({ ok: true, lockedPattern: true, pattern: 'Invoke', app: state.app, state: next });
+test('locked patterns return their fresh state and ordinary Windows actions retain final reads', async t => {
+  const changed = { ...state, text: state.text.replace('initial', 'locked value') };
+  const f = await fixture(t, [{ result: state }, { result: lockedResult(changed) },
+    { result: { ok: true } }, { result: changed }], 'win32');
+  await f.call('get_app_state', { app: 'Fixture' });
+  const result = await f.call('set_value', { app: 'Fixture', element_index: 2, value: 'locked value' });
+  assert.equal(result.content[0].text, changed.text);
+  assert.deepEqual((await f.calls()).map(x => x.method), ['get_app_state', 'set_value']);
+  await f.call('click', { app: 'Fixture', element_index: 1 });
+  assert.deepEqual((await f.calls()).map(x => x.method), ['get_app_state', 'set_value', 'click', 'get_app_state']);
+});
+
+test('a locked pattern with no observed change returns state, stops its batch and requires a read', async t => {
+  const unknown = { ...lockedResult(state), outcome: 'unknown', message: 'Pattern returned success, but no accessibility change was observed.' };
+  const f = await fixture(t, [{ result: state }, { result: unknown }, { result: state },
+    { result: lockedResult(state) }], 'win32');
+  await f.call('get_app_state', { app: 'Fixture' });
+  const result = await f.call('run_actions', { app: 'Fixture', actions: [
+    { method: 'perform_secondary_action', element_index: 1, action: 'Invoke' },
+    { method: 'type_text', text: 'must not run' },
+  ] });
+  assert.equal(result._meta['opencu/actionOutcome'], 'unknown');
+  assert.equal(result._meta['opencu/actionsAttempted'], 1);
+  assert.deepEqual(result.content.map(c => c.text), [unknown.message, state.text]);
+  const refused = await f.call('click', { app: 'Fixture', element_index: 1 });
+  assert.equal(refused._meta['opencu/error'], 'OBSERVATION_REQUIRED');
+  assert.deepEqual((await f.calls()).map(x => x.method), ['get_app_state', 'perform_secondary_action']);
+  const refreshed = await f.call('get_app_state', { app: 'Fixture' });
+  assert.equal(refreshed.content[0].text, state.text, 'Required read returns full indexes');
+  await f.call('click', { app: 'Fixture', element_index: 1 });
+  assert.deepEqual((await f.calls()).map(x => x.method), ['get_app_state', 'perform_secondary_action', 'get_app_state', 'click']);
+});
+
+test('locked provider timeout neither observes automatically nor replays; pending fence survives a read', async t => {
+  const unknown = { ...unknownAction, lockedPattern: true };
+  const f = await fixture(t, [{ result: unknown }, { result: state },
+    { error: { code: 'PATTERN_ACTION_PENDING', message: 'A provider is still outstanding.' } }], 'win32');
+  const result = await f.call('run_actions', { app: 'Fixture', actions: [
+    { method: 'click', element_index: 1 }, { method: 'set_value', element_index: 2, value: 'later' },
+  ] });
+  assert.equal(result._meta['opencu/actionOutcome'], 'unknown');
+  assert.deepEqual((await f.calls()).map(x => x.method), ['click']);
+  await f.call('get_app_state', { app: 'Fixture' });
+  const pending = await f.call('set_value', { app: 'Fixture', element_index: 2, value: 'later' });
+  assert.equal(pending._meta['opencu/error'], 'PATTERN_ACTION_PENDING');
+  assert.deepEqual((await f.calls()).map(x => x.method), ['click', 'get_app_state', 'set_value']);
+});
+
+test('a locked pattern batch can request a final screenshot without repeating a pattern', async t => {
+  const f = await fixture(t, [{ result: lockedResult(state) }, { result: state }], 'win32');
+  await f.call('run_actions', { app: 'Fixture', includeScreenshot: true, actions: [{ method: 'click', element_index: 1 }] });
+  const calls = await f.calls();
+  assert.deepEqual(calls.map(x => x.method), ['click', 'get_app_state']);
+  assert.equal(calls[1].params.includeScreenshot, true);
+});

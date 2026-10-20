@@ -33,6 +33,7 @@ export class OpenCURuntime {
   #retiring;
   #retiringChild;
   #needsObservation = false;
+  #unconfirmedPattern = false;
   #requestTimeoutMs;
   #coordinates = new CoordinateState();
   #lastText = new Map();
@@ -145,6 +146,7 @@ export class OpenCURuntime {
         continue;
       }
       this.#needsObservation = false;
+      this.#unconfirmedPattern = false;
       const scopeGone = scope !== undefined && result.scopeRoot?.startsWith('gone:');
       if (!waitForText || !scopeGone && result.text.split('\n').some(line => /^\s*\[\d+\] /.test(line) && line.includes(waitForText))) return result;
       if (Date.now() >= deadline) {
@@ -186,6 +188,9 @@ export class OpenCURuntime {
       if (this.#needsObservation && (inputs.has(method) || ['activate_app', 'run_actions'].includes(method))) {
         throw Object.assign(new Error('The engine timed out and must restart. Read fresh app state before input; no operation was retried.'), { code: 'OBSERVATION_REQUIRED' });
       }
+      if (this.#unconfirmedPattern && method !== 'get_app_state') {
+        throw Object.assign(new Error('A control pattern has an unconfirmed outcome. Read get_app_state before continuing; do not replay it.'), { code: 'OBSERVATION_REQUIRED' });
+      }
       if (args.scope !== undefined) {
         if (this.#platform !== 'win32') throw Object.assign(new Error('scope is Windows-only for now.'), { code: 'INVALID_ARGUMENT' });
         if (!Number.isSafeInteger(args.scope) || args.scope < 1) throw Object.assign(new Error('scope must be a positive integer.'), { code: 'INVALID_ARGUMENT' });
@@ -193,6 +198,7 @@ export class OpenCURuntime {
       this.#coordinates.before(method, args);
       let options = args;
       let completed = 0;
+      let patternState;
       if (inputs.has(method) || method === 'run_actions') {
         const { app, scope, ...parameters } = args;
         const actions = method === 'run_actions' ? args.actions : [{ method, ...parameters }];
@@ -207,12 +213,15 @@ export class OpenCURuntime {
           try {
             const result = await this.#request(action, { ...params, app }, signal);
             completed++;
+            patternState = result.lockedPattern ? result.state : undefined;
             if (result.outcome === 'unknown') {
               // An AX timeout can mean that the action replaced its own window.
               // Stop the batch; no automatic observation, retry or later input.
-              this.#lastText.clear();
+              if (result.lockedPattern) this.#unconfirmedPattern = true;
+              const observed = patternState ? this.#stateResult(patternState, { disableDiff: true }).content : [];
+              this.#lastText.clear(); // The required explicit read must return complete indexes.
               return this.#coordinates.after(method, args, {
-                content: [{ type: 'text', text: result.message }],
+                content: [{ type: 'text', text: result.message }, ...observed],
                 _meta: { 'opencu/app': result.app, 'opencu/engine': 'independent',
                   'opencu/actionOutcome': 'unknown', 'opencu/actionsAttempted': completed },
               });
@@ -226,8 +235,14 @@ export class OpenCURuntime {
       }
       let response;
       try {
-        if (completed) await pause(100); // Let queued native input reach its app.
-        response = this.#stateResult(await this.#observe(method === 'activate_app' ? method : 'get_app_state', options, signal), options);
+        if (patternState && !options.includeScreenshot && !options.waitForText && options.scope === undefined) {
+          // The locked-pattern path already read fresh state for this step. Reuse
+          // that observation so its indexes and unknown-outcome check agree.
+          response = this.#stateResult(patternState, options);
+        } else {
+          if (completed) await pause(100); // Let queued native input reach its app.
+          response = this.#stateResult(await this.#observe(method === 'activate_app' ? method : 'get_app_state', options, signal), options);
+        }
       } catch (error) {
         if (completed) error.message = `All ${completed} actions returned, but their final observation failed. Do not repeat them; inspect state. ${error.message}`;
         response = toolError(error);

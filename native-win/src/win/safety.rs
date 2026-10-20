@@ -44,7 +44,7 @@ pub unsafe fn configure_agent_parent(session: u32) -> Result<()> {
     AGENT_PARENT_SESSION.set(session)
         .map_err(|_| Error::new("INVALID_ARGUMENT", "Agent parent session is already configured"))
 }
-unsafe fn parent_input_allowed(before_input: bool) -> Result<()> {
+pub unsafe fn parent_input_allowed(before_input: bool) -> Result<()> {
     let parent = agent_parent_session();
     let locked = parent.and_then(|id| super::session_locked(id));
     opencu_engine::agent_parent_input_policy(parent.is_some(), locked, before_input)
@@ -161,7 +161,7 @@ unsafe extern "system" fn escape_hook(code: i32, wp: WPARAM, lp: LPARAM) -> LRES
     }
     CallNextHookEx(None, code, wp, lp)
 }
-fn user_stopped() -> Error {
+pub fn user_stopped() -> Error {
     Error::new("USER_STOPPED", "A person stopped OpenCU with Escape. All later input and activation on this connection are disabled; do not reconnect automatically.")
 }
 unsafe extern "system" fn proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
@@ -568,5 +568,64 @@ impl Drop for AttachedInput {
                 let _ = AttachThreadInput(self.caller, thread, false);
             }
         }
+    }
+}
+
+/// Only the authenticated agent-child mode can use this guard. Keep it separate
+/// from Guard so a pattern permit can never authorize foreground/synthetic input.
+pub unsafe fn locked_pattern_request(method: &str, args: &serde_json::Value) -> bool {
+    let parent = agent_parent_session();
+    opencu_engine::locked_patterns::use_patterns(parent.is_some(),
+        parent.and_then(|id| super::session_locked(id)), method, args)
+}
+unsafe fn require_locked_parent() -> Result<()> {
+    if agent_parent_session().and_then(|id| super::session_locked(id)) != Some(true) {
+        return Err(Error::new("SCREEN_LOCKED", "The parent lock state changed or cannot be verified. Remaining pattern delivery stopped; an earlier call may have run. Read state; no action was replayed."));
+    }
+    Ok(())
+}
+pub struct LockedFence(mpsc::Sender<Command>);
+impl LockedFence {
+    pub unsafe fn check(&self) -> Result<()> {
+        let (tx, rx) = mpsc::channel();
+        self.0.send(Command::Fence(tx)).map_err(|_| monitor_error())?;
+        rx.recv_timeout(Duration::from_millis(500)).map_err(|_| monitor_error())?;
+        if STOPPED.load(SeqCst) { return Err(user_stopped()); }
+        if FAILED.load(SeqCst) || GetTickCount64().saturating_sub(HEARTBEAT.load(SeqCst)) > 500 {
+            return Err(monitor_error());
+        }
+        require_locked_parent()?;
+        desktop()
+    }
+}
+pub struct LockedGuard<'a> {
+    _visible: super::indicator::Active<'a>,
+    indicator: &'a super::indicator::Indicator,
+    fence: LockedFence,
+}
+impl LockedGuard<'_> {
+    pub fn worker_fence(&self) -> LockedFence { LockedFence(self.fence.0.clone()) }
+    pub unsafe fn check(&self) -> Result<()> {
+        if let Err(error) = self.fence.check() {
+            if error.code == "USER_STOPPED" { self.indicator.hide(); }
+            return Err(error);
+        }
+        self.indicator.check()
+    }
+    pub unsafe fn finish(&self) -> Result<()> { self.check() }
+}
+impl Monitor {
+    pub unsafe fn begin_locked<'a>(&self, indicator: &'a super::indicator::Indicator) -> Result<LockedGuard<'a>> {
+        let fence = LockedFence(self.tx.clone());
+        if let Err(error) = fence.check() {
+            if error.code == "USER_STOPPED" { indicator.hide(); }
+            return Err(error);
+        }
+        if NEEDS_OBSERVATION.load(SeqCst) {
+            return Err(Error::new("OBSERVATION_REQUIRED", "Human activity interrupted earlier input; read app state before a new action"));
+        }
+        // RDP lock transitions can generate activity without a person using the
+        // child. Ignore ordinary activity/held keys only in this locked path.
+        Ok(LockedGuard { _visible: indicator.begin()?, indicator, fence })
     }
 }

@@ -216,7 +216,7 @@ test('automatic setup gates UAC and repairs only the directory DACL', async () =
   assert.doesNotMatch(source, /\$acl\.SetOwner|^Set-Acl\b/m);
 });
 
-test('parent lock keeps reads available and input refusals do not stop or replace the child', async t => {
+test('parent lock routes patterns and reads to the same child; typing refusals never replace it', async t => {
   let parentLocked = true;
   const f = fixture(t, { config: { parentLockState: async () => parentLocked } });
   const inactive = object(await f.control('status'));
@@ -228,9 +228,9 @@ test('parent lock keeps reads available and input refusals do not stop or replac
   await f.runtime.call('get_app_state', { app: 'Fixture' });
   const childCall = f.runtimes[1].call;
   f.runtimes[1].call = async (method, args) => {
-    if (method === 'click' && parentLocked) {
+    if (method === 'type_text' && parentLocked) {
       f.calls.push(['child', method, args]);
-      throw Object.assign(new Error("The person's screen is locked. Reading and screenshots still work; input is available after they unlock. No input was sent."), { code: 'SCREEN_LOCKED' });
+      throw Object.assign(new Error("The person's screen is locked. Indexed click, set_value and perform_secondary_action remain available. No input was sent."), { code: 'SCREEN_LOCKED' });
     }
     return await childCall(method, args);
   };
@@ -241,9 +241,14 @@ test('parent lock keeps reads available and input refusals do not stop or replac
     assert.equal(status.state, 'running');
     assert.equal(status.stoppedByPerson, false);
     await f.runtime.call('get_app_state', { app: 'Fixture', includeScreenshot: true });
+    for (const [method, params] of [['click', { element_index: 1 }], ['set_value', { element_index: 2, value: 'locked' }],
+      ['perform_secondary_action', { element_index: 1, action: 'Invoke' }]]) {
+      await f.runtime.call(method, { app: 'Fixture', ...params });
+      assert.equal(f.calls.at(-1)[0], 'child');
+    }
     const before = f.calls.length;
-    if (locked) await assert.rejects(f.runtime.call('click', { app: 'Fixture', element_index: 1 }), { code: 'SCREEN_LOCKED' });
-    else await f.runtime.call('click', { app: 'Fixture', element_index: 1 });
+    if (locked) await assert.rejects(f.runtime.call('type_text', { app: 'Fixture', text: 'refused' }), { code: 'SCREEN_LOCKED' });
+    else await f.runtime.call('type_text', { app: 'Fixture', text: 'explicit after unlock' });
     assert.equal(f.calls.length, before + 1, 'A lock refusal is never replayed');
     assert.equal(f.calls.at(-1)[0], 'child');
     assert.equal(f.hosts[0].closed, false);

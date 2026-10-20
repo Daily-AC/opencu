@@ -1,6 +1,7 @@
 //! Platform-independent parts of the inherited-stdio engine contract.
 pub mod observation;
 pub mod foreground;
+pub mod locked_patterns;
 use serde_json::{json, Value};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -793,7 +794,7 @@ mod session_state_tests {
 pub fn agent_parent_input_policy(guarded: bool, locked: Option<bool>, before_input: bool) -> Result<()> {
     if !guarded || locked == Some(false) { return Ok(()); }
     let reason = if locked == Some(true) {
-        "The person's screen is locked. Reading and screenshots still work; input is available after they unlock."
+        "The person's screen is locked. Reading and screenshots still work. In the agent desktop, indexed single-left click, set_value (ValuePattern), and listed perform_secondary_action calls can work through supported control patterns while locked; other input requires unlock."
     } else {
         "Cannot verify whether the person's screen is locked. Reading and screenshots remain available; input was refused."
     };
