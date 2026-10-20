@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import test from 'node:test';
-import { AgentDesktopRuntime, agentDesktopHelper, agentDesktopSetupCommand, parseAgentDesktopOutput, runAgentDesktopHelper, prepareAgentDesktop, parentSessionLocked } from '../src/agent-desktop.mjs';
+import { AgentDesktopRuntime, agentDesktopHelper, agentDesktopAvailability, agentDesktopSetupCommand, parseAgentDesktopOutput, runAgentDesktopHelper, prepareAgentDesktop, parentSessionLocked } from '../src/agent-desktop.mjs';
 
 const failure = code => Object.assign(new Error(code), { code });
 const object = result => JSON.parse(result.content[0].text);
@@ -216,7 +216,7 @@ test('automatic setup gates UAC and repairs only the directory DACL', async () =
   assert.doesNotMatch(source, /\$acl\.SetOwner|^Set-Acl\b/m);
 });
 
-test('parent lock/unlock reports fresh state without stopping, replacing or rerouting the child', async t => {
+test('parent lock keeps reads available and input refusals do not stop or replace the child', async t => {
   let parentLocked = true;
   const f = fixture(t, { config: { parentLockState: async () => parentLocked } });
   const inactive = object(await f.control('status'));
@@ -226,13 +226,25 @@ test('parent lock/unlock reports fresh state without stopping, replacing or rero
   parentLocked = false;
   await f.control('start');
   await f.runtime.call('get_app_state', { app: 'Fixture' });
+  const childCall = f.runtimes[1].call;
+  f.runtimes[1].call = async (method, args) => {
+    if (method === 'click' && parentLocked) {
+      f.calls.push(['child', method, args]);
+      throw Object.assign(new Error("The person's screen is locked. Reading and screenshots still work; input is available after they unlock. No input was sent."), { code: 'SCREEN_LOCKED' });
+    }
+    return await childCall(method, args);
+  };
   for (const locked of [true, true, false]) {
     parentLocked = locked;
     const status = object(await f.control('status'));
     assert.equal(status.parentLocked, locked);
     assert.equal(status.state, 'running');
     assert.equal(status.stoppedByPerson, false);
-    await f.runtime.call('click', { app: 'Fixture', element_index: 1 });
+    await f.runtime.call('get_app_state', { app: 'Fixture', includeScreenshot: true });
+    const before = f.calls.length;
+    if (locked) await assert.rejects(f.runtime.call('click', { app: 'Fixture', element_index: 1 }), { code: 'SCREEN_LOCKED' });
+    else await f.runtime.call('click', { app: 'Fixture', element_index: 1 });
+    assert.equal(f.calls.length, before + 1, 'A lock refusal is never replayed');
     assert.equal(f.calls.at(-1)[0], 'child');
     assert.equal(f.hosts[0].closed, false);
   }
@@ -267,4 +279,43 @@ test('lock reporting uses only the parent engine doctor and never invents an unl
   for (const value of [null, undefined, 'false']) {
     await assert.rejects(parentSessionLocked('/fixture', async () => ({ sessionLocked: value })), { code: 'AGENT_DESKTOP_UNAVAILABLE' });
   }
+});
+
+test('disabled child sessions show one-time setup before probing or preparing a helper', async () => {
+  const root = String.raw`C:\Users\Fixture\OpenCU`;
+  const calls = [];
+  const capability = await agentDesktopAvailability(root, 'win32', {
+    run: async (_command, args) => { calls.push(args); return { childSessionsEnabled: false }; },
+    helperPath: async () => { throw new Error('A missing helper must not obscure machine enablement'); },
+  });
+  assert.equal(capability.available, false);
+  assert.equal(capability.childSessionsEnabled, false);
+  assert.match(capability.message, /one-time setup is required/);
+  assert.ok(capability.message.includes(agentDesktopSetupCommand(root)));
+  assert.doesNotMatch(capability.message, /helper preparation is required/);
+  await assert.rejects(prepareAgentDesktop(root, {
+    availability: async () => capability,
+    run: async () => { throw new Error('Known-disabled machine must not run preparation'); },
+  }), /one-time setup is required/);
+  assert.deepEqual(calls, [['--doctor']]);
+});
+
+test('availability preserves an absent child as null and real session IDs as numbers', async () => {
+  for (const existingChildSession of [null, 7]) {
+    const capability = await agentDesktopAvailability('/fixture', 'win32', {
+      run: async (_command, args) => args[0] === '--doctor' ? { childSessionsEnabled: true } : { available: true, existingChildSession },
+      helperPath: async () => '/fixture/helper.exe',
+    });
+    assert.equal(capability.existingChildSession, existingChildSession);
+  }
+});
+
+test('RDP pointer suppression is required before connecting and is not toggled on takeover', async () => {
+  const source = await readFile(new URL('../scripts/agent-desktop/Host.cs', import.meta.url), 'utf8');
+  assert.match(source, /Property = "IgnoreServerGeneratedMouseMoves"/);
+  assert.ok(source.indexOf('RdpPointerPolicy.Configure(') < source.indexOf('rdp.Connect();'));
+  const mode = source.slice(source.indexOf('void SetInteractive('), source.indexOf('protected override void OnDeactivate'));
+  assert.doesNotMatch(mode, /RdpPointerPolicy|set_Property|Reconnect/);
+  assert.match(source, /serve --agent-parent-session /);
+  assert.match(source, /parent-session guard was not configured/);
 });
