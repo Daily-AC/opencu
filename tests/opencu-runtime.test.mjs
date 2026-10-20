@@ -439,3 +439,12 @@ for (const code of ['PERSON_ACTIVE', 'USER_STOPPED', 'STOPPED_BY_PERSON']) {
     assert.deepEqual((await f.calls()).map(q => q.method), ['wait', 'press_key']);
   });
 }
+
+
+test('gone-scope fallback cannot satisfy waitForText with text outside the retained subtree', async t => {
+  const fallback = { ...state, scopeRoot: 'gone:a', text: state.text + '\nScope element is gone; showing the whole window.\n[3] Text title="Outside ready"' };
+  const f = await fixture(t, [{ result: fallback }], 'win32');
+  const result = await f.call('get_app_state', { app: 'Fixture', scope: 1, waitForText: 'Outside ready', waitTimeoutMs: 0 });
+  assert.equal(result._meta['opencu/error'], 'WAIT_TIMEOUT');
+  assert.ok(result.content.some(c => c.text?.includes('Scope element is gone')));
+});

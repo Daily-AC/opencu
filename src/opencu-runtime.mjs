@@ -135,7 +135,8 @@ export class OpenCURuntime {
         continue;
       }
       this.#needsObservation = false;
-      if (!waitForText || result.text.split('\n').some(line => /^\s*\[\d+\] /.test(line) && line.includes(waitForText))) return result;
+      const scopeGone = scope !== undefined && result.scopeRoot?.startsWith('gone:');
+      if (!waitForText || !scopeGone && result.text.split('\n').some(line => /^\s*\[\d+\] /.test(line) && line.includes(waitForText))) return result;
       if (Date.now() >= deadline) {
         const error = new Error('The expected text did not appear. Inspect the returned state before continuing. No additional input was sent.');
         error.code = 'WAIT_TIMEOUT'; error.lastState = result; throw error;

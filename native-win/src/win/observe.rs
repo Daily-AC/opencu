@@ -311,18 +311,27 @@ unsafe fn ime_line(window: &Window) -> &'static str {
     let conversion = if open.is_some_and(|v| v != 0) { query(1) } else { None };
     ime_warning(open, conversion)
 }
-// Walk live ancestry to the exact retained window, not merely a same-PID HWND.
-unsafe fn scope_attached(uia: &IUIAutomation, element: &Element) -> bool {
-    if element.window.validate().is_err() { return false; }
-    let Ok(root) = uia.ElementFromHandle(element.window.hwnd) else { return false; };
-    let Ok(walker) = uia.RawViewWalker() else { return false; };
+// Resolve only the retained object's live ancestors, not a fresh indexed walk.
+// Reparenting inside the target family is allowed; unrelated windows never are.
+unsafe fn scope_window(uia: &IUIAutomation, element: &Element, windows: &[&Window]) -> Option<Window> {
+    let started = Instant::now();
+    let walker = uia.RawViewWalker().ok()?;
     let mut current = element.element.clone();
-    for _ in 0..=120 {
-        if uia.CompareElements(&current, &root).is_ok_and(|v| v.as_bool()) { return true; }
-        let Ok(parent) = walker.GetParentElement(&current) else { return false; };
-        current = parent;
+    for depth in 0..=120 {
+        if started.elapsed() > Duration::from_secs(2) { return None; }
+        // Scoping cannot bypass the full walk's protected-ancestor boundary.
+        if depth > 0 && !current.CurrentIsPassword().is_ok_and(|v| !v.as_bool()) { return None; }
+        if let Ok(hwnd) = current.CurrentNativeWindowHandle() {
+            if let Some(window) = windows.iter().find(|w| w.hwnd == hwnd) {
+                let root = uia.ElementFromHandle(hwnd).ok()?;
+                if uia.CompareElements(&current, &root).is_ok_and(|v| v.as_bool()) {
+                    return Some((*window).clone());
+                }
+            }
+        }
+        current = walker.GetParentElement(&current).ok()?;
     }
-    false
+    None
 }
 pub unsafe fn observe(uia: &IUIAutomation, app: App, include: bool, scope: Option<&Scope>) -> Result<(Value, Snapshot)> {
     safety::desktop()?;
@@ -396,16 +405,19 @@ pub unsafe fn observe(uia: &IUIAutomation, app: App, include: bool, scope: Optio
     };
     let walker = uia.RawViewWalker()?;
     let cache = cache_request(uia)?;
+    let scope_windows: Vec<_> = desktop.iter().filter(|w| {
+        w.pid == app.pid && w.created == primary.created
+            && family.iter().any(|info| info.hwnd == w.hwnd.0 as usize && info.visible && !info.minimized)
+            && owned_by(&family, w.hwnd.0 as usize, primary.hwnd.0 as usize)
+    }).collect();
     let scoped = live_scope(scope.and_then(|s| s.root.as_ref()), |e| {
         e.window.pid == app.pid && e.window.created == primary.created
-            && family.iter().any(|w| w.hwnd == e.window.hwnd.0 as usize && w.visible && !w.minimized)
-            && owned_by(&family, e.window.hwnd.0 as usize, primary.hwnd.0 as usize)
-            && scope_attached(uia, e)
     }).and_then(|e| {
+        let window = scope_window(uia, e, &scope_windows)?;
         let root = e.element.BuildUpdatedCache(&cache).ok()?;
         let n = node(&root, true).ok()?;
         if zero_size_omitted(n.bounds, n.focused) { return None; }
-        Some((e, root))
+        Some((window, root))
     });
     text += scope_gone_line(scope.is_some(), scoped.is_some());
     let started = Instant::now();
@@ -436,7 +448,7 @@ pub unsafe fn observe(uia: &IUIAutomation, app: App, include: bool, scope: Optio
             covered(info.bounds, &desktop_info[..desktop_index]),
             !tree,
         );
-        if !tree || scoped.as_ref().is_some_and(|(e, _)| e.window.hwnd != window.hwnd) {
+        if !tree || scoped.as_ref().is_some_and(|(scoped_window, _)| scoped_window.hwnd != window.hwnd) {
             continue;
         }
         if inspected >= 8000
@@ -505,11 +517,11 @@ pub unsafe fn observe(uia: &IUIAutomation, app: App, include: bool, scope: Optio
             );
             let zero = zero_size_omitted(node.bounds, node.focused);
             zero_size += usize::from(zero);
-            let outside = !zero && !node.focused && outside_chromium(chromium, node.bounds, client);
+            let scope_root = scoped.is_some() && depth == 0;
+            let outside = !zero && !node.focused && !scope_root && outside_chromium(chromium, node.bounds, client);
             if outside {
                 omitted += 1;
             }
-            let scope_root = scoped.is_some() && depth == 0;
             let eligible = !zero && (scope_root || (!outside && node.visible_in_tree()));
             let id = if eligible { runtime_id(&el) } else { None };
             let duplicate = eligible
