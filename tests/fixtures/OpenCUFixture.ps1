@@ -2,7 +2,7 @@ param([Parameter(Mandatory=$true)][string]$Output, [Parameter(Mandatory=$true)][
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
-Add-Type -ReferencedAssemblies System.Windows.Forms,System.Drawing -TypeDefinition @'
+Add-Type -ReferencedAssemblies System.Windows.Forms,System.Drawing,Accessibility -TypeDefinition @'
 using System;
 using System.IO;
 using System.Drawing;
@@ -10,6 +10,28 @@ using System.Windows.Forms;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
+// Real positive-size child geometry under an intentionally zero-size accessibility
+// container. Layout remains visible so provider clipping cannot hide the child.
+public class ZeroBoundsPanel : Panel {
+    protected override AccessibleObject CreateAccessibilityInstance() { return new ZeroBoundsAccessible(this); }
+    class ZeroBoundsAccessible : ControlAccessibleObject {
+        readonly ZeroBoundsPanel panel;
+        public ZeroBoundsAccessible(ZeroBoundsPanel p) : base(p) { panel=p; }
+        public override Rectangle Bounds { get { return Rectangle.Empty; } }
+        public override int GetChildCount() { return panel.Controls.Count; }
+        public override AccessibleObject GetChild(int index) {
+            return index>=0 && index<panel.Controls.Count ? panel.Controls[index].AccessibilityObject : null;
+        }
+    }
+}
+public class FixtureInputCounter : IMessageFilter {
+    public static int Messages;
+    public bool PreFilterMessage(ref Message m) {
+        // Count keys/chars, mouse buttons and wheels, excluding incidental hover/move messages.
+        if((m.Msg>=0x100 && m.Msg<=0x109) || (m.Msg>=0x201 && m.Msg<=0x20e)) Messages++;
+        return false;
+    }
+}
 public class OpenCUOverlay : Form {
     // GA_ROOTOWNER follows GetParent, which exposes ownership for WS_POPUP.
     protected override CreateParams CreateParams {
@@ -51,6 +73,8 @@ public class OpenCUFixture : Form {
     readonly CheckBox check = new CheckBox();
     readonly TextBox password = new TextBox();
     readonly Panel marker = new Panel();
+    readonly Panel scopePanel = new Panel();
+    int scopeClicks;
     readonly Panel dragPanel = new Panel();
     Point dragDown, dragUp; bool dragging, dragHeld = true; int dragMoves, drags;
     Form cover, overlay; TextBox overlayNotes;
@@ -70,7 +94,7 @@ public class OpenCUFixture : Form {
     bool modalOpen; int modalCompletions; string modalValue = "";
     int clicks, moves, wheel, overlayClicks; string digest = "", error = "";
     public OpenCUFixture(string o, string c, string title, bool b) {
-        background=b;output=o; command=c; Text=title; Name="OpenCUFixture";
+        background=b;output=o; command=c; Text=title; Name="OpenCUFixture"; AccessibleName="Fixture root";
         StartPosition=FormStartPosition.Manual; Location=new Point(120,100); ClientSize=new Size(680,560);
         AutoScaleMode=AutoScaleMode.Dpi;
         counter.Name="counterButton"; counter.AccessibleName="Fixture counter"; counter.Text="Fixture counter";
@@ -102,11 +126,19 @@ public class OpenCUFixture : Form {
                 modalOpen=false;Save();
             }
         };
-        Controls.AddRange(new Control[]{counter,notes,check,password,marker,slider,scrolling,dragPanel,modalButton});
+        scopePanel.AccessibleName="Fixture scope panel";scopePanel.SetBounds(330,328,310,26);
+        var nested=new Panel();nested.AccessibleName="Fixture nested panel";nested.Dock=DockStyle.Fill;
+        var scopeButton=new Button();scopeButton.AccessibleName="Fixture scope counter";scopeButton.Text="Fixture scope counter";scopeButton.Dock=DockStyle.Fill;
+        scopeButton.Click += delegate { scopeClicks++;Save(); };
+        nested.Controls.Add(scopeButton);scopePanel.Controls.Add(nested);
+        var zero=new ZeroBoundsPanel();zero.AccessibleName="Fixture zero container";zero.SetBounds(20,535,620,20);
+        var zeroChild=new Label();zeroChild.AccessibleName="Fixture zero child";zeroChild.Text="Fixture zero child";zeroChild.SetBounds(0,0,600,20);zero.Controls.Add(zeroChild);
+        Controls.AddRange(new Control[]{counter,notes,check,password,marker,slider,scrolling,dragPanel,modalButton,scopePanel,zero});
         timer.Interval=100;timer.Tick += delegate {
             if(File.Exists(command)) { string cmd; try { cmd=File.ReadAllText(command).Trim();File.Delete(command); } catch(IOException) { return; } // Antivirus or the writer may still hold it; retry next tick.
                
-                if(cmd=="move") { Location=new Point(Location.X+40,Location.Y+30);moves++; }
+                if(cmd=="scope-remove") { Controls.Remove(scopePanel);scopePanel.Dispose(); }
+                else if(cmd=="move") { Location=new Point(Location.X+40,Location.Y+30);moves++; }
                 else if(cmd=="digest") { try{digest=ClipboardDigest();}catch(Exception e){error=e.Message;} }
                 else if(cmd=="indicator") { var h=FindWindow("OpenCUOperationIndicator",null);indicatorVisible=IsWindowVisible(h);indicatorReadable=GetWindowDisplayAffinity(h,out indicatorAffinity); }
                 else if(cmd=="indicator-cover") { var h=FindWindow("OpenCUOperationIndicator",null);RECT r;GetWindowRect(h,out r);Location=new Point(r.Left-140,0);var p=PointToClient(new Point((r.Left+r.Right)/2,r.Bottom-4));marker.SetBounds(p.X-5,p.Y-5,10,10); }
@@ -140,7 +172,7 @@ public class OpenCUFixture : Form {
         var family="\"foregroundOwner\":"+Q(GetWindow(foreground,4).ToInt64().ToString())+","+"\"mainHwnd\":"+Q(Handle.ToInt64().ToString())+",\"foregroundHwnd\":"+Q(foreground.ToInt64().ToString())+",\"foregroundPid\":"+foregroundPid+",\"mainRootOwner\":"+Q(GetAncestor(Handle,3).ToInt64().ToString())+",\"foregroundRootOwner\":"+Q(GetAncestor(foreground,3).ToInt64().ToString())+",\"overlayClicks\":"+overlayClicks+",\"overlayNotes\":"+Q(overlayNotes==null?"":overlayNotes.Text)+",";
         var a=dragPanel.PointToScreen(new Point(20,dragPanel.Height/2));var b=dragPanel.PointToScreen(new Point(dragPanel.Width-20,dragPanel.Height/2));
         var drag="\"dragFromX\":"+(a.X-r.Left)+",\"dragFromY\":"+(a.Y-r.Top)+",\"dragToX\":"+(b.X-r.Left)+",\"dragToY\":"+(b.Y-r.Top)+",\"dragDistance\":"+(b.X-a.X)+",\"dragDownX\":"+dragDown.X+",\"dragDownY\":"+dragDown.Y+",\"dragUpX\":"+dragUp.X+",\"dragUpY\":"+dragUp.Y+",\"dragHeld\":"+(dragHeld?"true":"false")+",\"dragMoves\":"+dragMoves+",\"drags\":"+drags+",";
-        var json="{\"modalOpen\":"+(modalOpen?"true":"false")+",\"modalCompletions\":"+modalCompletions+",\"modalValue\":"+Q(modalValue)+",\"idleMs\":"+IdleMilliseconds()+",\"minimized\":"+(IsIconic(Handle)?"true":"false")+","+drag+family+"\"pid\":"+System.Diagnostics.Process.GetCurrentProcess().Id+",\"clicks\":"+clicks+",\"notes\":"+Q(notes.Text)+",\"checked\":"+(check.Checked?"true":"false")+",\"slider\":"+slider.Value+",\"scroll\":"+(-scrolling.AutoScrollPosition.Y)+",\"wheel\":"+wheel+",\"moves\":"+moves+",\"x\":"+(p.X-r.Left)+",\"y\":"+(p.Y-r.Top)+",\"markerX\":"+(m.X-r.Left)+",\"markerY\":"+(m.Y-r.Top)+",\"width\":"+(r.Right-r.Left)+",\"height\":"+(r.Bottom-r.Top)+",\"indicatorVisible\":"+(indicatorVisible?"true":"false")+",\"indicatorReadable\":"+(indicatorReadable?"true":"false")+",\"indicatorAffinity\":"+indicatorAffinity+",\"keyChars\":"+Q(received.ToString())+",\"inputLanguage\":"+Q(InputLanguage.CurrentInputLanguage.LayoutName)+",\"clipboardDigest\":"+Q(digest)+",\"error\":"+Q(error)+"}";
+        var json="{\"inputMessages\":"+FixtureInputCounter.Messages+",\"scopeClicks\":"+scopeClicks+",\"scopePresent\":"+(!scopePanel.IsDisposed?"true":"false")+",\"modalOpen\":"+(modalOpen?"true":"false")+",\"modalCompletions\":"+modalCompletions+",\"modalValue\":"+Q(modalValue)+",\"idleMs\":"+IdleMilliseconds()+",\"minimized\":"+(IsIconic(Handle)?"true":"false")+","+drag+family+"\"pid\":"+System.Diagnostics.Process.GetCurrentProcess().Id+",\"clicks\":"+clicks+",\"notes\":"+Q(notes.Text)+",\"checked\":"+(check.Checked?"true":"false")+",\"slider\":"+slider.Value+",\"scroll\":"+(-scrolling.AutoScrollPosition.Y)+",\"wheel\":"+wheel+",\"moves\":"+moves+",\"x\":"+(p.X-r.Left)+",\"y\":"+(p.Y-r.Top)+",\"markerX\":"+(m.X-r.Left)+",\"markerY\":"+(m.Y-r.Top)+",\"width\":"+(r.Right-r.Left)+",\"height\":"+(r.Bottom-r.Top)+",\"indicatorVisible\":"+(indicatorVisible?"true":"false")+",\"indicatorReadable\":"+(indicatorReadable?"true":"false")+",\"indicatorAffinity\":"+indicatorAffinity+",\"keyChars\":"+Q(received.ToString())+",\"inputLanguage\":"+Q(InputLanguage.CurrentInputLanguage.LayoutName)+",\"clipboardDigest\":"+Q(digest)+",\"error\":"+Q(error)+"}";
         try{File.WriteAllText(output,json,new UTF8Encoding(false));}catch(IOException){}
     }
     static string ClipboardDigest(){
@@ -155,7 +187,7 @@ public class OpenCUFixture : Form {
             using(var hash=SHA256.Create()){return Convert.ToBase64String(hash.ComputeHash(data.ToArray()));}
         }}finally{CloseClipboard();}
     }
-    public static void Run(string output,string command,string title,bool background){SetProcessDpiAwarenessContext(new IntPtr(-4));Application.EnableVisualStyles();Application.Run(new OpenCUFixture(output,command,title,background));}
+    public static void Run(string output,string command,string title,bool background){SetProcessDpiAwarenessContext(new IntPtr(-4));Application.EnableVisualStyles();Application.AddMessageFilter(new FixtureInputCounter());Application.Run(new OpenCUFixture(output,command,title,background));}
 }
 '@
 [OpenCUFixture]::Run($Output, $CommandFile, $Title, $Background.IsPresent)

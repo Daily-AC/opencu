@@ -634,3 +634,11 @@ These legacy status queries depend on the IME's IMM compatibility support;
 missing/failed queries produce no warning, not a claim of alphanumeric mode.
 No thread attachment, focus change, mode setter or input is used for detection.
 Live Windows IME/provider coverage still needs acceptance.
+
+The pending Windows GUI suite uses a fixture accessibility container with empty
+bounds and a visible child; a nested panel for scoped reads/action results and
+removed-root fallback; and fixture keyboard/character/mouse-button/wheel counters
+around a 1500 ms batch wait. A scoped title-only text wait must return
+`WAIT_TIMEOUT` even though its header contains that title. These checks use
+fixture data only and have not run on Windows for 0.3.3; host tests/cross-compilation
+are not evidence of their GUI/provider behavior.

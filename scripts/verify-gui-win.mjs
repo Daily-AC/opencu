@@ -118,6 +118,60 @@ try {
   assert.ok(!tree.includes('OpenCU-Fixture-Secret-7391'));
   assert.ok(tree.includes('[protected]'), 'Password control must be identified without its content');
   checks.push('native password text is redacted');
+
+  const elementLines = () => tree.split('\n').filter(line => /^\s*\[\d+\] /.test(line));
+  assert.ok(!elementLines().some(line => line.includes('title="Fixture zero container"')));
+  index('Fixture zero child');
+  assert.match(tree, /Zero-size: [1-9]\d* elements omitted/);
+  checks.push('zero-size accessibility container omitted while positive-size child remains indexed');
+
+  const panel = index('Fixture nested panel');
+  await call('get_app_state', title, { scope: panel, disableDiff: true });
+  assert.equal(index('Fixture nested panel'), 1);
+  assert.equal(index('Fixture scope counter'), 2);
+  assert.equal(elementLines().length, 2, 'Only nested panel and its button are listed');
+  assert.ok(!elementLines().some(line => line.includes('Fixture notes') || line.includes('Fixture scope panel')));
+  checks.push('scoped nested panel read retains only its subtree with dense indexes from 1');
+
+  const scopedAction = await call('click', title, { element_index: index('Fixture scope counter'), scope: 1 });
+  const scopedActionText = scopedAction.content.filter(c => c.type === 'text').map(c => c.text).join('\n');
+  assert.ok(scopedActionText.includes('No accessibility changes') || (scopedActionText.split('\n').some(line => /^\[1\] .*title="Fixture nested panel"/.test(line)) && !scopedActionText.includes('title="Fixture notes"')));
+  assert.equal((await fixtureState()).scopeClicks, 1);
+  // An unchanged scoped result may use the existing whole-text diff; expand for inspection.
+  await call('get_app_state', title, { scope: 1, disableDiff: true });
+  assert.equal(elementLines().length, 2);
+  assert.equal(index('Fixture nested panel'), 1);
+  checks.push('indexed action accepts scope and retains a scoped final state');
+
+  const timeout = await call('get_app_state', title, { scope: 1, waitForText: title, waitTimeoutMs: 250 }, 'WAIT_TIMEOUT');
+  const timeoutText = timeout.content.filter(c => c.type === 'text').map(c => c.text).join('\n');
+  assert.ok(timeoutText.includes(`Window: ${JSON.stringify(title)}`));
+  assert.ok(!timeoutText.split('\n').filter(line => /^\s*\[\d+\] /.test(line)).some(line => line.includes(title)));
+  checks.push('window header title cannot satisfy scoped waitForText');
+
+  await pause(200); // Let the fixture persist the preceding click's message count.
+  const beforeWait = await fixtureState();
+  const beganWait = performance.now();
+  await call('run_actions', title, { scope: 1, disableDiff: true, actions: [{ method: 'wait', ms: 1500 }] });
+  const waitedMs = performance.now() - beganWait;
+  assert.ok(waitedMs >= 1500, `Wait returned too early: ${waitedMs} ms`);
+  const afterWait = await fixtureState();
+  assert.equal(afterWait.inputMessages, beforeWait.inputMessages, 'Wait must not synthesize keys, chars or mouse buttons/wheels');
+  for (const key of ['clicks', 'scopeClicks', 'notes', 'checked', 'slider', 'wheel', 'drags', 'keyChars']) {
+    assert.equal(afterWait[key], beforeWait[key], `Wait changed ${key}`);
+  }
+  assert.equal(elementLines().length, 2);
+  report.waitMilliseconds = waitedMs;
+  checks.push('1500 ms batch wait measurably waits with unchanged fixture input counters and scoped final state');
+
+  await fixtureCommand('scope-remove');
+  assert.equal((await fixtureState()).scopePresent, false);
+  await call('get_app_state', title, { scope: 1, disableDiff: true });
+  assert.match(tree, /Scope element is gone; showing the whole window/);
+  index('Fixture notes');
+  assert.ok(!elementLines().some(line => line.includes('Fixture nested panel')));
+  checks.push('removed retained scope falls back to whole window with a notice');
+
   await fixtureCommand('cover');
   await imageState(title);
   const marker = await fixtureState();
