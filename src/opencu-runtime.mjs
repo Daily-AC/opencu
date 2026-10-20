@@ -188,7 +188,10 @@ export class OpenCURuntime {
         options = method === 'run_actions' ? args : {
           app, scope, includeScreenshot: method === 'drag' || ['click', 'scroll'].includes(method) && args.element_index === undefined,
         };
-        if (actions.some(action => !inputs.has(action.method))) throw new Error('Unknown input operation in batch; no input was sent.');
+        if (actions.some(action => !inputs.has(action.method) && action.method !== 'wait')) throw new Error('Unknown input operation in batch; no input was sent.');
+        if (actions.some(action => action.method === 'wait' && (!Number.isInteger(action.ms) || action.ms < 1 || action.ms > 15000))) {
+          throw Object.assign(new Error('wait.ms must be an integer from 1 to 15000; no input was sent.'), { code: 'INVALID_ARGUMENT' });
+        }
         for (const [index, { method: action, ...params }] of actions.entries()) {
           try {
             const result = await this.#request(action, { ...params, app }, signal);
@@ -205,7 +208,7 @@ export class OpenCURuntime {
             }
           }
           catch (error) {
-            error.message = `Action ${index + 1} failed: ${error.message} Earlier actions may have run.${personStops.has(error.code) ? '' : ' Read state before retrying.'}`;
+            error.message = `Action ${index + 1} failed: ${error.message} Earlier actions may have run.${personStops.has(error.code) || error.code === 'PERSON_ACTIVE' ? '' : ' Read state before retrying.'}`;
             throw error;
           }
         }

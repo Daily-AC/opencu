@@ -220,3 +220,11 @@ struct AXIdentity: Hashable {
     static func == (lhs: Self, rhs: Self) -> Bool { CFEqual(lhs.element, rhs.element) }
     func hash(into hasher: inout Hasher) { hasher.combine(CFHash(element)) }
 }
+
+func waitMilliseconds(_ args: Arguments) throws -> UInt64 {
+    let ms = try finiteNumber(args, "ms")
+    guard ms.rounded(.towardZero) == ms, (1...15000).contains(ms) else {
+        throw OpenCUError("INVALID_ARGUMENT", "wait.ms must be an integer from 1 to 15000")
+    }
+    return UInt64(ms)
+}

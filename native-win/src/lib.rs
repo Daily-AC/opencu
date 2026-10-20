@@ -688,3 +688,20 @@ mod drag_tests {
         }
     }
 }
+
+/// Direct stdio hosts receive the same wait bounds as MCP callers.
+pub fn wait_ms(args: &Value) -> Result<u64> {
+    args["ms"].as_u64().filter(|n| (1..=15000).contains(n))
+        .ok_or_else(|| Error::new("INVALID_ARGUMENT", "wait.ms must be an integer from 1 to 15000"))
+}
+#[cfg(test)]
+mod wait_tests {
+    use super::*;
+    #[test]
+    fn wait_bounds_are_inclusive_and_integer_only() {
+        for ms in [1, 15000] { assert_eq!(wait_ms(&json!({"ms":ms})).unwrap(), ms); }
+        for ms in [json!(0), json!(-1), json!(15001), json!(1.5), json!("1"), json!(true), Value::Null] {
+            assert_eq!(wait_ms(&json!({"ms":ms})).unwrap_err().code, "INVALID_ARGUMENT");
+        }
+    }
+}

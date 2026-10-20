@@ -26,7 +26,7 @@ export class CoordinateState {
       const coordinates = points(action.method, action);
       if (!coordinates.length) continue;
       if (index > 0) {
-        throw Object.assign(new Error(`Action ${index + 1} uses coordinates after an earlier UI action. No actions were sent. End this batch before that action, call get_app_state with includeScreenshot: true, and inspect the new screenshot before continuing.`), { code: 'SCREENSHOT_REQUIRED' });
+        throw Object.assign(new Error(`Action ${index + 1} uses coordinates after an earlier UI action or wait. No actions were sent. End this batch before that action, call get_app_state with includeScreenshot: true, and inspect the new screenshot before continuing.`), { code: 'SCREENSHOT_REQUIRED' });
       }
       const snapshot = this.#snapshot;
       if (!snapshot || !snapshot.apps.includes(args.app)) {

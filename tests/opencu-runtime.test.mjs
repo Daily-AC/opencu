@@ -39,7 +39,8 @@ lines.on('line',line=>{
  appendFileSync(${JSON.stringify(callsFile)},line+'\\n');
  const explicit=results.shift();
  const reply=explicit ?? {result:q.method==='list_apps' ? [] : q.method==='get_app_state' || q.method==='activate_app' ? ${JSON.stringify(state)} : {ok:true}};
- process.stdout.write(JSON.stringify({id:q.id,...reply})+'\\n');
+ const send=()=>process.stdout.write(JSON.stringify({id:q.id,...reply})+'\\n');
+ if(q.method==='wait') setTimeout(send,q.params.ms); else send();
 });
 `);
   await chmod(binary, 0o700);
@@ -397,3 +398,44 @@ test('a gone scope is a successful action final read with full fallback state', 
   assert.equal(result.content[0].text, fallback.text);
   assert.equal((await f.calls()).length, 2);
 });
+
+
+test('wait sends only a native wait and final read, and rejects invalid ms before input', async t => {
+  const f = await fixture(t);
+  const start = performance.now();
+  const result = await f.call('run_actions', { app: 'Fixture', actions: [{ method: 'wait', ms: 80 }] });
+  assert.ok(!result.isError);
+  assert.ok(performance.now() - start >= 80);
+  assert.deepEqual((await f.calls()).map(q => q.method), ['wait', 'get_app_state']);
+  for (const ms of [0, -1, 15001, 1.5, '1', true, null]) {
+    assert.ok((await f.call('run_actions', { app: 'Fixture', actions: [{ method: 'type_text', text: 'never' }, { method: 'wait', ms }] })).isError);
+  }
+  assert.equal((await f.calls()).length, 2);
+  const tool = (await f.tools()).tools.find(t => t.name === 'run_actions');
+  const wait = tool.inputSchema.properties.actions.items.oneOf?.find(s => s.properties.method.const === 'wait')
+    ?? tool.inputSchema.properties.actions.items.anyOf.find(s => s.properties.method.const === 'wait');
+  assert.equal(wait.properties.ms.minimum, 1);
+  assert.equal(wait.properties.ms.maximum, 15000);
+});
+
+test('coordinates after wait refuse the entire batch without even waiting', async t => {
+  const f = await fixture(t);
+  const result = await f.call('run_actions', { app: 'Fixture', actions: [{ method: 'wait', ms: 1500 }, { method: 'click', x: 1, y: 1 }] });
+  assert.equal(result._meta['opencu/error'], 'SCREENSHOT_REQUIRED');
+  assert.deepEqual(await f.calls(), []);
+});
+
+for (const code of ['PERSON_ACTIVE', 'USER_STOPPED', 'STOPPED_BY_PERSON']) {
+  test(`${code} during wait stops all following input`, async t => {
+    const f = await fixture(t, [{ error: { code, message: 'Fixture person stop' } }]);
+    const result = await f.call('run_actions', { app: 'Fixture', actions: [{ method: 'wait', ms: 1 }, { method: 'press_key', key: 'a' }] });
+    assert.equal(result._meta['opencu/error'], code);
+    assert.deepEqual((await f.calls()).map(q => q.method), ['wait']);
+  });
+  test(`${code} after wait still stops remaining input`, async t => {
+    const f = await fixture(t, [{ result: { ok: true } }, { error: { code, message: 'Fixture person stop' } }]);
+    const result = await f.call('run_actions', { app: 'Fixture', actions: [{ method: 'wait', ms: 1 }, { method: 'press_key', key: 'a' }, { method: 'type_text', text: 'never' }] });
+    assert.equal(result._meta['opencu/error'], code);
+    assert.deepEqual((await f.calls()).map(q => q.method), ['wait', 'press_key']);
+  });
+}

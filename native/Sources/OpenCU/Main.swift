@@ -71,6 +71,18 @@ final class Engine {
     private func perform(_ method: String, _ args: Arguments) async throws -> Any {
         if method == "doctor" { return permissions() }
         if method == "list_apps" { return observer.listApps() }
+        if method == "wait" {
+            let ms = try waitMilliseconds(args)
+            guard presence.state.connected else { throw OpenCUError("ENGINE_DISCONNECTED", "The client disconnected. No input was sent.") }
+            // Time can invalidate pixels while retaining the observed element objects.
+            if let current = snapshot {
+                snapshot = WindowSnapshot(app: current.app, window: current.window, bounds: current.bounds,
+                    windowID: current.windowID, elements: current.elements, elementPaths: current.elementPaths,
+                    elementTraits: current.elementTraits, screenshotWidth: nil, screenshotHeight: nil)
+            }
+            try await Task.sleep(nanoseconds: ms * 1_000_000)
+            return ["ok": true]
+        }
         if method.hasPrefix("experimental_agent_display_") {
             if method == "experimental_agent_display_status" { return try agentDisplay.status() }
             // Any attempted geometry mutation invalidates prior indexes and
