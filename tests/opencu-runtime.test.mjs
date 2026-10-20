@@ -18,7 +18,7 @@ async function fixture(t, results = [], platform) {
   await cp(path.join(root, 'src'), path.join(dir, 'src'), { recursive: true });
   if (platform) {
     const server = path.join(dir, 'src/server.mjs');
-    await writeFile(server, (await readFile(server, 'utf8')).replace('new OpenCURuntime({ root })', `new OpenCURuntime({ root, platform: ${JSON.stringify(platform)} })`));
+    await writeFile(server, (await readFile(server, 'utf8')).replace('new AgentDesktopRuntime({ root })', `new AgentDesktopRuntime({ root, platform: ${JSON.stringify(platform)} })`));
   }
   await symlink(path.join(root, 'node_modules'), path.join(dir, 'node_modules'), 'dir');
   await writeFile(path.join(dir, 'package.json'), '{"type":"module","version":"9.8.7-test"}');
@@ -58,7 +58,7 @@ lines.on('line',line=>{
 
 test('an arbitrary MCP client works with no account, turn metadata or official installation', async t => {
   const f = await fixture(t);
-  assert.equal((await f.tools()).tools.length, 13);
+  assert.equal((await f.tools()).tools.length, 14);
   assert.equal(f.version(), '9.8.7-test', 'MCP version comes from the installed package.json');
   const result = await f.call('get_app_state', { app: 'Fixture' }, { 'example.test/caller': 'ordinary-client' });
   assert.equal(result.isError ?? false, false);

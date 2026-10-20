@@ -38,19 +38,27 @@ export class OpenCURuntime {
   #lastText = new Map();
   #scopeRequest = 0;
   #platform;
+  #spawnEngine;
+  #allowRestart;
+  #onPersonStop;
 
-  constructor({ root, enginePath, requestTimeoutMs = 90_000, platform = process.platform } = {}) {
+  constructor({ root, enginePath, requestTimeoutMs = 90_000, platform = process.platform,
+    spawnEngine, allowRestart = true, onPersonStop } = {}) {
     this.#requestTimeoutMs = requestTimeoutMs;
     this.#platform = platform;
     this.enginePath = enginePath ?? defaultEnginePath(root);
+    this.#spawnEngine = spawnEngine;
+    this.#allowRestart = allowRestart;
+    this.#onPersonStop = onPersonStop;
   }
 
   async #start() {
-    try { await access(this.enginePath); }
+    try { if (!this.#spawnEngine) await access(this.enginePath); }
     catch { throw new Error(`OpenCU engine is missing. Run npm run ${process.platform === 'win32' ? 'build:win' : 'build'}, or use the prepared OpenCU release.`); }
     this.#active();
     if (this.#personStop) throw this.#personStop;
-    const child = this.#child = spawn(this.enginePath, ['serve'], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+    const child = this.#child = this.#spawnEngine ? await this.#spawnEngine()
+      : spawn(this.enginePath, ['serve'], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
     child.stderr.on('data', () => {});
     const fail = error => { if (this.#child === child) this.#fail(error); };
     child.stdin.on('error', () => fail(new Error('OpenCU engine input closed; no operation was retried.')));
@@ -64,6 +72,7 @@ export class OpenCURuntime {
         // Even a late reply from the retiring engine must preserve a person's stop.
         if (personStops.has(message.error?.code)) {
           this.#personStop ??= Object.assign(new Error(message.error.message), { code: message.error.code });
+          this.#onPersonStop?.(this.#personStop);
         }
         const request = this.#pending.get(message.id);
         if (!request) return;
@@ -102,6 +111,7 @@ export class OpenCURuntime {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         const error = new Error('OpenCU engine timed out. Input may already have run. Read fresh state before further input; no operation was retried.');
+        if (!this.#allowRestart) this.#failure ??= error;
         const child = this.#child;
         this.#child = undefined;
         this.#started = undefined;

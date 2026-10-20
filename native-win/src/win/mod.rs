@@ -11,7 +11,7 @@ use std::io::{self, BufRead, Write};
 use windows::{
     core::*,
     Win32::{
-        System::{Com::*, WinRT::*},
+        System::{Com::*, RemoteDesktop::*, Threading::*, WinRT::*},
         UI::{Accessibility::*, HiDpi::*},
     },
 };
@@ -192,7 +192,16 @@ impl Engine {
 }
 fn doctor() -> Value {
     let status = unsafe { safety::desktop() };
-    json!({"engine":"independent","version":env!("CARGO_PKG_VERSION"),"platform":"win32","desktopAccessible":status.is_ok(),"desktopError":status.err().map(|e| e.json()),"accountRequired":false,"proprietaryRuntimeRequired":false,"foregroundOnly":true,"executable":std::env::current_exe().ok()})
+    let mut enabled = windows::core::BOOL::default();
+    let child_sessions = unsafe { WTSIsChildSessionsEnabled(&mut enabled) }
+        .ok()
+        .ok()
+        .map(|_| enabled.as_bool());
+    let mut session = 0;
+    let session_id = unsafe { ProcessIdToSessionId(GetCurrentProcessId(), &mut session) }
+        .ok()
+        .map(|_| session);
+    json!({"engine":"independent","version":env!("CARGO_PKG_VERSION"),"platform":"win32","desktopAccessible":status.is_ok(),"desktopError":status.err().map(|e| e.json()),"accountRequired":false,"proprietaryRuntimeRequired":false,"foregroundOnly":true,"sessionId":session_id,"childSessionsEnabled":child_sessions,"executable":std::env::current_exe().ok()})
 }
 pub fn main() {
     // The GUI subsystem suppresses a console window; inherited standard handles

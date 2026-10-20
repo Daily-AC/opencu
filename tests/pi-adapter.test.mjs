@@ -163,7 +163,7 @@ test('real OpenCU descriptors register unchanged without starting the native eng
   const expected = await client.listTools();
   const f = harness(t);
   await f.emit('session_start');
-  assert.equal(f.registered.size, 13);
+  assert.equal(f.registered.size, 14);
   for (const tool of expected.tools) {
     const actual = f.registered.get(tool.name);
     assert.equal(actual.description, tool.description);

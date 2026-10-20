@@ -5,16 +5,17 @@ import { z } from 'zod';
 import path from 'node:path';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { OpenCURuntime, toolError } from './opencu-runtime.mjs';
+import { toolError } from './opencu-runtime.mjs';
+import { AgentDesktopRuntime } from './agent-desktop.mjs';
 import { normalizeArguments } from './tool-arguments.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const { version } = JSON.parse(readFileSync(path.join(root, 'package.json'), 'utf8'));
 const server = new McpServer(
   { name: 'opencu', version },
-  { instructions: 'Control desktop applications with the independent OpenCU engine. Read get_app_state before input. Use observed element indexes; request screenshots before coordinate input. Actions normally return updated state, and run_actions executes a short known sequence before one final read. An unconfirmed AX action instead returns an unknown-outcome notice and stops the batch; explicitly read get_app_state before continuing. Use paste for Unicode or multiline text. Verify the actual result before reporting success. Activate an app only when foreground focus is needed. Do not operate the same app concurrently from different sessions. Respect user authorization and your host approval rules. Input is never automatically replayed. On STOPPED_BY_PERSON the person stopped this macOS connection: never reconnect or retry on your own; wait for explicit permission. Text-only state may continue. On macOS, input normally runs in the background. On Windows, every input requires verified foreground focus. If the target is not foreground, input and activate_app can bring it forward only after 10 seconds without human keyboard or mouse activity; otherwise they return PERSON_ACTIVE without changing foreground or sending input. Stop on PERSON_ACTIVE and never retry it. Windows supports drag and plain-text paste, but not select_text. Physical Escape latches USER_STOPPED on Windows: never reconnect or retry without explicit permission. OpenCU runs locally, respects OS permissions, and requires no account or particular agent identity.' },
+  { instructions: 'Control desktop applications with the independent OpenCU engine. Read get_app_state before input. Use observed element indexes; request screenshots before coordinate input. Actions normally return updated state, and run_actions executes a short known sequence before one final read. An unconfirmed AX action instead returns an unknown-outcome notice and stops the batch; explicitly read get_app_state before continuing. Use paste for Unicode or multiline text. Verify the actual result before reporting success. Activate an app only when foreground focus is needed. Do not operate the same app concurrently from different sessions. Respect user authorization and your host approval rules. Input is never automatically replayed. On STOPPED_BY_PERSON the person stopped this macOS connection: never reconnect or retry on your own; wait for explicit permission. Text-only state may continue. On macOS, input normally runs in the background. On Windows, agent_desktop start opens a visible separate session after one-time setup; all app tools then run there while the person uses their own desktop. Closing that window permanently stops this connection. Never bypass a stop by switching desktops or reconnecting. Every Windows input requires verified foreground focus within its selected session. If the target is not foreground, input and activate_app can bring it forward only after 10 seconds without human keyboard or mouse activity; otherwise they return PERSON_ACTIVE without changing foreground or sending input. Stop on PERSON_ACTIVE and never retry it. Windows supports drag and plain-text paste, but not select_text. Physical Escape latches USER_STOPPED on Windows: never reconnect or retry without explicit permission. OpenCU runs locally, respects OS permissions, and requires no account or particular agent identity.' },
 );
-const runtime = new OpenCURuntime({ root });
+const runtime = new AgentDesktopRuntime({ root });
 
 const app = z.string().min(1).describe('App name or full app path; macOS bundle ID; Windows process name, window title fragment, or Start-menu shortcut name');
 const element_index = z.number().int().describe('Element index from the latest returned app state');
@@ -101,12 +102,16 @@ definitions.activate_app = {
   description: 'Bring the requested app forward and return its state. Use when foreground interaction is required. On Windows, changing foreground requires 10 seconds without human keyboard or mouse activity; otherwise PERSON_ACTIVE is returned with no foreground change or input. Inspect the returned window before input and do not compete with user activity.',
   schema: { app, ...Object.fromEntries(Object.entries(stateOptions).filter(([key]) => key !== 'scope')) },
 };
+definitions.agent_desktop = {
+  description: 'Windows: start a visible separate desktop for agent apps, stop it (logs off its apps; unsaved work can be lost), or read status. While running, every app tool uses that desktop and cannot see the person’s windows. Setup must be done by the person with opencu setup agent-desktop. Never provide credentials. Closing its window or physical Escape permanently stops this MCP connection: never reconnect or restart without explicit permission. macOS is not supported yet.',
+  schema: { action: z.enum(['start', 'stop', 'status']) },
+};
 
 for (const [name, definition] of Object.entries(definitions)) {
-  const observedAction = !definition.readOnly && !['run_actions', 'activate_app'].includes(name);
+  const observedAction = !definition.readOnly && !['run_actions', 'activate_app', 'agent_desktop'].includes(name);
   server.registerTool(name, {
     description: definition.description + (observedAction && !['click', 'drag', 'scroll'].includes(name) ? ' Returns the updated accessibility state after the action; a separate text-only get_app_state is normally unnecessary. Request a new screenshot before later coordinate input.' : ''),
-    inputSchema: definition.schema,
+    inputSchema: name === 'agent_desktop' ? z.strictObject(definition.schema) : definition.schema,
     annotations: { readOnlyHint: !!definition.readOnly, openWorldHint: true },
   }, async (args, extra) => {
     try {

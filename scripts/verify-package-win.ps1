@@ -116,7 +116,7 @@ try {
     Send-Mcp @{jsonrpc='2.0'; method='notifications/initialized'}
     Send-Mcp @{jsonrpc='2.0'; id=2; method='tools/list'; params=@{}}
     $listing = Read-McpResponse 2
-    if ($listing.tools.Count -ne 13 -or 'drag' -notin $listing.tools.name) { throw 'Expected 13 MCP tools including drag.' }
+    if ($listing.tools.Count -ne 14 -or 'drag' -notin $listing.tools.name -or 'agent_desktop' -notin $listing.tools.name) { throw 'Expected 14 MCP tools including drag and agent_desktop.' }
     if (($listing.tools | Where-Object name -eq 'drag').description -match 'Not yet supported on Windows') { throw 'Drag is still marked unsupported.' }
     Send-Mcp @{jsonrpc='2.0'; id=3; method='tools/call'; params=@{name='list_apps'; arguments=@{}}}
     $apps = Read-McpResponse 3
@@ -136,7 +136,7 @@ try {
             throw 'An update with the runtime in use did not preserve the old install.'
         }
         Send-Mcp @{jsonrpc='2.0'; id=4; method='tools/list'; params=@{}}
-        if ((Read-McpResponse 4).tools.Count -ne 13) { throw 'Old MCP session stopped working after refused update.' }
+        if ((Read-McpResponse 4).tools.Count -ne 14) { throw 'Old MCP session stopped working after refused update.' }
         $summary.inUseUpdatePreservesInstall = $true
     }
     $process.StandardInput.Close()
