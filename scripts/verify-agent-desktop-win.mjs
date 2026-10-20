@@ -1,0 +1,132 @@
+#!/usr/bin/env node
+// Explicitly run on an authorized, idle Windows desktop. Disposable fixtures only.
+// Parent stimuli are SendInput, NOT evidence of hardware/physical Escape behavior.
+import assert from 'node:assert/strict';
+import { spawn, execFileSync } from 'node:child_process';
+import { cp, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { setTimeout as pause } from 'node:timers/promises';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { agentDesktopAvailability, agentDesktopHelper } from '../src/agent-desktop.mjs';
+
+if (process.platform !== 'win32') throw new Error('Windows-only acceptance; no desktop was touched.');
+if (!process.argv.includes('--allow-desktop')) throw new Error('Run with --allow-desktop on an authorized idle Windows desktop.');
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+await mkdir(path.join(root, '.cache'), { recursive: true });
+const area = await mkdtemp(path.join(root, '.cache/agent-desktop-acceptance-'));
+const temporary = path.join(area, 'temporary'); await mkdir(temporary);
+const parentExe = path.join(temporary, 'OpenCU-Parent-Fixture.exe');
+const childExe = path.join(temporary, 'OpenCU-Child-Fixture.exe');
+const report = { test: 'windows-agent-desktop', ok: false, checks: [],
+  parentStimulus: 'SendInput in parent session; not hardware input',
+  manualFollowups: ['physical Escape through the focused RDP view', 'parent lock and disconnect',
+    'pre-setup sign-in and smart-card credential refusal', 'host crash during startup', 'covered viewport and GPU/video', 'unsupported Windows editions/policies'] };
+let client, parent;
+const check = (name, data = {}) => { report.checks.push({ name, ...data }); console.log(name); };
+async function waitFor(fn, description, ms = 20000) {
+  const until = Date.now() + ms;
+  while (Date.now() < until) { const result = await fn(); if (result) return result; await pause(75); }
+  throw new Error(`Timed out: ${description}`);
+}
+async function state(exe) { try { return JSON.parse(await readFile(`${exe}.json`, 'utf8')); } catch { return null; } }
+async function command(exe, value) {
+  const file = `${exe}.command`;
+  await writeFile(`${file}.tmp`, value); await rename(`${file}.tmp`, file);
+  await waitFor(async () => { try { await readFile(file); return false; } catch { return true; } }, 'fixture command');
+}
+async function call(name, args = {}, refusal) {
+  const result = await client.callTool({ name, arguments: args }, undefined, { timeout: 150000 });
+  if (refusal) assert.equal(result._meta?.['opencu/error'], refusal, JSON.stringify(result));
+  else assert.ok(!result.isError, JSON.stringify(result));
+  return result;
+}
+const text = result => result.content.filter(c => c.type === 'text').map(c => c.text).join('\n');
+const control = async action => JSON.parse(text(await call('agent_desktop', { action })));
+const index = (result, label) => {
+  const line = text(result).split('\n').find(line => line.includes(`title=${JSON.stringify(label)}`));
+  assert.ok(line, `Missing fixture element ${label}`); return Number(line.match(/^\s*\[(\d+)\]/)[1]);
+};
+try {
+  const capability = await agentDesktopAvailability(root);
+  assert.equal(capability.available, true, JSON.stringify(capability)); check('setup-check', capability);
+  const helper = await agentDesktopHelper(root);
+  const ipc = JSON.parse(execFileSync(helper, ['self-test'], { windowsHide: true, encoding: 'utf8', timeout: 15000 }));
+  assert.equal(ipc.ok, true); check('real-pipe-authentication', ipc);
+  const compiler = path.join(process.env.WINDIR, 'Microsoft.NET/Framework64/v4.0.30319/csc.exe');
+  execFileSync(compiler, ['/nologo', '/target:winexe', '/platform:x64', `/out:${parentExe}`,
+    '/reference:System.Windows.Forms.dll', '/reference:System.Drawing.dll', '/reference:System.Web.Extensions.dll',
+    path.join(root, 'tests/fixtures/AgentDesktopFixture.cs')], { windowsHide: true, stdio: 'pipe' });
+  await cp(parentExe, childExe);
+  parent = spawn(parentExe, ['parent'], { windowsHide: false, stdio: 'ignore' });
+  const baseline = await waitFor(async () => { const s = await state(parentExe); return s?.foreground && s; }, 'parent foreground');
+  await command(parentExe, 'monitor');
+  client = new Client({ name: 'opencu-agent-desktop-acceptance', version: '1' });
+  const transport = new StdioClientTransport({ command: process.execPath, args: [path.join(root, 'src/server.mjs')], stderr: 'pipe' });
+  transport.stderr.resume(); await client.connect(transport);
+  assert.equal((await control('status')).state, 'inactive');
+  const started = await control('start');
+  assert.equal(started.state, 'running'); assert.notEqual(started.sessionId, baseline.sessionId);
+  check('start-child-session', { childSession: started.sessionId, parentSession: baseline.sessionId });
+  assert.equal((await state(parentExe)).foreignForeground, 0, 'Opening host stole parent foreground');
+  const first = await call('get_app_state', { app: childExe, includeScreenshot: true, disableDiff: true });
+  assert.ok(first.content.some(c => c.type === 'image'), 'Child WGC screenshot is required');
+  const child = await waitFor(() => state(childExe), 'child fixture');
+  assert.equal(child.sessionId, started.sessionId);
+  const inventory = text(await call('list_apps'));
+  assert.ok(!inventory.includes(`"pid":${baseline.pid}`), 'Parent window leaked into child inventory');
+  check('child-launch-capture-and-inventory');
+  await command(parentExe, 'begin');
+  for (let round = 0; round < 6; round++) {
+    let current = await call('get_app_state', { app: childExe, disableDiff: true });
+    current = await call('click', { app: childExe, element_index: index(current, 'Increment fixture') });
+    current = await call('click', { app: childExe, element_index: index(current, 'Fixture text') });
+    await call('type_text', { app: childExe, text: `agent-${round};` });
+    await pause(600);
+  }
+  const parentAfter = await waitFor(async () => { const s = await state(parentExe); return s?.chunks === 20 && s.text === s.expected && s; }, '20 parent chunks');
+  const childAfter = await state(childExe);
+  assert.equal(parentAfter.foreignForeground, 0); assert.equal(parentAfter.injectedFailures, 0);
+  assert.equal(parentAfter.unexpectedCursor, 0); assert.equal(parentAfter.clicks, 0);
+  assert.equal(childAfter.clicks, 6);
+  assert.equal(childAfter.text, Array.from({ length: 6 }, (_, i) => `agent-${i};`).join(''));
+  check('concurrent-input-isolation', { parent: parentAfter, child: childAfter });
+  const stopped = await control('stop'); assert.equal(stopped.state, 'inactive');
+  assert.equal((await agentDesktopAvailability(root)).existingChildSession, 0xffffffff, 'Tool stop left a child session');
+  check('tool-stop-logs-off');
+  // Reusing the same connection after a tool stop is intentional, not after a
+  // person stop. Task RunEx must work more than once (HKCU Run did not).
+  const restarted = await control('start'); assert.equal(restarted.state, 'running');
+  check('second-explicit-start');
+  // Send the normal WM_CLOSE path only to the exact host PID returned by this
+  // connection, after checking its fixed title. No app-name-wide termination.
+  const script = `$p=Get-Process -Id ${restarted.hostPid}; if($p.MainWindowTitle -ne 'OpenCU agent desktop'){throw 'Unexpected host'}; if(!$p.CloseMainWindow()){throw 'Cannot close host'}`;
+  execFileSync(path.join(process.env.WINDIR, 'System32/WindowsPowerShell/v1.0/powershell.exe'),
+    ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { windowsHide: true, stdio: 'pipe' });
+  await waitFor(async () => (await control('status')).stoppedByPerson, 'host-close latch');
+  for (const [name, args] of [['agent_desktop', { action: 'start' }], ['list_apps', {}], ['get_app_state', { app: childExe }]]) {
+    await call(name, args, 'USER_STOPPED');
+  }
+  await control('stop');
+  assert.equal((await agentDesktopAvailability(root)).existingChildSession, 0xffffffff, 'Window close left a child session');
+  await call('agent_desktop', { action: 'start' }, 'USER_STOPPED');
+  check('window-close-latches-entire-connection');
+  assert.equal((await state(parentExe)).foreignForeground, 0);
+  await command(parentExe, 'end');
+  report.ok = true;
+} catch (cause) { report.error = cause.stack; process.exitCode = 1; }
+finally {
+  if (client) {
+    try { await call('agent_desktop', { action: 'stop' }); } catch (cause) { report.cleanupError = cause.message; report.ok = false; process.exitCode = 1; }
+    await client.close();
+  }
+  if (parent && parent.exitCode === null) {
+    try { await command(parentExe, 'close'); } catch { parent.kill(); }
+    await waitFor(() => parent.exitCode !== null, 'parent fixture exit').catch(() => parent.kill());
+  }
+  // Child fixture ends through session logoff. Retain files on failure for review.
+  if (report.ok) await rm(temporary, { recursive: true, force: true });
+  await writeFile(path.join(area, 'result.json'), JSON.stringify(report, null, 2) + '\n');
+  console.log(JSON.stringify({ ok: report.ok, report: path.join(area, 'result.json') }));
+}
