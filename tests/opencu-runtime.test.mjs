@@ -9,13 +9,17 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const state = { app: { id: 'dev.opencu.fixture', displayName: 'Fixture', pid: 123 }, text: 'App: "Fixture"\nWindow: "Fixture"\n1 button Press\n2 text field Value="initial"' };
+const state = { app: { id: 'dev.opencu.fixture', displayName: 'Fixture', pid: 123 }, text: 'App: "Fixture"\nWindow: "Fixture"\n[1] button Press\n[2] text field Value="initial"' };
 
-async function fixture(t, results = []) {
+async function fixture(t, results = [], platform) {
   const dir = await mkdtemp(path.join(tmpdir(), 'opencu-test-'));
   let client;
   t.after(async () => { await client?.close(); await rm(dir, { recursive: true, force: true }); });
   await cp(path.join(root, 'src'), path.join(dir, 'src'), { recursive: true });
+  if (platform) {
+    const server = path.join(dir, 'src/server.mjs');
+    await writeFile(server, (await readFile(server, 'utf8')).replace('new OpenCURuntime({ root })', `new OpenCURuntime({ root, platform: ${JSON.stringify(platform)} })`));
+  }
   await symlink(path.join(root, 'node_modules'), path.join(dir, 'node_modules'), 'dir');
   await writeFile(path.join(dir, 'package.json'), '{"type":"module","version":"9.8.7-test"}');
   const binary = path.join(dir, '.build/OpenCU.app/Contents/MacOS/opencu-engine');
@@ -329,4 +333,67 @@ test('a provider that ignores EOF is terminated before a replacement starts', as
   assert.equal((await f.starts()).length, 2);
   assert.throws(() => process.kill(oldPID, 0), { code: 'ESRCH' });
   assert.deepEqual((await f.calls()).map(q => q.method), ['get_app_state', 'get_app_state']);
+});
+
+
+test('waitForText ignores all headers and summaries but matches numbered elements', async t => {
+  const text = 'App: AppOnly\nWindow: TitleOnly\nCapture target: CaptureOnly\nWindow summary: SummaryOnly\nIME: WarningOnly\n[1] Text title="ElementOnly"';
+  const f = await fixture(t, Array(6).fill({ result: { ...state, text } }));
+  for (const waitForText of ['AppOnly', 'TitleOnly', 'CaptureOnly', 'SummaryOnly', 'WarningOnly']) {
+    const result = await f.call('get_app_state', { app: 'Fixture', waitForText, waitTimeoutMs: 0 });
+    assert.equal(result._meta['opencu/error'], 'WAIT_TIMEOUT');
+  }
+  assert.ok(!(await f.call('get_app_state', { app: 'Fixture', waitForText: 'ElementOnly', waitTimeoutMs: 0 })).isError);
+});
+
+test('scope is rejected before input on macOS', async t => {
+  const f = await fixture(t, [], 'darwin');
+  for (const [method, args] of [
+    ['get_app_state', {}], ['click', { element_index: 2 }],
+    ['run_actions', { actions: [{ method: 'type_text', text: 'never' }] }],
+  ]) {
+    const result = await f.call(method, { app: 'Fixture', scope: 1, ...args });
+    assert.equal(result._meta['opencu/error'], 'INVALID_ARGUMENT');
+    assert.match(result.content[0].text, /Windows-only/);
+  }
+  assert.deepEqual(await f.calls(), []);
+});
+
+test('scope reaches final reads and stays anchored across polling and retry', async t => {
+  const scoped = { ...state, scopeRoot: 'live:root-9', text: '[1] Pane title="Panel"\n  [2] Text title="Ready"' };
+  const f = await fixture(t, [
+    { result: { ok: true } }, { result: scoped },
+    { error: { code: 'SCREENSHOT_FAILED', message: 'fixture transient' } },
+    { result: { ...scoped, text: '[1] Pane title="Panel"' } }, { result: scoped },
+    { result: { ok: true } }, { result: scoped },
+  ], 'win32');
+  await f.call('click', { app: 'Fixture', element_index: 2, scope: 9 });
+  const result = await f.call('get_app_state', { app: 'Fixture', scope: 1, waitForText: 'Ready' });
+  assert.ok(!result.isError);
+  await f.call('run_actions', { app: 'Fixture', scope: 1, actions: [{ method: 'type_text', text: 'x' }] });
+  const calls = await f.calls();
+  assert.equal(calls[0].params.scope, undefined, 'scope only controls the final read');
+  assert.equal(calls[1].params.scope, 9);
+  assert.equal(calls[6].params.scope, 1);
+  assert.equal(calls[2].params.scopeRequest, calls[3].params.scopeRequest);
+  assert.equal(calls[3].params.scopeRequest, calls[4].params.scopeRequest);
+  assert.notEqual(calls[1].params.scopeRequest, calls[2].params.scopeRequest);
+});
+
+test('diff never crosses full, scoped, different root or gone-root states', async t => {
+  const results = [undefined, 'live:a', 'live:b', 'live:b', 'gone:b', undefined].map(scopeRoot => ({ result: { ...state, scopeRoot } }));
+  const f = await fixture(t, results, 'win32');
+  for (let i = 0; i < results.length; i++) {
+    const result = await f.call('get_app_state', { app: 'Fixture', ...(i > 0 && i < 5 ? { scope: 1 } : {}) });
+    assert.equal(result.content[0].text.includes('No accessibility changes'), i === 3);
+  }
+});
+
+test('a gone scope is a successful action final read with full fallback state', async t => {
+  const fallback = { ...state, scopeRoot: 'gone:a', text: state.text + '\nScope element is gone; showing the whole window.' };
+  const f = await fixture(t, [{ result: { ok: true } }, { result: fallback }], 'win32');
+  const result = await f.call('click', { app: 'Fixture', element_index: 2, scope: 1 });
+  assert.ok(!result.isError);
+  assert.equal(result.content[0].text, fallback.text);
+  assert.equal((await f.calls()).length, 2);
 });

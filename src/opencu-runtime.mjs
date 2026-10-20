@@ -36,9 +36,12 @@ export class OpenCURuntime {
   #requestTimeoutMs;
   #coordinates = new CoordinateState();
   #lastText = new Map();
+  #scopeRequest = 0;
+  #platform;
 
-  constructor({ root, enginePath, requestTimeoutMs = 90_000 } = {}) {
+  constructor({ root, enginePath, requestTimeoutMs = 90_000, platform = process.platform } = {}) {
     this.#requestTimeoutMs = requestTimeoutMs;
+    this.#platform = platform;
     this.enginePath = enginePath ?? defaultEnginePath(root);
   }
 
@@ -118,12 +121,13 @@ export class OpenCURuntime {
   }
 
   async #observe(method, args, signal) {
-    const { app, includeScreenshot = false, waitForText, waitTimeoutMs = 5000 } = args;
+    const { app, includeScreenshot = false, waitForText, waitTimeoutMs = 5000, scope } = args;
+    const scopeOptions = scope === undefined ? {} : { scope, scopeRequest: String(++this.#scopeRequest) };
     const deadline = Date.now() + waitTimeoutMs;
     let result;
     let retries = 0;
     for (;;) {
-      try { result = await this.#request(method, { app, includeScreenshot }, signal); }
+      try { result = await this.#request(method, { app, includeScreenshot, ...scopeOptions }, signal); }
       catch (error) {
         if (!['NO_ACCESSIBLE_WINDOW', 'SCREENSHOT_FAILED', 'WINDOW_CHANGED'].includes(error.code) || retries++ >= 2) throw error;
         await pause(150 * retries);
@@ -131,7 +135,7 @@ export class OpenCURuntime {
         continue;
       }
       this.#needsObservation = false;
-      if (!waitForText || result.text.includes(waitForText)) return result;
+      if (!waitForText || result.text.split('\n').some(line => /^\s*\[\d+\] /.test(line) && line.includes(waitForText))) return result;
       if (Date.now() >= deadline) {
         const error = new Error('The expected text did not appear. Inspect the returned state before continuing. No additional input was sent.');
         error.code = 'WAIT_TIMEOUT'; error.lastState = result; throw error;
@@ -143,8 +147,10 @@ export class OpenCURuntime {
 
   #stateResult(state, { disableDiff = false, waitForText } = {}) {
     const key = state.app.id;
-    const unchanged = !disableDiff && !waitForText && this.#lastText.get(key) === state.text;
-    this.#lastText.set(key, state.text);
+    const previous = this.#lastText.get(key);
+    const scope = state.scopeRoot ?? null;
+    const unchanged = !disableDiff && !waitForText && previous?.text === state.text && previous.scope === scope;
+    this.#lastText.set(key, { text: state.text, scope });
     const content = [{ type: 'text', text: unchanged ? `${state.text.split('\n').slice(0, 3).join('\n')}\nNo accessibility changes.` : state.text }];
     if (state.screenshot) content.push({ type: 'image', data: state.screenshot.data, mimeType: state.screenshot.mimeType });
     return { content, _meta: { 'opencu/app': state.app, 'opencu/engine': 'independent' } };
@@ -169,14 +175,18 @@ export class OpenCURuntime {
       if (this.#needsObservation && (inputs.has(method) || ['activate_app', 'run_actions'].includes(method))) {
         throw Object.assign(new Error('The engine timed out and must restart. Read fresh app state before input; no operation was retried.'), { code: 'OBSERVATION_REQUIRED' });
       }
+      if (args.scope !== undefined) {
+        if (this.#platform !== 'win32') throw Object.assign(new Error('scope is Windows-only for now.'), { code: 'INVALID_ARGUMENT' });
+        if (!Number.isSafeInteger(args.scope) || args.scope < 1) throw Object.assign(new Error('scope must be a positive integer.'), { code: 'INVALID_ARGUMENT' });
+      }
       this.#coordinates.before(method, args);
       let options = args;
       let completed = 0;
       if (inputs.has(method) || method === 'run_actions') {
-        const { app, ...parameters } = args;
+        const { app, scope, ...parameters } = args;
         const actions = method === 'run_actions' ? args.actions : [{ method, ...parameters }];
         options = method === 'run_actions' ? args : {
-          app, includeScreenshot: method === 'drag' || ['click', 'scroll'].includes(method) && args.element_index === undefined,
+          app, scope, includeScreenshot: method === 'drag' || ['click', 'scroll'].includes(method) && args.element_index === undefined,
         };
         if (actions.some(action => !inputs.has(action.method))) throw new Error('Unknown input operation in batch; no input was sent.');
         for (const [index, { method: action, ...params }] of actions.entries()) {

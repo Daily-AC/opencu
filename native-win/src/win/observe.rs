@@ -15,6 +15,11 @@ pub struct Element {
     pub window: Window,
     pub actions: Vec<String>,
 }
+#[derive(Clone)]
+pub struct Scope {
+    pub root: Option<Element>,
+    pub identity: String,
+}
 pub struct Snapshot {
     pub app: App,
     pub keyboard_window: Window,
@@ -259,7 +264,7 @@ unsafe fn node(el: &IUIAutomationElement, children: bool) -> Result<Node> {
     Ok(node)
 }
 // UIA owns the identity semantics; never merge controls by title, role or bounds.
-unsafe fn runtime_id(el: &IUIAutomationElement) -> Option<Vec<i32>> {
+pub unsafe fn runtime_id(el: &IUIAutomationElement) -> Option<Vec<i32>> {
     use windows::Win32::System::Ole::*;
     let array = el.GetRuntimeId().ok()?;
     if array.is_null() {
@@ -285,7 +290,20 @@ unsafe fn runtime_id(el: &IUIAutomationElement) -> Option<Vec<i32>> {
     let _ = SafeArrayDestroy(array);
     result
 }
-pub unsafe fn observe(uia: &IUIAutomation, app: App, include: bool) -> Result<(Value, Snapshot)> {
+// Walk live ancestry to the exact retained window, not merely a same-PID HWND.
+unsafe fn scope_attached(uia: &IUIAutomation, element: &Element) -> bool {
+    if element.window.validate().is_err() { return false; }
+    let Ok(root) = uia.ElementFromHandle(element.window.hwnd) else { return false; };
+    let Ok(walker) = uia.RawViewWalker() else { return false; };
+    let mut current = element.element.clone();
+    for _ in 0..=120 {
+        if uia.CompareElements(&current, &root).is_ok_and(|v| v.as_bool()) { return true; }
+        let Ok(parent) = walker.GetParentElement(&current) else { return false; };
+        current = parent;
+    }
+    false
+}
+pub unsafe fn observe(uia: &IUIAutomation, app: App, include: bool, scope: Option<&Scope>) -> Result<(Value, Snapshot)> {
     safety::desktop()?;
     // Start with the resolver's candidates; tool-only title matches may expand
     // to content below. Discover owned windows and summaries across the PID.
@@ -356,6 +374,18 @@ pub unsafe fn observe(uia: &IUIAutomation, app: App, include: bool) -> Result<(V
     };
     let walker = uia.RawViewWalker()?;
     let cache = cache_request(uia)?;
+    let scoped = live_scope(scope.and_then(|s| s.root.as_ref()), |e| {
+        e.window.pid == app.pid && e.window.created == primary.created
+            && family.iter().any(|w| w.hwnd == e.window.hwnd.0 as usize && w.visible && !w.minimized)
+            && owned_by(&family, e.window.hwnd.0 as usize, primary.hwnd.0 as usize)
+            && scope_attached(uia, e)
+    }).and_then(|e| {
+        let root = e.element.BuildUpdatedCache(&cache).ok()?;
+        let n = node(&root, true).ok()?;
+        if zero_size_omitted(n.bounds, n.focused) { return None; }
+        Some((e, root))
+    });
+    text += scope_gone_line(scope.is_some(), scoped.is_some());
     let started = Instant::now();
     let mut inspected = 0;
     let mut truncated = false;
@@ -384,7 +414,7 @@ pub unsafe fn observe(uia: &IUIAutomation, app: App, include: bool) -> Result<(V
             covered(info.bounds, &desktop_info[..desktop_index]),
             !tree,
         );
-        if !tree {
+        if !tree || scoped.as_ref().is_some_and(|(e, _)| e.window.hwnd != window.hwnd) {
             continue;
         }
         if inspected >= 8000
@@ -397,7 +427,8 @@ pub unsafe fn observe(uia: &IUIAutomation, app: App, include: bool) -> Result<(V
         }
         let client = apps::client_rect(window);
         let mut omitted = 0usize;
-        let root = match uia.ElementFromHandleBuildCache(window.hwnd, &cache) {
+        let root = match scoped.as_ref().map(|(_, root)| Ok(root.clone()))
+            .unwrap_or_else(|| uia.ElementFromHandleBuildCache(window.hwnd, &cache)) {
             Ok(r) => r,
             Err(e) => {
                 text += &format!("UIA unavailable: {}\n", e.code());
@@ -456,7 +487,8 @@ pub unsafe fn observe(uia: &IUIAutomation, app: App, include: bool) -> Result<(V
             if outside {
                 omitted += 1;
             }
-            let eligible = !outside && node.visible_in_tree();
+            let scope_root = scoped.is_some() && depth == 0;
+            let eligible = !zero && (scope_root || (!outside && node.visible_in_tree()));
             let id = if eligible { runtime_id(&el) } else { None };
             let duplicate = eligible
                 && (id.as_ref().and_then(|id| identities.index(id)).is_some()
@@ -506,6 +538,9 @@ pub unsafe fn observe(uia: &IUIAutomation, app: App, include: bool) -> Result<(V
         text+="Tree truncated: limit 1200 listed / 8000 inspected nodes, depth 120, 180000 bytes, or 8 seconds.\n";
     }
     let mut result = json!({"text":text,"app":app.json()});
+    if let Some(scope) = scope {
+        result["scopeRoot"] = json!(format!("{}:{}", if scoped.is_some() { "live" } else { "gone" }, scope.identity));
+    }
     if include {
         if IsIconic(primary.hwnd).as_bool() {
             result["text"] = json!(format!(

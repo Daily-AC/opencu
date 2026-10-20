@@ -19,10 +19,12 @@ const runtime = new OpenCURuntime({ root });
 const app = z.string().min(1).describe('App name or full app path; macOS bundle ID; Windows process name, window title fragment, or Start-menu shortcut name');
 const element_index = z.number().int().describe('Element index from the latest returned app state');
 const duration = z.number().finite().min(0).max(30).optional().describe('Seconds to hold before releasing, from 0 to 30.');
+const scope = z.number().int().min(1).optional().describe('Windows only for now: element index from the latest returned state. Read only its retained subtree, renumbered from [1], including after actions. If it disappears, return the whole window with a notice. macOS returns INVALID_ARGUMENT.');
 const stateOptions = {
+  scope,
   disableDiff: z.boolean().optional(),
   includeScreenshot: z.boolean().optional().describe('Default false. Use true for visual content or coordinate input; omit for indexed controls, menus, dialogs and text editing.'),
-  waitForText: z.string().min(1).optional().describe('Wait for exact, case-sensitive text without UI actions. Use only a known expected label during a real load; omit on ordinary reads.'),
+  waitForText: z.string().min(1).optional().describe('Wait for exact, case-sensitive text in element lines only (within scope when supplied), excluding headers and window summaries, without UI actions. Use only a known expected label during a real load; omit on ordinary reads.'),
   waitTimeoutMs: z.number().int().min(0).max(15000).optional().describe('Polling deadline for waitForText; defaults to 5000 ms. Native call timeouts remain separate.'),
 };
 const point = {
@@ -73,6 +75,10 @@ const definitions = {
   },
 };
 
+for (const definition of Object.values(definitions)) {
+  if (!definition.readOnly) definition.schema.scope = scope;
+}
+
 definitions.run_actions = {
   description: 'Run a short known sequence and return its final state. Single-action tools already return text state; use this for several known actions or an inline final screenshot. Example: focus an observed field, select all, paste, then inspect the result. Stop when new information or approval is needed. Coordinate input must be first and use a fresh screenshot. Stops on error or an unknown AX action outcome without replay; earlier actions may have run. An unknown outcome requires an explicit get_app_state before continuing.',
   schema: {
@@ -81,7 +87,7 @@ definitions.run_actions = {
       .filter(([name, definition]) => !definition.readOnly && name !== 'activate_app')
       .map(([method, definition]) => z.object({
         method: z.literal(method),
-        ...Object.fromEntries(Object.entries(definition.schema).filter(([key]) => key !== 'app')),
+        ...Object.fromEntries(Object.entries(definition.schema).filter(([key]) => !['app', 'scope'].includes(key))),
       }).strict()))).min(1).max(16),
     ...stateOptions,
   },
@@ -93,7 +99,7 @@ definitions.list_apps = {
 };
 definitions.activate_app = {
   description: 'Bring the requested app forward and return its state. Use when foreground interaction is required. On Windows, changing foreground requires 10 seconds without human keyboard or mouse activity; otherwise PERSON_ACTIVE is returned with no foreground change or input. Inspect the returned window before input and do not compete with user activity.',
-  schema: { app, ...stateOptions },
+  schema: { app, ...Object.fromEntries(Object.entries(stateOptions).filter(([key]) => key !== 'scope')) },
 };
 
 for (const [name, definition] of Object.entries(definitions)) {

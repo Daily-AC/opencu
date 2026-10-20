@@ -564,3 +564,28 @@ Nodes with width <= 0 or height <= 0 receive no line or index unless focused.
 Their descendants are still traversed and receive dense indexes; one `Zero-size:`
 summary reports the omitted count. Focused nodes also survive Chromium viewport
 filtering. This is observation filtering only, not input authorization.
+
+`scope` is an optional positive element index on `get_app_state`, all input tools,
+and `run_actions` (the batch's final observation). Windows retains the actual UIA
+object from the latest snapshot before walking, checks its live ancestry to its
+original window and that window's membership in the current target family, and
+walks only that subtree. The root is `[1]`; all indexes refer to this new state.
+Headers and window summaries remain; screenshots still cover the capture window.
+A missing, detached, unreadable or no-longer-listable root yields the whole window
+and `Scope element is gone; showing the whole window.` It never makes an action's
+final read fail merely because its scope disappeared. macOS rejects `scope` with
+`INVALID_ARGUMENT` (Windows-only for now), before sending input.
+
+The internal `scopeRequest` identifies one MCP observation/poll/retry sequence so
+repeated reads retain the original object rather than reinterpret its old index.
+Direct engine reads without it resolve each `scope` against the latest snapshot.
+`scopeRoot` in native state identifies the actual UIA root (or a unique request
+when UIA identity is unavailable), including whether fallback occurred. The MCP
+whole-text diff compares text and this identity, never across different scopes.
+Neither internal field authorizes input.
+
+`waitForText` matches case-sensitive substrings only on numbered element lines,
+within the returned subtree when scoped. App/window/capture headers, summaries,
+and warnings cannot satisfy it. Existing polling deadlines and `WAIT_TIMEOUT`
+responses with the last state remain unchanged. A listed Window element's own
+name remains element text; scope to content to exclude such a root.
