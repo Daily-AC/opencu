@@ -4,7 +4,8 @@
 // Disposable fixtures only; do not run this suite from a headless shell.
 // Parent stimuli are SendInput, NOT evidence of hardware/physical Escape behavior.
 // Lock/unlock remains manual: the suite cannot unlock without a password and must
-// never obtain one. Check child continuity plus parentLocked true/false manually.
+// never obtain one. Manually check retained reads/capture, SCREEN_LOCKED input
+// refusals, parentLocked true/false and later explicit input after unlock.
 import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
 import { cp, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
@@ -26,7 +27,7 @@ const childExe = path.join(temporary, 'OpenCU-Child-Fixture.exe');
 const report = { test: 'windows-agent-desktop', ok: false, checks: [],
   parentStimulus: 'SendInput in parent session; not hardware input',
   manualFollowups: ['deliberate click enables interaction; deactivation returns to watch-only; physical Escape still stops',
-    'parent lock keeps child running; parentLocked true/false; disconnect/logoff still stop (manual unlock only)', 'smart-card sign-in', 'host crash during startup',
+    'locked parent: reads/capture work, input SCREEN_LOCKED; parentLocked true/false; explicit input after manual unlock; disconnect/logoff still stop', 'smart-card sign-in', 'host crash during startup',
     'external minimize, covered or partly off-screen viewport, GPU/video', 'unsupported Windows editions/policies'] };
 let client, parent;
 const check = (name, data = {}) => { report.checks.push({ name, ...data }); console.log(name); };
@@ -96,6 +97,23 @@ try {
   assert.equal(hovered.foreignForeground, 0); assert.equal(hovered.injectedFailures, 0);
   assert.ok(hovered.hoverMoves >= 5);
   check('watch-only-hover-does-not-interrupt', { stimulus: 'parent SendInput mouse moves; no clicks or hardware input', moves: hovered.hoverMoves });
+  await command(parentExe, `park:${started.hostPid}`);
+  const parkedBefore = await waitFor(async () => { const s = await state(parentExe); return s?.parked && s; }, 'stationary parent pointer over view');
+  report.parkedPointer = { before: parkedBefore };
+  for (let round = 0; round < 3; round++) {
+    let current = await call('get_app_state', { app: childExe, disableDiff: true });
+    await call('click', { app: childExe, element_index: index(current, 'Increment fixture') });
+    current = await call('get_app_state', { app: childExe, disableDiff: true });
+    await call('click', { app: childExe, element_index: index(current, 'Fixture text') });
+  }
+  await pause(250); // Let loopback pointer updates and fixture observations arrive.
+  const parkedAfter = await state(parentExe);
+  report.parkedPointer.after = parkedAfter; // Preserve evidence even when refused.
+  assert.deepEqual(parkedAfter.cursor, parkedBefore.parkedCursor, 'Child clicks moved the parked parent pointer');
+  assert.equal(parkedAfter.unexpectedCursor, 0);
+  assert.equal(parkedAfter.foreignForeground, 0);
+  assert.equal(parkedAfter.injectedFailures, 0);
+  check('watch-only-server-pointer-isolation', { stimulus: 'one parent SendInput move, then no parent mouse input', before: parkedBefore.parkedCursor, after: parkedAfter.cursor });
   await command(parentExe, 'begin');
   for (let round = 0; round < 6; round++) {
     let current = await call('get_app_state', { app: childExe, disableDiff: true });
@@ -112,11 +130,11 @@ try {
   Object.assign(report, { parentAfter, childAfter }); // kept in result.json even if an assertion below fails
   assert.equal(parentAfter.foreignForeground, 0); assert.equal(parentAfter.injectedFailures, 0);
   assert.equal(parentAfter.unexpectedCursor, 0); assert.equal(parentAfter.clicks, 0);
-  assert.equal(childAfter.clicks, 7); // One hover check, then six concurrent rounds.
+  assert.equal(childAfter.clicks, 10); // One hover, three parked-pointer, six concurrent checks.
   assert.equal(childAfter.text, Array.from({ length: 6 }, (_, i) => `agent-${i};`).join(''));
   check('concurrent-input-isolation', { parent: parentAfter, child: childAfter });
   const stopped = await control('stop'); assert.equal(stopped.state, 'inactive');
-  assert.equal((await agentDesktopAvailability(root)).existingChildSession, 0xffffffff, 'Tool stop left a child session');
+  assert.equal((await agentDesktopAvailability(root)).existingChildSession, null, 'Tool stop left a child session');
   check('tool-stop-logs-off');
   // Reusing the same connection after a tool stop is intentional, not after a
   // person stop. Task RunEx must work more than once (HKCU Run did not).
@@ -132,7 +150,7 @@ try {
     await call(name, args, 'USER_STOPPED');
   }
   await control('stop');
-  assert.equal((await agentDesktopAvailability(root)).existingChildSession, 0xffffffff, 'Window close left a child session');
+  assert.equal((await agentDesktopAvailability(root)).existingChildSession, null, 'Window close left a child session');
   await call('agent_desktop', { action: 'start' }, 'USER_STOPPED');
   check('window-close-latches-entire-connection');
   assert.equal((await state(parentExe)).foreignForeground, 0);
