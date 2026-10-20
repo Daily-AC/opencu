@@ -1,4 +1,5 @@
-# Read-only acceptance. Requires the user's unlocked Windows desktop, no network.
+# Package and offline preparation acceptance. No desktop input or network.
+# From a normal Windows terminal; temporary installs use their own demand task.
 [CmdletBinding(DefaultParameterSetName='Zip')]
 param(
     [Parameter(Mandatory=$true, ParameterSetName='Zip')][string]$Zip,
@@ -9,7 +10,7 @@ $ErrorActionPreference = 'Stop'
 $previousLocalAppData = $env:LOCALAPPDATA
 $temporary = Join-Path ([IO.Path]::GetTempPath()) ('ocu-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
 $process = $null
-$summary = [ordered]@{ test = 'windows-package-read-only'; ok = $false; networkUsed = $false; inputCalls = 0 }
+$summary = [ordered]@{ test = 'windows-package-offline'; ok = $false; networkUsed = $false; inputCalls = 0 }
 $failure = $null
 
 function Read-McpResponse([int]$Id) {
@@ -41,6 +42,58 @@ function Assert-Keys($Object, [string[]]$Expected) {
     $actual = @($Object.PSObject.Properties.Name | Sort-Object)
     if (($actual -join ',') -ne (($Expected | Sort-Object) -join ',')) { throw 'Unexpected install manifest keys.' }
 }
+function Invoke-JsonProcess([string]$Executable, [string]$Arguments, [int]$Timeout = 15000, [switch]$AllowFailure) {
+    $child = New-Object Diagnostics.Process
+    try {
+        $child.StartInfo.FileName = $Executable
+        $child.StartInfo.Arguments = $Arguments
+        $child.StartInfo.UseShellExecute = $false
+        $child.StartInfo.CreateNoWindow = $true
+        $child.StartInfo.RedirectStandardOutput = $true
+        $child.StartInfo.RedirectStandardError = $true
+        $child.StartInfo.StandardOutputEncoding = New-Object Text.UTF8Encoding($false)
+        [void]$child.Start()
+        $output = $child.StandardOutput.ReadToEndAsync()
+        $errors = $child.StandardError.ReadToEndAsync()
+        if (!$child.WaitForExit($Timeout)) { $child.Kill(); throw 'Offline helper check timed out.' }
+        $result = $output.GetAwaiter().GetResult() | ConvertFrom-Json
+        if ($child.ExitCode -ne 0 -and !$AllowFailure) { throw $result.message }
+        return $result
+    } finally { $child.Dispose() }
+}
+function Test-AgentDesktopPreparation {
+    $doctor = Invoke-JsonProcess (Join-Path $InstallDirectory '.build\win\opencu-engine.exe') '--doctor'
+    $ps = Join-Path ([Environment]::SystemDirectory) 'WindowsPowerShell\v1.0\powershell.exe'
+    $prepareArgs = '-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "' + (Join-Path $InstallDirectory 'scripts\agent-desktop\setup.ps1') + '" -Root "' + $InstallDirectory + '" -PrepareOnly'
+    if (!$doctor.childSessionsEnabled) {
+        $refused = Invoke-JsonProcess $ps $prepareArgs 90000 -AllowFailure
+        if ($refused.event -ne 'failure' -or !$refused.setupRequired) { throw 'Automatic preparation did not refuse disabled child sessions.' }
+        $summary.agentDesktopPreparation = 'Child sessions disabled: automatic preparation refused without elevation.'
+        return
+    }
+    $runner = Join-Path $temporary 'prepare-agent-desktop.mjs'
+    [IO.File]::WriteAllText($runner, @'
+import path from 'node:path';
+import {pathToFileURL} from 'node:url';
+const root = process.argv[2];
+const api = await import(pathToFileURL(path.join(root, 'src/agent-desktop.mjs')));
+try {
+  const ready = await api.prepareAgentDesktop(root);
+  const checks = await api.runAgentDesktopHelper(await api.agentDesktopHelper(root), ['self-test']);
+  console.log(JSON.stringify({ready, checks}));
+} catch (error) { console.log(JSON.stringify({message:error.message})); process.exitCode=1; }
+'@, (New-Object Text.UTF8Encoding($false)))
+    $arguments = '"' + $runner + '" "' + $InstallDirectory + '"'
+    $prepared = Invoke-JsonProcess (Join-Path $InstallDirectory 'node\node.exe') $arguments 120000
+    if (!$prepared.ready.available -or !$prepared.checks.ok) { throw 'Installed automatic preparation or pipe self-test failed.' }
+    # Exercise the same non-elevated preparation twice with an existing directory.
+    for ($attempt=0; $attempt -lt 2; $attempt++) {
+        if (!(Invoke-JsonProcess $ps $prepareArgs 90000).prepared) { throw 'Repeated preparation was not idempotent.' }
+    }
+    $rechecked = Invoke-JsonProcess (Join-Path $InstallDirectory 'node\node.exe') $arguments 120000
+    if (!$rechecked.ready.available) { throw 'Repeated preparation broke availability.' }
+    $summary.agentDesktopPreparation = 'Automatic preparation, repeated setup and real-pipe self-test passed.'
+}
 try {
     if ($env:OS -ne 'Windows_NT') { throw 'This verifier requires Windows.' }
     New-Item -ItemType Directory -Path $temporary | Out-Null
@@ -57,6 +110,7 @@ try {
         & ([ScriptBlock]::Create($installerText)) -LocalZip $Zip
         $InstallDirectory = Join-Path $env:LOCALAPPDATA 'OpenCU'
         $summary.installedFromLocalZip = $true
+        Test-AgentDesktopPreparation
     } else {
         $InstallDirectory = (Resolve-Path -LiteralPath $InstallDirectory).Path
         $summary.installedFromLocalZip = $false
@@ -146,6 +200,9 @@ try {
         & ([ScriptBlock]::Create($installerText)) -LocalZip $Zip
         if ((Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash -ne $before) { throw 'Reinstall changed the manifest unexpectedly.' }
         $summary.closedSessionUpdateSucceeded = $true
+        if (Test-Path -LiteralPath (Join-Path $InstallDirectory '.build\win\agent-desktop\receipt.json')) { throw 'Fixture update did not remove derived artifacts.' }
+        Test-AgentDesktopPreparation
+        $summary.agentDesktopUpdatePreparationChecked = $true
     }
     $summary.ok = $true
 } catch {
@@ -162,6 +219,22 @@ try {
         $process.Dispose()
     }
     $env:LOCALAPPDATA = $previousLocalAppData
+    if ($PSCmdlet.ParameterSetName -eq 'Zip' -and $InstallDirectory) {
+        # Never remove a real install's task. Match the unpredictable temporary
+        # installation's exact helper path, including on partial setup failure.
+        try {
+            $scheduler = New-Object -ComObject Schedule.Service
+            $scheduler.Connect()
+            $folder = $scheduler.GetFolder('\')
+            $helperPath = Join-Path $InstallDirectory '.build\win\agent-desktop\OpenCU.AgentDesktop.exe'
+            foreach ($task in @($folder.GetTasks(0))) {
+                if ($task.Definition.Actions.Count -eq 1 -and $task.Definition.Actions.Item(1).Path -eq $helperPath) { $folder.DeleteTask($task.Name, 0) }
+            }
+        } catch {
+            $summary.ok = $false; $summary.taskCleanupError = $_.Exception.Message
+            if (!$failure) { $failure = $_ }
+        }
+    }
     if (Test-Path -LiteralPath $temporary) {
         try { Remove-Item -LiteralPath $temporary -Recurse -Force } catch {
             $summary.ok = $false
