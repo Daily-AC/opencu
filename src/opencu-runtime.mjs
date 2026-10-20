@@ -44,7 +44,6 @@ export class OpenCURuntime {
   #onDesktopEvent;
   #agentDesktop;
   #desktopGeneration;
-  #desktopInputBlocked = false;
   #desktopLocked = false;
 
   constructor({ root, enginePath, requestTimeoutMs = 90_000, platform = process.platform,
@@ -82,7 +81,6 @@ export class OpenCURuntime {
             fail(Object.assign(new Error('Invalid agent desktop event.'), { code: 'AGENT_DESKTOP_LOST' })); return;
           }
           this.#desktopLocked = message.parentLocked === true;
-          this.#desktopInputBlocked = message.inputBlocked === true;
           if (this.#desktopGeneration !== message.generation) {
             this.#needsObservation = true;
             this.#desktopGeneration = message.generation;
@@ -191,7 +189,6 @@ export class OpenCURuntime {
       }
       explicit = false;
       this.#needsObservation = false;
-      if (this.#agentDesktop) this.#desktopInputBlocked = result.agentDesktop?.windowState !== 'admitted';
       const scopeGone = scope !== undefined && result.scopeRoot?.startsWith('gone:');
       if (!waitForText || !scopeGone && result.text.split('\n').some(line => /^\s*\[\d+\] /.test(line) && line.includes(waitForText))) return result;
       if (Date.now() >= deadline) {
@@ -232,7 +229,6 @@ export class OpenCURuntime {
       }
       if (this.#agentDesktop && (inputs.has(method) || method === 'run_actions')) {
         if (this.#desktopLocked) throw Object.assign(new Error('macOS is locked. Unlock and read fresh state.'), { code: 'SCREEN_LOCKED' });
-        if (this.#desktopInputBlocked) throw Object.assign(new Error('This window is reduced or was returned outside the agent desktop. No input was sent.'), { code: 'AGENT_DESKTOP_CONSENT_REQUIRED' });
       }
       if (this.#needsObservation && (inputs.has(method) || ['activate_app', 'run_actions'].includes(method))) {
         throw Object.assign(new Error(this.#agentDesktop ? 'The agent desktop changed. Read fresh app state before input; no operation was retried.' : 'The engine timed out and must restart. Read fresh app state before input; no operation was retried.'), { code: 'OBSERVATION_REQUIRED' });

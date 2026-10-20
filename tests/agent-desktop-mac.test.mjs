@@ -124,15 +124,15 @@ async function transportFixture(t) {
   const calls = [], events = [];
   const script = `
     const { createInterface } = require('node:readline');
-    let waiting, reads = 0;
+    let waiting, reads = 0, observedApp;
     const send = (id, result) => process.stdout.write(JSON.stringify({ id, result }) + '\\n');
-    const state = (text) => ({ app: { id: 'fixture' }, text, agentDesktop: { windowState: 'admitted' } });
+    const state = (text, app = 'fixture') => ({ app: { id: app }, text, agentDesktop: { windowState: app === 'reduced' ? 'reduced' : 'admitted' } });
     createInterface({input:process.stdin}).on('line', line => {
       const q=JSON.parse(line); process.stderr.write(line+'\\n');
       if(q.method==='agent_desktop_start') return send(q.id,{state:'running'});
       if(q.method==='agent_desktop_status') {
         send(q.id,{state:'running',consent:waiting?{}:null});
-        if(q.params.emitReturn) setTimeout(()=>process.stdout.write(JSON.stringify({event:'agent_desktop',state:'running',generation:4,stoppedByPerson:false,parentLocked:false,inputBlocked:true})+'\\n'),10);
+        if(q.params.emitReturn) setTimeout(()=>process.stdout.write(JSON.stringify({event:'agent_desktop',state:'running',generation:4,stoppedByPerson:false,parentLocked:false})+'\\n'),10);
         return;
       }
       if(q.method==='agent_desktop_stop'||q.method==='agent_desktop_cancel') {
@@ -141,7 +141,11 @@ async function transportFixture(t) {
       }
       if(q.method==='get_app_state') {
         if(q.params.app==='pending') { waiting=q.id; return; }
-        return send(q.id,state(++reads===1?'[1] Loading':'[1] Ready'));
+        observedApp = q.params.app;
+        return send(q.id,state(++reads===1?'[1] Loading':'[1] Ready', q.params.app));
+      }
+      if(q.method==='click' && (q.params.app==='reduced' || q.params.app!==observedApp)) {
+        return process.stdout.write(JSON.stringify({id:q.id,error:{code:q.params.app==='reduced'?'AGENT_DESKTOP_CONSENT_REQUIRED':'OBSERVATION_REQUIRED',message:'fixture native admission'}})+'\\n');
       }
       send(q.id,{ok:true});
     });
@@ -182,11 +186,23 @@ test('actual control lane responds during consent and cancellation identifies th
   assert.equal((await f.runtime.desktopControl('stop')).cleanup.ok, true);
 });
 
-test('asynchronous manual-return event invalidates even coordinate input with the consent error', async t => {
+test('asynchronous geometry changes require fresh coordinates without guessing admission', async t => {
   const f = await transportFixture(t);
   await f.runtime.call('get_app_state', { app: 'fixture' });
   await f.runtime.desktopControl('status', { emitReturn: true });
   while (!f.events.length) await new Promise(resolve => setTimeout(resolve, 5));
-  await assert.rejects(f.runtime.call('click', { app: 'fixture', x: 1, y: 1 }), { code: 'AGENT_DESKTOP_CONSENT_REQUIRED' });
+  await assert.rejects(f.runtime.call('click', { app: 'fixture', x: 1, y: 1 }), { code: 'OBSERVATION_REQUIRED' });
   assert.equal(f.calls.filter(call => call.method === 'click').length, 0);
+});
+
+
+test('a reduced read does not invent missing consent for a different admitted app', async t => {
+  const f = await transportFixture(t);
+  await f.runtime.call('get_app_state', { app: 'fixture' });
+  await f.runtime.call('get_app_state', { app: 'reduced' });
+  await assert.rejects(f.runtime.call('click', { app: 'reduced', element_index: 1 }), { code: 'AGENT_DESKTOP_CONSENT_REQUIRED' });
+  // The native action boundary decides whether fixture's observation is stale;
+  // the reduced app must not block that request with someone else's consent error.
+  await assert.rejects(f.runtime.call('click', { app: 'fixture', element_index: 1 }), { code: 'OBSERVATION_REQUIRED' });
+  assert.equal(f.calls.filter(call => call.method === 'click' && call.params.app === 'fixture').length, 1);
 });
