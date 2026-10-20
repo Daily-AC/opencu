@@ -18,7 +18,7 @@ const runtime = new OpenCURuntime({ root });
 
 const app = z.string().min(1).describe('App name or full app path; macOS bundle ID; Windows process name, window title fragment, or Start-menu shortcut name');
 const element_index = z.number().int().describe('Element index from the latest returned app state');
-const duration = z.number().finite().min(0).max(30).optional().describe('Seconds to hold before releasing, from 0 to 30.');
+const duration = z.number().finite().min(0).max(30).optional().describe('Seconds to hold before releasing, from 0 to 30. Windows press_key defaults to 0.05 seconds when omitted; explicit 0 remains allowed.');
 const scope = z.number().int().min(1).optional().describe('Windows only for now: element index from the latest returned state. Read only its retained subtree, renumbered from [1], including after actions. If it disappears, return the whole window with a notice. macOS returns INVALID_ARGUMENT.');
 const stateOptions = {
   scope,
@@ -34,7 +34,7 @@ const point = {
 };
 const definitions = {
   get_app_state: {
-    description: 'Start here: read the requested app by name or platform-specific identifier; it launches if needed. Text normally suffices for menus, dialogs, indexed controls and text editing. Request an image for visual content or coordinates. For separately saved edits, create and verify the destination copy before editing because apps may autosave the source. Verify the saved result and any required source preservation before reporting completion; an action success only confirms input was sent.',
+    description: 'Start here: read the requested app by name or platform-specific identifier; it launches if needed. Windows elevation-required launches return LAUNCH_FAILED with guidance for the person; OpenCU never elevates the program. Text normally suffices for menus, dialogs, indexed controls and text editing. Request an image for visual content or coordinates. For separately saved edits, create and verify the destination copy before editing because apps may autosave the source. Verify the saved result and any required source preservation before reporting completion; an action success only confirms input was sent.',
     schema: { app, ...stateOptions }, readOnly: true,
   },
   click: {
@@ -50,7 +50,7 @@ const definitions = {
     schema: { app, text: z.string(), format: z.enum(['text', 'md', 'html']) },
   },
   press_key: {
-    description: 'Send a key or key combination to the app, using xdotool-style syntax such as Return or ctrl+a. super is Command on macOS and the Windows key on Windows.',
+    description: 'Send a key or key combination to the app, using xdotool-style syntax such as Return or ctrl+a. super is Command on macOS and the Windows key on Windows. Windows holds an omitted duration for 50 ms so frame-polled games can detect taps. If state warns of native IME mode, letter keys may reach the input method; type_text and paste are unaffected.',
     schema: { app, key: z.string().min(1), duration },
   },
   type_text: {

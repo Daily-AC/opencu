@@ -36,8 +36,9 @@ Example requests (send one line, await its reply before sending the next):
 
 `list_apps`, `get_app_state`, `activate_app` and input names/parameters match the
 shared engine contract. An input response is `{ok:true, app}`; it is not a new
-observation. The MCP server supplies post-action observation, diffs, waits and
-`run_actions` batching. A non-Node host must implement those conveniences itself.
+observation. The MCP server supplies post-action observation, diffs, text polling
+and `run_actions` batching. Native `wait` accepts integer `ms` from 1 to 15000,
+sends no input, consumes screenshot coordinates and honours the activity/stop guard. A non-Node host must implement those conveniences itself.
 `doctor` (or `--doctor`) reports version, platform, executable path, desktop accessibility,
 foreground-only operation, and no account/proprietary-runtime requirement.
 
@@ -122,14 +123,16 @@ selected state (including false), expansion state, range minimum/maximum and
 small/large changes are retained. Bounds are physical screen `(x,y,width,height)`
 for unnamed elements, elements without semantic actions, and Slider/ScrollBar/
 Spinner/Document roles. Empty structural containers are omitted but their children
-are visited; unnamed leaves remain, including Qt IconButton and CEF's Chrome
+are visited; positive-size unnamed leaves remain, including Qt IconButton and CEF's Chrome
 Legacy Window. Listed indexes are dense, one-based snapshot references to the
 original UIA element and its own top-level window; omitted nodes consume no index.
 A fresh observation can renumber them, as before.
 
 Within a Chromium Document (`FrameworkId=Chrome` or a `Chrome_` class), descendants
 whose rectangles do not intersect the containing top-level window's client area
-are omitted, including zero-area rectangles. Partially intersecting elements stay.
+are omitted unless focused. Partially intersecting elements stay. Zero-size nodes
+are omitted throughout the tree unless focused, with one separate count line;
+their descendants are still traversed.
 A single per-window line counts omitted elements and says scrolling reveals them.
 Traversal still visits their children, since a container's rectangle does not
 prove that all descendants lie outside. Native Qt/WinForms documents and controls
@@ -535,3 +538,13 @@ call on that connection timed out; v0.3.2 returned in 1.5 s, listed the name
 dialog, set its value and closed it with an indexed OK, and the new scene was
 listed. Physical Escape (host-injected) still latched `USER_STOPPED`, and the host
 required fresh approval instead of restarting the engine.
+
+### v0.3.3 compact state and input feedback
+
+See the [shared contract](independent-engine-contract.md#windows-compact-observations-033)
+for retained-object `scope`, whole-window fallback, scope-aware text diffs,
+element-only `waitForText`, guarded `wait`, accurate UIA error text, launch error
+740 guidance, 50 ms default `press_key` holds and read-only native IME warnings.
+These changes do not alter foreground authorization, the ten-second idle rule,
+physical Escape latching or input routing. The new fixture cases in
+`scripts/verify-gui-win.mjs` have not yet run on a Windows desktop.

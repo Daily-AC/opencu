@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use std::time::{Duration, Instant};
 use windows::{
     core::*,
-    Win32::UI::{Accessibility::*, WindowsAndMessaging::*},
+    Win32::{Foundation::{HWND, WPARAM, LPARAM}, UI::{Accessibility::*, Input::Ime::*, WindowsAndMessaging::*}},
 };
 #[derive(Clone)]
 pub struct Element {
@@ -290,6 +290,27 @@ pub unsafe fn runtime_id(el: &IUIAutomationElement) -> Option<Vec<i32>> {
     let _ = SafeArrayDestroy(array);
     result
 }
+// Query the target thread's IMM compatibility window without attaching threads
+// or changing its input context. Unsupported/unresponsive IMEs produce no warning.
+unsafe fn ime_line(window: &Window) -> &'static str {
+    let thread = GetWindowThreadProcessId(window.hwnd, None);
+    let mut info = GUITHREADINFO { cbSize: std::mem::size_of::<GUITHREADINFO>() as u32, ..Default::default() };
+    let focus = if GetGUIThreadInfo(thread, &mut info).is_ok() && window.contains(info.hwndFocus) {
+        info.hwndFocus
+    } else { window.hwnd };
+    let ime = ImmGetDefaultIMEWnd(focus);
+    if ime == HWND::default() { return ""; }
+    let query = |command| {
+        let mut value = 0usize;
+        let sent = SendMessageTimeoutW(ime, WM_IME_CONTROL, WPARAM(command), LPARAM(0),
+            SMTO_ABORTIFHUNG | SMTO_BLOCK, 100, Some(&mut value));
+        (sent.0 != 0).then_some(value)
+    };
+    // IMC_GETOPENSTATUS (5), IMC_GETCONVERSIONMODE (1): read-only IMM queries.
+    let open = query(5);
+    let conversion = if open.is_some_and(|v| v != 0) { query(1) } else { None };
+    ime_warning(open, conversion)
+}
 // Walk live ancestry to the exact retained window, not merely a same-PID HWND.
 unsafe fn scope_attached(uia: &IUIAutomation, element: &Element) -> bool {
     if element.window.validate().is_err() { return false; }
@@ -366,6 +387,7 @@ pub unsafe fn observe(uia: &IUIAutomation, app: App, include: bool, scope: Optio
         json!(primary.title)
     );
     text += &format!("Capture target: hwnd={:x} class={} (foreground non-tool, otherwise topmost visible non-tool window).\n", primary.hwnd.0 as usize, json!(primary.class_name));
+    text += ime_line(primary);
     let mut snapshot = Snapshot {
         app: app.clone(),
         keyboard_window: primary.clone(),

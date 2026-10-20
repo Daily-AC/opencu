@@ -474,7 +474,7 @@ pub unsafe fn resolve(
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
-            .map_err(|e| Error::new("LAUNCH_FAILED", e.to_string()))?;
+            .map_err(opencu_engine::launch_error)?;
         child.id()
     } else {
         // Resolve and launch the shortcut target without the shell's elevation UI.
@@ -506,7 +506,7 @@ pub unsafe fn resolve(
             cmd.current_dir(cwd);
         }
         cmd.spawn()
-            .map_err(|e| Error::new("LAUNCH_FAILED", e.to_string()))?
+            .map_err(opencu_engine::launch_error)?
             .id()
     };
     attempts.insert(launch_key);

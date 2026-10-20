@@ -36,10 +36,31 @@ pub fn hresult_code(code: u32) -> &'static str {
         _ => "WINDOWS_API_ERROR",
     }
 }
+pub fn hresult_message(code: u32) -> Option<&'static str> {
+    // UIAutomationCoreApi.h; system FormatMessage can misidentify these HRESULTs.
+    match code {
+        0x80131505 | 0x800705b4 => Some("The UI Automation operation timed out"),
+        0x80040200 => Some("The UI Automation element is disabled"),
+        0x80040201 => Some("The UI Automation element is no longer available (removed or virtualized)"),
+        0x80040204 => Some("The UI Automation provider does not support this property or control pattern"),
+        _ => None,
+    }
+}
+pub fn launch_error(error: std::io::Error) -> Error {
+    Error::new("LAUNCH_FAILED", if error.raw_os_error() == Some(740) {
+        "This program requires administrator rights. OpenCU cannot send input to elevated windows. The person can start it non-elevated (for example with __COMPAT_LAYER=RunAsInvoker), or run it themselves.".into()
+    } else { error.to_string() })
+}
+pub fn key_duration(args: &Value) -> Result<f64> {
+    if args.get("duration").is_none() { Ok(0.05) } else { duration(args) }
+}
 #[cfg(windows)]
 impl From<windows::core::Error> for Error {
     fn from(e: windows::core::Error) -> Self {
-        Self::new(hresult_code(e.code().0 as u32), e.to_string())
+        let code = e.code().0 as u32;
+        let message = hresult_message(code).map(|m| format!("{m} (0x{code:08X})"))
+            .unwrap_or_else(|| e.to_string());
+        Self::new(hresult_code(code), message)
     }
 }
 pub fn string<'a>(v: &'a Value, key: &str) -> Result<&'a str> {
@@ -703,5 +724,44 @@ mod wait_tests {
         for ms in [json!(0), json!(-1), json!(15001), json!(1.5), json!("1"), json!(true), Value::Null] {
             assert_eq!(wait_ms(&json!({"ms":ms})).unwrap_err().code, "INVALID_ARGUMENT");
         }
+    }
+}
+
+#[cfg(test)]
+mod feedback_tests {
+    use super::*;
+    #[test]
+    fn uia_hresult_messages_match_stable_codes() {
+        for (code, stable, text) in [
+            (0x80131505, "UIA_TIMEOUT", "timed out"),
+            (0x800705b4, "UIA_TIMEOUT", "timed out"),
+            (0x80040200, "ELEMENT_DISABLED", "disabled"),
+            (0x80040201, "STALE_ELEMENT", "no longer available"),
+            (0x80040204, "UNSUPPORTED_ACTION", "does not support"),
+        ] {
+            assert_eq!(hresult_code(code), stable);
+            assert!(hresult_message(code).unwrap().contains(text));
+            assert!(!hresult_message(code).unwrap().contains("Pattern not found"));
+        }
+        assert_eq!(hresult_message(0x80070005), None);
+        assert_eq!(hresult_code(0x80070005), "ACCESS_DENIED");
+    }
+    #[test]
+    fn elevation_guidance_does_not_change_launch_policy() {
+        let e = launch_error(std::io::Error::from_raw_os_error(740));
+        assert_eq!(e.code, "LAUNCH_FAILED");
+        for text in ["administrator rights", "cannot send input to elevated windows", "__COMPAT_LAYER=RunAsInvoker", "run it themselves"] {
+            assert!(e.message.contains(text));
+        }
+        assert_eq!(launch_error(std::io::Error::other("fixture failure")).message, "fixture failure");
+    }
+    #[test]
+    fn default_key_hold_is_50_ms_and_explicit_duration_is_preserved() {
+        assert_eq!(key_duration(&json!({})).unwrap(), 0.05);
+        assert_eq!(duration(&json!({})).unwrap(), 0.04); // mouse unchanged
+        for seconds in [0.0, 0.08, 30.0] {
+            assert_eq!(key_duration(&json!({"duration":seconds})).unwrap(), seconds);
+        }
+        assert!(key_duration(&json!({"duration":31})).is_err());
     }
 }

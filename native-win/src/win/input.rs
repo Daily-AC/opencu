@@ -350,7 +350,7 @@ pub unsafe fn perform(
         }
     };
     screenshot_point()?;
-    let seconds = duration(args)?;
+    let seconds = if method == "press_key" { opencu_engine::key_duration(args)? } else { duration(args)? };
     let chord = if method == "press_key" || args.get("key").is_some() {
         Some(parse_key(string(args, "key")?)?)
     } else {

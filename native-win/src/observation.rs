@@ -201,3 +201,9 @@ pub fn live_scope<T>(retained: Option<T>, attached: impl FnOnce(&T) -> bool) -> 
 pub fn scope_gone_line(requested: bool, live: bool) -> &'static str {
     if requested && !live { "Scope element is gone; showing the whole window.\n" } else { "" }
 }
+
+pub fn ime_warning(open: Option<usize>, conversion: Option<usize>) -> &'static str {
+    if open.is_some_and(|v| v != 0) && conversion.is_some_and(|v| v & 1 != 0) {
+        "IME: Native conversion mode is open; letter keys from press_key may go to the input method instead of the app. type_text and paste are unaffected.\n"
+    } else { "" }
+}
