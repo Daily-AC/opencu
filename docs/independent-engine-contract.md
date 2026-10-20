@@ -557,3 +557,10 @@ appeared at the right of the title bar during clicks and typing, turned grey wit
 the stopped text after Stop, and the engine's own screenshot contained neither the
 cursor nor the badge. Stacking beneath covering windows and click-through were
 not checked.
+
+## Windows compact observations (0.3.3)
+
+Nodes with width <= 0 or height <= 0 receive no line or index unless focused.
+Their descendants are still traversed and receive dense indexes; one `Zero-size:`
+summary reports the omitted count. Focused nodes also survive Chromium viewport
+filtering. This is observation filtering only, not input authorization.

@@ -323,3 +323,24 @@ fn runtime_identity_reuses_first_index_across_window_roots() {
     assert_eq!(hidden_windows_line(17).lines().count(), 1);
     assert!(hidden_windows_line(17).contains("17"));
 }
+
+#[test]
+fn zero_size_nodes_have_no_index_but_children_and_focus_survive() {
+    let mut parent = node("Pane", "Zero container", &[]);
+    parent.has_children = true;
+    for bounds in [rect(0, 0, 0, 30), rect(0, 0, 30, 0), rect(0, 0, -1, 30)] {
+        parent.bounds = bounds;
+        assert!(zero_size_omitted(bounds, false));
+        assert!(!parent.visible_in_tree());
+        parent.focused = true;
+        assert!(parent.visible_in_tree());
+        parent.focused = false;
+    }
+    let child = node("Button", "Real child", &["Invoke"]);
+    let listed: Vec<_> = [parent, child].into_iter().filter(Node::visible_in_tree).collect();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].line(1, 0), "[1] Button title=\"Real child\"");
+    assert_eq!(zero_size_line(0), "");
+    assert_eq!(zero_size_line(135).lines().count(), 1);
+    assert!(zero_size_line(135).contains("135 elements omitted"));
+}

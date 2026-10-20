@@ -341,6 +341,7 @@ pub struct Node {
 }
 impl Node {
     pub fn visible_in_tree(&self) -> bool {
+        if observation::zero_size_omitted(self.bounds, self.focused) { return false; }
         // Only omit empty structural containers. Never omit unnamed leaf controls.
         !(self.has_children
             && ["Pane", "Group"].contains(&self.role.as_str())

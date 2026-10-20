@@ -183,3 +183,12 @@ pub fn hidden_windows_line(count: usize) -> String {
         format!("Hidden windows: {count} (summaries omitted).\n")
     }
 }
+
+/// Omit only the node, never its descendants; focus must remain observable.
+pub fn zero_size_omitted(bounds: Rect, focused: bool) -> bool {
+    !focused && (bounds.width <= 0 || bounds.height <= 0)
+}
+pub fn zero_size_line(count: usize) -> String {
+    if count == 0 { String::new() }
+    else { format!("Zero-size: {count} elements omitted; descendants are still inspected.\n") }
+}
