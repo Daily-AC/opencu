@@ -7,6 +7,7 @@ import ScreenCaptureKit
 @MainActor
 final class MacObserver {
     var willObserveWindow: ((WindowSnapshot) -> Void)?
+    var requireWindowAllowed: ((WindowSnapshot) throws -> Void)?
     var requireCaptureAllowed: (() throws -> Void)?
     private let workspace = NSWorkspace.shared
     private let maximumElements = 800
@@ -173,6 +174,8 @@ final class MacObserver {
             throw OpenCUError("WINDOW_BOUNDS_UNAVAILABLE", "The selected window does not expose usable Accessibility bounds. Select a visible window and try again.")
         }
         var windowID = inputWindowID(app: app, window: window)
+        try requireWindowAllowed?(WindowSnapshot(app: app, window: window, bounds: bounds, windowID: windowID,
+            elements: [:], elementPaths: [:], elementTraits: [:], screenshotWidth: nil, screenshotHeight: nil))
         willObserveWindow?(WindowSnapshot(app: app, window: window, bounds: bounds, windowID: windowID,
                                           elements: [:], elementPaths: [:], elementTraits: [:],
                                           screenshotWidth: nil, screenshotHeight: nil))
