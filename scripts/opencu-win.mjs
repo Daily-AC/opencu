@@ -3,15 +3,16 @@ import { spawn } from 'node:child_process';
 import { access } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { agentDesktopAvailability } from '../src/agent-desktop.mjs';
+import { agentDesktopAvailability, agentDesktopSetupCommand } from '../src/agent-desktop.mjs';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const command = process.argv[2] ?? 'mcp';
 if (['help', '--help', '-h'].includes(command)) {
   console.log('Usage: opencu.cmd [mcp|doctor|setup agent-desktop]\n  mcp     Run the MCP server on stdin/stdout (default).\n  doctor  Report engine, desktop and agent-desktop availability.\n  setup agent-desktop  Enable child sessions with an explicit UAC prompt; prepare the user-only helper offline.');
+  console.log(`Setup command (PowerShell): ${agentDesktopSetupCommand(process.platform === 'win32' ? root : undefined)}`);
 } else {
   if (process.platform !== 'win32') throw new Error('This launcher requires Windows. Use bin/opencu on macOS.');
   if (!['mcp', 'doctor', 'setup'].includes(command)) throw new Error(`Unknown command: ${command}`);
-  if (command === 'setup' && (process.argv[3] !== 'agent-desktop' || process.argv.length !== 4)) throw new Error('Usage: opencu setup agent-desktop');
+  if (command === 'setup' && (process.argv[3] !== 'agent-desktop' || process.argv.length !== 4)) throw new Error(`Run in PowerShell: ${agentDesktopSetupCommand(root)}`);
   const engine = path.join(root, '.build/win/opencu-engine.exe');
   try { await access(engine); } catch { throw new Error('Windows engine is missing. Run npm run build:win or copy the cross-compiled executable to .build/win/opencu-engine.exe.'); }
   const child = command === 'setup'

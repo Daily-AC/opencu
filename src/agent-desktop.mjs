@@ -5,7 +5,9 @@ import { createInterface } from 'node:readline';
 import path from 'node:path';
 import { OpenCURuntime } from './opencu-runtime.mjs';
 
-const setupCommand = 'opencu setup agent-desktop';
+export const agentDesktopSetupCommand = root => root
+  ? `& '${path.win32.join(root, 'bin', 'opencu.cmd').replaceAll("'", "''")}' setup agent-desktop`
+  : '& "$env:LOCALAPPDATA\\OpenCU\\bin\\opencu.cmd" setup agent-desktop';
 const error = (code, message) => Object.assign(new Error(message), { code });
 const stopped = () => error('USER_STOPPED', 'The person stopped the agent desktop. Do not restart or reconnect without their explicit permission.');
 const reply = state => ({ content: [{ type: 'text', text: JSON.stringify(state) }] });
@@ -27,30 +29,67 @@ export async function agentDesktopHelper(root) {
     }
     return path.join(root, '.build/win/agent-desktop/OpenCU.AgentDesktop.exe');
   } catch {
-    throw error('AGENT_DESKTOP_UNAVAILABLE', `Agent desktop setup is missing or out of date. The person must run: ${setupCommand}`);
+    throw Object.assign(error('AGENT_DESKTOP_UNAVAILABLE', `Agent desktop helper preparation is required; start prepares it automatically when Windows child sessions are enabled. For first-time enablement, run in PowerShell: ${agentDesktopSetupCommand(root)}`), { setupRequired: true });
   }
+}
+
+// Keep structured helper diagnostics even when the process exits unsuccessfully.
+export function parseAgentDesktopOutput(stdout, exitCode, stderr = '') {
+  let result;
+  try { result = JSON.parse(stdout); }
+  catch { throw error('AGENT_DESKTOP_UNAVAILABLE', stderr.trim() || `Agent desktop helper returned invalid JSON (exit ${exitCode}).`); }
+  if (result.event === 'failure' || exitCode !== 0) {
+    throw Object.assign(error(result.code ?? 'AGENT_DESKTOP_UNAVAILABLE', result.message ?? `Agent desktop helper exited with code ${exitCode}.`),
+      { setupRequired: result.setupRequired === true });
+  }
+  return result;
+}
+
+export async function runAgentDesktopHelper(command, args, { timeoutMs = 10_000 } = {}) {
+  return await new Promise((resolve, reject) => {
+    const child = spawn(command, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '', stderr = '';
+    const timer = setTimeout(() => { child.kill(); reject(error('AGENT_DESKTOP_UNAVAILABLE', 'Agent desktop helper timed out.')); }, timeoutMs);
+    const collect = (stream, add) => stream.on('data', chunk => {
+      add(chunk); if (stdout.length + stderr.length > 1024 * 1024) { child.kill(); reject(error('AGENT_DESKTOP_UNAVAILABLE', 'Agent desktop diagnostic output exceeded its limit.')); }
+    });
+    collect(child.stdout, chunk => { stdout += chunk; }); collect(child.stderr, chunk => { stderr += chunk; });
+    child.once('error', cause => { clearTimeout(timer); reject(error('AGENT_DESKTOP_UNAVAILABLE', cause.message)); });
+    child.once('close', code => {
+      clearTimeout(timer);
+      try { resolve(parseAgentDesktopOutput(stdout, code, stderr)); } catch (cause) { reject(cause); }
+    });
+  });
 }
 
 export async function agentDesktopAvailability(root, platform = process.platform) {
   if (platform !== 'win32') return { available: false, code: 'UNSUPPORTED_ON_MACOS' };
   try {
     const helper = await agentDesktopHelper(root);
-    return await new Promise((resolve, reject) => {
-      const child = spawn(helper, ['probe'], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
-      let data = '';
-      const timer = setTimeout(() => { child.kill(); reject(new Error('Capability probe timed out.')); }, 10_000);
-      child.stdout.on('data', chunk => { data += chunk; if (data.length > 16384) child.kill(); });
-      child.once('error', reject);
-      child.once('close', code => {
-        clearTimeout(timer);
-        try { if (code !== 0) throw new Error('Capability probe failed.'); resolve(JSON.parse(data)); }
-        catch (cause) { reject(cause); }
-      });
-    });
+    return await runAgentDesktopHelper(helper, ['probe']);
   } catch (cause) {
-    const message = cause.message.includes(setupCommand) ? cause.message : `${cause.message} The person must run: ${setupCommand}`;
-    return { available: false, code: cause.code ?? 'AGENT_DESKTOP_UNAVAILABLE', message, setupCommand };
+    return { available: false, code: cause.code ?? 'AGENT_DESKTOP_UNAVAILABLE', message: cause.message,
+      setupRequired: cause.setupRequired === true,
+      ...(cause.setupRequired ? { setupCommand: agentDesktopSetupCommand(root) } : {}) };
   }
+}
+
+const preparations = new Map();
+export async function prepareAgentDesktop(root, { availability = agentDesktopAvailability, run = runAgentDesktopHelper } = {}) {
+  const capability = await availability(root);
+  if (capability.available) return capability;
+  if (!capability.setupRequired) throw error(capability.code ?? 'AGENT_DESKTOP_UNAVAILABLE', capability.message);
+  // Same-process callers share preparation; the script also holds an installation
+  // mutex across processes. Preparation never connects a child or replays input.
+  if (!preparations.has(root)) preparations.set(root, (async () => {
+    await run(path.win32.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32/WindowsPowerShell/v1.0/powershell.exe'),
+      ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'scripts/agent-desktop/setup.ps1'), '-Root', root, '-PrepareOnly'],
+      { timeoutMs: 90_000 });
+    const prepared = await availability(root);
+    if (!prepared.available) throw error(prepared.code ?? 'AGENT_DESKTOP_UNAVAILABLE', prepared.message ?? 'Prepared helper is not available.');
+    return prepared;
+  })().finally(() => preparations.delete(root)));
+  return await preparations.get(root);
 }
 
 export class NativeAgentDesktop {
@@ -63,8 +102,7 @@ export class NativeAgentDesktop {
   #cleanupError;
   constructor({ root, onFailure }) { this.#root = root; this.#onFailure = onFailure; }
   async start() {
-    const capability = await agentDesktopAvailability(this.#root);
-    if (!capability.available) throw error(capability.code ?? 'AGENT_DESKTOP_UNAVAILABLE', capability.message ?? `Run: ${setupCommand}`);
+    await prepareAgentDesktop(this.#root);
     const helper = await agentDesktopHelper(this.#root);
     const child = this.#child = spawn(helper, ['host', String(process.pid)], {
       stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
@@ -154,6 +192,9 @@ export class AgentDesktopRuntime {
   }
   #hostFailed = cause => {
     this.#latch(cause);
+    if (!this.#personStop && !cause.message.includes('App tools are blocked')) {
+      cause.message += ' App tools are blocked; call agent_desktop with {"action":"stop"} to finish cleanup before using them again. No input was replayed.';
+    }
     this.#failure ??= cause;
     this.#state = this.#personStop ? 'stopped' : 'failed';
   };
