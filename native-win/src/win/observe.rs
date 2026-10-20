@@ -25,6 +25,7 @@ pub struct Snapshot {
     pub keyboard_window: Window,
     pub elements: Vec<Element>,
     pub image: Option<Screenshot>,
+    pub observable: String,
 }
 pub unsafe fn pattern<T: Interface>(el: &IUIAutomationElement, id: UIA_PATTERN_ID) -> Option<T> {
     el.GetCurrentPattern(id).ok()?.cast().ok()
@@ -395,6 +396,10 @@ pub unsafe fn observe(uia: &IUIAutomation, app: App, include: bool, scope: Optio
         app.id,
         json!(primary.title)
     );
+    if safety::agent_parent_session().and_then(|id| super::session_locked(id)) == Some(true) {
+        text = text.replace("Windows input requires foreground focus.",
+            "Parent locked: indexed click, set_value (ValuePattern), and listed secondary actions use supported control patterns; other input requires unlock.");
+    }
     text += &format!("Capture target: hwnd={:x} class={} (foreground non-tool, otherwise topmost visible non-tool window).\n", primary.hwnd.0 as usize, json!(primary.class_name));
     text += ime_line(primary);
     let mut snapshot = Snapshot {
@@ -402,6 +407,7 @@ pub unsafe fn observe(uia: &IUIAutomation, app: App, include: bool, scope: Optio
         keyboard_window: primary.clone(),
         elements: vec![],
         image: None,
+        observable: String::new(),
     };
     let walker = uia.RawViewWalker()?;
     let cache = cache_request(uia)?;
@@ -571,6 +577,7 @@ pub unsafe fn observe(uia: &IUIAutomation, app: App, include: bool, scope: Optio
     if truncated {
         text+="Tree truncated: limit 1200 listed / 8000 inspected nodes, depth 120, 180000 bytes, or 8 seconds.\n";
     }
+    snapshot.observable = opencu_engine::locked_patterns::observable(&text);
     let mut result = json!({"text":text,"app":app.json()});
     if let Some(scope) = scope {
         result["scopeRoot"] = json!(format!("{}:{}", if scoped.is_some() { "live" } else { "gone" }, scope.identity));

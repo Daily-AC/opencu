@@ -457,6 +457,7 @@ pub unsafe fn resolve(
     if let Some(g) = guard {
         g.check()?;
     }
+    super::safety::parent_input_allowed(true)?;
     let launch_key = path.to_string_lossy().to_lowercase();
     if attempts.contains(&launch_key) {
         return Err(Error::new("APP_LAUNCH_PENDING", "An earlier launch still has no visible window. Inspect list_apps; reconnect only to deliberately launch again."));

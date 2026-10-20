@@ -3,6 +3,7 @@ mod capture;
 mod clipboard;
 mod indicator;
 mod input;
+mod locked_patterns;
 mod observe;
 mod safety;
 use opencu_engine::{string, Error, Result};
@@ -38,6 +39,7 @@ struct Engine {
     monitor: safety::Monitor,
     indicator: indicator::Indicator,
     launches: std::collections::BTreeSet<String>,
+    patterns: locked_patterns::Worker,
     _apartment: Apartment,
 }
 impl Engine {
@@ -58,6 +60,7 @@ impl Engine {
             monitor: safety::Monitor::new()?,
             indicator: indicator::Indicator::new()?,
             launches: Default::default(),
+            patterns: Default::default(),
             _apartment: apartment,
         })
     }
@@ -95,6 +98,15 @@ impl Engine {
         }
         // Invalidate screenshot even when validation/target resolution subsequently fails.
         let previous_image = self.snapshot.as_mut().and_then(|s| s.image.take());
+        // A timed-out provider may still be executing. Never overlap it with
+        // another write, even after unlock; explicit reads remain available.
+        if method != "get_app_state" {
+            if let Err(pending) = self.patterns.idle() {
+                self.monitor.fence()?;
+                if self.monitor.stopped() { return Err(safety::user_stopped()); }
+                return Err(pending);
+            }
+        }
         if method == "wait" {
             let ms = opencu_engine::wait_ms(args)?;
             let mut guard = self.monitor.begin(&self.indicator)?;
@@ -103,6 +115,7 @@ impl Engine {
             return Ok(json!({"ok":true}));
         }
         if method == "select_text" {
+            safety::parent_input_allowed(true)?;
             return Err(Error::new(
                 "UNSUPPORTED_ON_WINDOWS",
                 format!("{method} is not supported on Windows in phase 1"),
@@ -126,8 +139,12 @@ impl Engine {
             } else { self.scope = None; }
             self.snapshot = None;
         }
+        let locked_pattern = safety::locked_pattern_request(method, args);
+        let mut pattern_guard = if locked_pattern {
+            Some(self.monitor.begin_locked(&self.indicator)?)
+        } else { None };
         // Guard includes resolution/launch and activation; no action is replayed.
-        let mut guard = if method != "get_app_state" {
+        let mut guard = if method != "get_app_state" && !locked_pattern {
             Some(self.monitor.begin(&self.indicator)?)
         } else {
             None
@@ -139,7 +156,7 @@ impl Engine {
         }
         let app = apps::resolve(
             query,
-            observing && !self.monitor.stopped(),
+            observing && !self.monitor.stopped() && self.patterns.idle().is_ok(),
             &mut self.launches,
             guard.as_ref(),
         )?;
@@ -185,6 +202,36 @@ impl Engine {
                     "Read this application's state before input",
                 )
             })?;
+        if let Some(g) = pattern_guard.as_mut() {
+            let before = s.observable.clone();
+            let app = s.app.clone();
+            let result = self.patterns.perform(method, args, &self.automation, s, g);
+            // Any unconfirmed result invalidates retained indexes. A read is
+            // required even if the worker later completes successfully.
+            self.snapshot = None;
+            let mut result = result?;
+            if result["outcome"] == "unknown" { return Ok(result); }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            let observed = observe::observe(&self.automation, app, false,
+                self.scope.as_ref().map(|(_, _, scope)| scope));
+            g.finish()?;
+            match observed {
+                Ok((state, snapshot)) => {
+                    result["state"] = state;
+                    if before == snapshot.observable {
+                        result["outcome"] = json!("unknown");
+                        result["message"] = json!("The control pattern returned success, but no accessibility change was observed. Its effect is unconfirmed. Read get_app_state before continuing; do not repeat the action automatically.");
+                    } else {
+                        self.snapshot = Some(snapshot);
+                    }
+                }
+                Err(error) => {
+                    result["outcome"] = json!("unknown");
+                    result["message"] = json!(format!("The control pattern returned, but fresh observation failed: {error}. Its effect is unconfirmed. Read get_app_state before continuing; do not repeat the action automatically."));
+                }
+            }
+            return Ok(result);
+        }
         let g = guard.as_mut().unwrap();
         let outcome = input::perform(method, args, &self.automation, s, previous_image, g);
         // A physical event queued during the final API call wins over its return status.
@@ -228,7 +275,7 @@ fn doctor() -> Value {
     let locked = session_id.and_then(|id| unsafe { session_locked(id) });
     let agent_parent = safety::agent_parent_session();
     let agent_parent_locked = agent_parent.and_then(|id| unsafe { session_locked(id) });
-    json!({"engine":"independent","version":env!("CARGO_PKG_VERSION"),"platform":"win32","desktopAccessible":status.is_ok(),"desktopError":status.err().map(|e| e.json()),"accountRequired":false,"proprietaryRuntimeRequired":false,"foregroundOnly":true,"sessionId":session_id,"sessionLocked":locked,"agentParentSession":agent_parent,"agentParentLocked":agent_parent_locked,"childSessionsEnabled":child_sessions,"executable":std::env::current_exe().ok()})
+    json!({"engine":"independent","version":env!("CARGO_PKG_VERSION"),"platform":"win32","desktopAccessible":status.is_ok(),"desktopError":status.err().map(|e| e.json()),"accountRequired":false,"proprietaryRuntimeRequired":false,"foregroundOnly":!(agent_parent.is_some() && agent_parent_locked == Some(true)),"sessionId":session_id,"sessionLocked":locked,"agentParentSession":agent_parent,"agentParentLocked":agent_parent_locked,"childSessionsEnabled":child_sessions,"executable":std::env::current_exe().ok()})
 }
 pub fn main() {
     // The GUI subsystem suppresses a console window; inherited standard handles
