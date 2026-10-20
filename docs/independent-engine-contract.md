@@ -567,8 +567,8 @@ filtering. This is observation filtering only, not input authorization.
 
 `scope` is an optional positive element index on `get_app_state`, all input tools,
 and `run_actions` (the batch's final observation). Windows retains the actual UIA
-object from the latest snapshot before walking, checks its live ancestry to its
-original window and that window's membership in the current target family, and
+object from the latest snapshot before walking, checks its live ancestry to a
+window in the current target family (including reparenting within that family), and
 walks only that subtree. The root is `[1]`; all indexes refer to this new state.
 Headers and window summaries remain; screenshots still cover the capture window.
 A missing, detached, unreadable or no-longer-listable root yields the whole window
@@ -582,13 +582,16 @@ Direct engine reads without it resolve each `scope` against the latest snapshot.
 `scopeRoot` in native state identifies the actual UIA root (or a unique request
 when UIA identity is unavailable), including whether fallback occurred. The MCP
 whole-text diff compares text and this identity, never across different scopes.
-Neither internal field authorizes input.
+Neither internal field authorizes input. Live ancestry checks are bounded and
+respect protected ancestors just like the full tree walk.
 
 `waitForText` matches case-sensitive substrings only on numbered element lines,
 within the returned subtree when scoped. App/window/capture headers, summaries,
 and warnings cannot satisfy it. Existing polling deadlines and `WAIT_TIMEOUT`
 responses with the last state remain unchanged. A listed Window element's own
-name remains element text; scope to content to exclude such a root.
+name remains element text; scope to content to exclude such a root. If that root
+is gone, full-window fallback text cannot satisfy the scoped wait: polling still
+ends in `WAIT_TIMEOUT` with the fallback state unless the retained root returns.
 
 ## Wait without input (0.3.3)
 
