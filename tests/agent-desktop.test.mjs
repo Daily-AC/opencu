@@ -109,12 +109,7 @@ test('no credential or endpoint options enter lifecycle operations', async t => 
   assert.equal(f.hosts.length, 0);
 });
 
-test('macOS keeps ordinary routing and explicitly refuses the shared lifecycle tool', async t => {
-  const f = fixture(t, { config: { platform: 'darwin' } });
-  for (const action of ['start', 'stop', 'status']) await assert.rejects(f.control(action), { code: 'UNSUPPORTED_ON_MACOS' });
-  await f.runtime.call('click', { app: 'Fixture', element_index: 1 });
-  assert.equal(f.calls.at(-1)[0], 'parent'); assert.equal(f.hosts.length, 0);
-});
+
 
 test('missing setup and tampered local helper fail before execution', async t => {
   await mkdir(new URL('../.cache/', import.meta.url), { recursive: true });

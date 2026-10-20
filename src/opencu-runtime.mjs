@@ -41,15 +41,22 @@ export class OpenCURuntime {
   #spawnEngine;
   #allowRestart;
   #onPersonStop;
+  #onDesktopEvent;
+  #agentDesktop;
+  #desktopGeneration;
+  #desktopInputBlocked = false;
+  #desktopLocked = false;
 
   constructor({ root, enginePath, requestTimeoutMs = 90_000, platform = process.platform,
-    spawnEngine, allowRestart = true, onPersonStop } = {}) {
+    spawnEngine, allowRestart = true, onPersonStop, agentDesktop = false, onDesktopEvent } = {}) {
     this.#requestTimeoutMs = requestTimeoutMs;
     this.#platform = platform;
     this.enginePath = enginePath ?? defaultEnginePath(root);
     this.#spawnEngine = spawnEngine;
     this.#allowRestart = allowRestart;
     this.#onPersonStop = onPersonStop;
+    this.#agentDesktop = agentDesktop;
+    this.#onDesktopEvent = onDesktopEvent;
   }
 
   async #start() {
@@ -69,6 +76,24 @@ export class OpenCURuntime {
       try {
         const message = JSON.parse(line);
         if (child !== this.#child && child !== this.#retiringChild) return;
+        if (message.event === 'agent_desktop' && this.#agentDesktop) {
+          if (!['inactive', 'starting', 'running', 'stopping', 'stopped', 'failed'].includes(message.state)
+              || !Number.isSafeInteger(message.generation) || typeof message.stoppedByPerson !== 'boolean') {
+            fail(Object.assign(new Error('Invalid agent desktop event.'), { code: 'AGENT_DESKTOP_LOST' })); return;
+          }
+          this.#desktopLocked = message.parentLocked === true;
+          this.#desktopInputBlocked = message.inputBlocked === true;
+          if (this.#desktopGeneration !== message.generation) {
+            this.#needsObservation = true;
+            this.#desktopGeneration = message.generation;
+            this.#coordinates = new CoordinateState(); this.#lastText.clear();
+          }
+          if (message.stoppedByPerson) {
+            this.#personStop ??= Object.assign(new Error('The person stopped this macOS connection.'), { code: 'STOPPED_BY_PERSON' });
+            this.#onPersonStop?.(this.#personStop);
+          }
+          this.#onDesktopEvent?.(message); return;
+        }
         // Even a late reply from the retiring engine must preserve a person's stop.
         const stop = message.error ?? message.result?.stop;
         if (personStops.has(stop?.code)) {
@@ -97,17 +122,24 @@ export class OpenCURuntime {
 
   #fail(error) {
     this.#failure ??= error;
+    if (this.#agentDesktop && !this.#closing) this.#onDesktopEvent?.({
+      state: this.#personStop ? 'stopped' : 'failed', stoppedByPerson: !!this.#personStop,
+      generation: this.#desktopGeneration ?? 0,
+      error: { code: this.#personStop?.code ?? 'AGENT_DESKTOP_LOST', message: error.message },
+    });
     for (const { reject, timer } of this.#pending.values()) { clearTimeout(timer); reject(error); }
     this.#pending.clear();
   }
 
-  async #request(method, params, signal) {
-    this.#active(signal);
+  async #request(method, params, signal, control = false) {
+    if (!control) this.#active(signal);
     await this.#retiring;
-    this.#active(signal);
+    if (!control) this.#active(signal);
+    if (control && this.#child && (this.#child.exitCode !== null || this.#child.signalCode !== null)) throw this.#failure ?? Object.assign(new Error('Agent desktop worker exited; no replacement was started.'), { code: 'AGENT_DESKTOP_LOST' });
+    if (control && (this.#failure || this.#personStop) && !this.#child) throw this.#personStop ?? this.#failure;
     this.#started ??= this.#start();
     await this.#started;
-    this.#active(signal);
+    if (!control) this.#active(signal);
     const id = this.#nextID++;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -126,26 +158,40 @@ export class OpenCURuntime {
         for (const pending of this.#pending.values()) { clearTimeout(pending.timer); pending.reject(error); }
         this.#pending.clear();
       }, this.#requestTimeoutMs);
-      this.#pending.set(id, { resolve, reject, timer });
+      let cancel;
+      if (signal && this.#agentDesktop && !control) {
+        cancel = () => {
+          // Cancellation identifies the original request; late cancellation cannot affect the next one.
+          this.#child?.stdin.write(JSON.stringify({ id: `cancel-${id}`, method: 'agent_desktop_cancel', params: { requestID: String(id) } }) + '\n');
+        };
+        signal.addEventListener('abort', cancel, { once: true });
+        if (signal.aborted) cancel();
+      }
+      const finish = callback => value => { if (cancel) signal.removeEventListener('abort', cancel); callback(value); };
+      this.#pending.set(id, { resolve: finish(resolve), reject: finish(reject), timer });
       this.#child.stdin.write(JSON.stringify({ id, method, params }) + '\n');
     });
   }
 
-  async #observe(method, args, signal) {
+  async #observe(method, args, signal, explicit = false) {
     const { app, includeScreenshot = false, waitForText, waitTimeoutMs = 5000, scope } = args;
     const scopeOptions = scope === undefined ? {} : { scope, scopeRequest: String(++this.#scopeRequest) };
     const deadline = Date.now() + waitTimeoutMs;
     let result;
     let retries = 0;
     for (;;) {
-      try { result = await this.#request(method, { app, includeScreenshot, ...scopeOptions }, signal); }
+      try { result = await this.#request(method, { app, includeScreenshot, ...scopeOptions,
+        ...(this.#agentDesktop ? { desktopExplicitObservation: explicit } : {}) }, signal); }
       catch (error) {
-        if (!['NO_ACCESSIBLE_WINDOW', 'SCREENSHOT_FAILED', 'WINDOW_CHANGED'].includes(error.code) || retries++ >= 2) throw error;
+        explicit = false;
+        if (this.#agentDesktop || !['NO_ACCESSIBLE_WINDOW', 'SCREENSHOT_FAILED', 'WINDOW_CHANGED'].includes(error.code) || retries++ >= 2) throw error;
         await pause(150 * retries);
         method = 'get_app_state';
         continue;
       }
+      explicit = false;
       this.#needsObservation = false;
+      if (this.#agentDesktop) this.#desktopInputBlocked = result.agentDesktop?.windowState !== 'admitted';
       const scopeGone = scope !== undefined && result.scopeRoot?.startsWith('gone:');
       if (!waitForText || !scopeGone && result.text.split('\n').some(line => /^\s*\[\d+\] /.test(line) && line.includes(waitForText))) return result;
       if (Date.now() >= deadline) {
@@ -165,7 +211,7 @@ export class OpenCURuntime {
     this.#lastText.set(key, { text: state.text, scope });
     const content = [{ type: 'text', text: unchanged ? `${state.text.split('\n').slice(0, 3).join('\n')}\nNo accessibility changes.` : state.text }];
     if (state.screenshot) content.push({ type: 'image', data: state.screenshot.data, mimeType: state.screenshot.mimeType });
-    return { content, _meta: { 'opencu/app': state.app, 'opencu/engine': 'independent' } };
+    return { content, _meta: { 'opencu/app': state.app, 'opencu/engine': 'independent', ...(state.agentDesktop ? { 'opencu/agentDesktop': state.agentDesktop } : {}) } };
   }
 
   async call(method, args, signal) {
@@ -184,8 +230,12 @@ export class OpenCURuntime {
           || this.#personStop.code === 'STOPPED_BY_PERSON' && method === 'get_app_state' && args.includeScreenshot)) {
         throw Object.assign(new Error(this.#personStop.message), { code: this.#personStop.code });
       }
+      if (this.#agentDesktop && (inputs.has(method) || method === 'run_actions')) {
+        if (this.#desktopLocked) throw Object.assign(new Error('macOS is locked. Unlock and read fresh state.'), { code: 'SCREEN_LOCKED' });
+        if (this.#desktopInputBlocked) throw Object.assign(new Error('This window is reduced or was returned outside the agent desktop. No input was sent.'), { code: 'AGENT_DESKTOP_CONSENT_REQUIRED' });
+      }
       if (this.#needsObservation && (inputs.has(method) || ['activate_app', 'run_actions'].includes(method))) {
-        throw Object.assign(new Error('The engine timed out and must restart. Read fresh app state before input; no operation was retried.'), { code: 'OBSERVATION_REQUIRED' });
+        throw Object.assign(new Error(this.#agentDesktop ? 'The agent desktop changed. Read fresh app state before input; no operation was retried.' : 'The engine timed out and must restart. Read fresh app state before input; no operation was retried.'), { code: 'OBSERVATION_REQUIRED' });
       }
       if (args.scope !== undefined) {
         if (this.#platform !== 'win32') throw Object.assign(new Error('scope is Windows-only for now.'), { code: 'INVALID_ARGUMENT' });
@@ -246,7 +296,7 @@ export class OpenCURuntime {
           response = this.#stateResult(patternState, options);
         } else {
           if (completed) await pause(100); // Let queued native input reach its app.
-          response = this.#stateResult(await this.#observe(method === 'activate_app' ? method : 'get_app_state', options, signal), options);
+          response = this.#stateResult(await this.#observe(method === 'activate_app' ? method : 'get_app_state', options, signal, method === 'get_app_state'), options);
         }
       } catch (error) {
         if (patternState) {
@@ -272,6 +322,11 @@ export class OpenCURuntime {
     });
     this.#tail = run.catch(() => {});
     return run;
+  }
+
+  async desktopControl(action, params = {}, signal) {
+    if (this.#platform !== 'darwin' || !['start', 'stop', 'status'].includes(action)) throw new Error('Invalid native desktop control');
+    return await this.#request(`agent_desktop_${action}`, params, signal, action !== 'start');
   }
 
   async close() {

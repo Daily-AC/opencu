@@ -21,7 +21,7 @@ PROJECT_FILES = (
     'package.json', 'LICENSE', 'bin/opencu.cmd',
     'scripts/opencu-win.mjs', 'src/server.mjs', 'src/opencu-runtime.mjs',
     'src/tool-arguments.mjs', 'src/coordinate-state.mjs', '.build/win/opencu-engine.exe',
-    'src/agent-desktop.mjs', 'scripts/agent-desktop/Host.cs', 'scripts/agent-desktop/setup.ps1',
+    'src/agent-desktop.mjs', 'src/agent-desktop-mac.mjs', 'scripts/agent-desktop/Host.cs', 'scripts/agent-desktop/setup.ps1',
 )
 NODE_FILES = ('node/node.exe', 'node/LICENSE', 'node/SHASUMS256.txt', 'node/provenance.json')
 
