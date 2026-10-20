@@ -52,7 +52,8 @@ struct AgentDisplayLedger {
     enum CleanupStep: Equatable { case restore, releaseDisplay }
     private(set) var displayID: UInt32?
     private(set) var saved: SavedFrame?
-    private(set) var restorePending = false
+    private(set) var pending: [SavedFrame] = []
+    var restorePending: Bool { !pending.isEmpty }
 
     mutating func created(_ id: UInt32) throws {
         guard displayID == nil, !restorePending else {
@@ -61,15 +62,19 @@ struct AgentDisplayLedger {
         displayID = id
         saved = nil
     }
-    mutating func remember(_ value: SavedFrame) throws {
-        guard displayID != nil, !restorePending else {
+    mutating func remember(_ value: SavedFrame, multiple: Bool = false) throws {
+        guard displayID != nil, (!restorePending || multiple),
+              !pending.contains(where: { $0.windowID == value.windowID }) else {
             throw OpenCUError("AGENT_DISPLAY_BUSY", "Create a display and restore its previous target before moving a window.")
         }
         // Commit before the first AX write, including when that write fails.
         saved = value
-        restorePending = true
+        pending.append(value)
     }
-    mutating func restored() { restorePending = false }
+    mutating func restored(_ windowID: UInt32? = nil) {
+        if let windowID { pending.removeAll { $0.windowID == windowID } }
+        else { pending.removeAll() }
+    }
     mutating func released() { displayID = nil }
     var cleanupSteps: [CleanupStep] {
         (restorePending ? [.restore] : []) + (displayID == nil ? [] : [.releaseDisplay])

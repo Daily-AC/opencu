@@ -529,6 +529,51 @@ struct OpenCUInputLogicChecks {
         try ledger.remember(savedFrame)
         ledger.restored()
         expect(ledger.cleanupSteps == [.releaseDisplay], "Explicit restore prevents duplicate window writes at shutdown")
+        var desktop = AgentDesktopState()
+        desktop.change(.starting)
+        desktop.change(.running)
+        expect(desktop.ready, "Desktop is ready only after startup")
+        let generation = desktop.generation
+        expect(desktop.lock(true) && !desktop.ready, "Lock suspends desktop without losing ownership")
+        fails("SCREEN_LOCKED") { try desktop.requireRunning() }
+        expect(desktop.ownsDesktop && desktop.generation > generation, "Lock invalidates observations, retaining cleanup")
+        _ = desktop.lock(false)
+        desktop.stopByPerson()
+        desktop.change(.inactive)
+        desktop.change(.running)
+        fails("STOPPED_BY_PERSON") { try desktop.requireRunning() }
+        expect(desktop.phase == .stopped, "A late start or cleanup cannot clear the person latch")
+        var consent = AgentDesktopConsent()
+        let firstConsent = try consent.begin(window: "pid:birth:window1", now: 100)!
+        fails("AGENT_DISPLAY_BUSY") { _ = try consent.begin(window: "window2", now: 101) }
+        expect(!consent.decide(token: UUID(), approve: true, now: 102), "Wrong consent token cannot approve")
+        expect(!consent.decide(token: firstConsent.token, approve: false, now: 103), "Decline does not approve")
+        let declinedAgain = try consent.begin(window: "pid:birth:window1", now: 110)
+        expect(declinedAgain == nil, "Declined windows cannot be prompted again")
+        let secondConsent = try consent.begin(window: "window2", now: 200)!
+        expect(!consent.decide(token: secondConsent.token, approve: true, now: 260), "Deadline wins over late approval")
+        expect(consent.reduced["window2"] == "expired", "Expiry remains reduced for this lifetime")
+        let thirdConsent = try consent.begin(window: "window3", now: 300)!
+        consent.cancel()
+        expect(!consent.decide(token: thirdConsent.token, approve: true, now: 301), "EOF/cancel prevents latent approval")
+        let fourthConsent = try consent.begin(window: "window4", now: 400)!
+        expect(consent.decide(token: fourthConsent.token, approve: true, now: 401), "Timely exact approval succeeds once")
+        expect(!consent.decide(token: fourthConsent.token, approve: true, now: 402), "Approval is consumed once")
+        consent.returned("window4")
+        let returnedAgain = try consent.begin(window: "window4", now: 410)
+        expect(returnedAgain == nil, "Manual return cannot be automatically undone")
+        var multi = AgentDisplayLedger()
+        try multi.created(44)
+        try multi.remember(savedFrame, multiple: true)
+        let anotherFrame = AgentDisplayLedger.SavedFrame(windowID: 22, displayID: 2, frame: movedFrame)
+        try multi.remember(anotherFrame, multiple: true)
+        fails("AGENT_DISPLAY_BUSY") { try multi.remember(savedFrame, multiple: true) }
+        expect(multi.pending == [savedFrame, anotherFrame], "Multiple originals survive without substitution")
+        multi.restored(22)
+        multi.released()
+        expect(multi.pending == [savedFrame], "Partial cleanup retains the failed original after display release")
+        multi.restored(21)
+        expect(multi.cleanupSteps.isEmpty, "Per-window completion is idempotent")
         // The same remote focus works in the foreground and must be refused in
         // the background. A host-PID panel proxy must also be refused; unknown
         // focus in ordinary apps keeps the existing PID-targeted path.
