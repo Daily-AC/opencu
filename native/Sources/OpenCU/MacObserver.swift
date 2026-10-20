@@ -150,7 +150,7 @@ final class MacObserver {
         }
     }
 
-    func observe(_ app: TargetApp, includeScreenshot: Bool) async throws -> Observation {
+    func observe(_ app: TargetApp, includeScreenshot: Bool, reduced: Bool = false) async throws -> Observation {
         try requireAccessibility()
         guard !app.application.isTerminated else { throw OpenCUError("APP_NOT_RUNNING", "\(app.name) is no longer running. Resolve the application again.") }
         let application = AXUIElementCreateApplication(app.pid)
@@ -170,9 +170,8 @@ final class MacObserver {
                                                         elementTraits: tree.traits,
                                                         screenshotWidth: nil, screenshotHeight: nil))
         }
-        guard let bounds = axRect(window), usableBounds(bounds) else {
-            throw OpenCUError("WINDOW_BOUNDS_UNAVAILABLE", "The selected window does not expose usable Accessibility bounds. Select a visible window and try again.")
-        }
+        let measuredBounds = axRect(window).flatMap { usableBounds($0) ? $0 : nil }
+        let bounds = try AgentDesktopAdmissionPolicy.readBounds(measuredBounds, reduced: reduced)
         var windowID = inputWindowID(app: app, window: window)
         try requireWindowAllowed?(WindowSnapshot(app: app, window: window, bounds: bounds, windowID: windowID,
             elements: [:], elementPaths: [:], elementTraits: [:], screenshotWidth: nil, screenshotHeight: nil))
@@ -181,7 +180,7 @@ final class MacObserver {
                                           screenshotWidth: nil, screenshotHeight: nil))
         let windowTitle = axString(window, kAXTitleAttribute) ?? ""
         let focused = elementAttribute(application, kAXFocusedUIElementAttribute)
-        let tree = accessibilityTree(window: window, bounds: bounds, application: application, focused: focused,
+        let tree = accessibilityTree(window: window, bounds: reduced && measuredBounds == nil ? .infinite : bounds, application: application, focused: focused,
                                      expanded: expandedMenusPID == app.pid ? expandedMenus : [])
         var lines = ["App: \(quoted(app.name)) (\(app.id), pid \(app.pid), \(app.isFrontmost ? "foreground" : "background"))",
                      "Window: \(quoted(windowTitle))",
@@ -216,7 +215,7 @@ final class MacObserver {
             }
         }
         guard let currentWindow = axSelectedWindow(application), CFEqual(currentWindow, window),
-              let currentBounds = axRect(window), sameBounds(currentBounds, bounds),
+              (reduced && measuredBounds == nil || axRect(window).map { sameBounds($0, bounds) } == true),
               (axString(window, kAXTitleAttribute) ?? "") == windowTitle else {
             throw OpenCUError("WINDOW_CHANGED", "The selected window changed while it was being observed. Read the application state again before interacting.")
         }

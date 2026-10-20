@@ -6,6 +6,7 @@ import Darwin
 final class InputController {
     // Presence hooks stay independent of the input routing/focus implementation.
     var pointerDelivered: ((CGPoint, WindowSnapshot, Bool) -> Void)?
+    var requirePointerAllowed: ((CGRect) throws -> Void)?
     var requireInputAllowed: (() throws -> Void)?
     private var backgroundFocus: BackgroundFocus?
 
@@ -854,6 +855,8 @@ final class InputController {
 
     private func mouseEvent(_ type: CGEventType, at point: CGPoint, button: CGMouseButton,
                             source: CGEventSource, window: MouseWindow, flags: CGEventFlags = []) throws -> CGEvent {
+        // Releases in defer must still run even after a stop/geometry change.
+        if ![.leftMouseUp, .rightMouseUp, .otherMouseUp].contains(type) { try requirePointerAllowed?(window.bounds) }
         guard let eventType = NSEvent.EventType(rawValue: UInt(type.rawValue)) else {
             throw OpenCUError("EVENT_CREATION_FAILED", "Unsupported mouse event type")
         }

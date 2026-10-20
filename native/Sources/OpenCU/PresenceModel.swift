@@ -27,7 +27,7 @@ struct PresenceState {
     func cursorVisible(at now: TimeInterval) -> Bool { connected && !stopped && lastPointer.map { now - $0 < 3 } == true }
     // Creating a display or moving a window onto it rearranges the person's screen.
     // Restore and destroy undo that work and stay allowed after a stop.
-    static let screenChangingMethods: Set<String> = ["experimental_agent_display_create", "experimental_agent_display_move_window"]
+    static let screenChangingMethods: Set<String> = ["agent_desktop_start"]
     static func requiresPermissionToContinue(_ method: String, screenshot: Bool) -> Bool {
         inputMethods.contains(method) || screenChangingMethods.contains(method) || (method == "get_app_state" && screenshot)
     }

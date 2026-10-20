@@ -105,8 +105,9 @@ final class AgentDesktopCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         // A late start callback retains its own stream and stops it separately.
         guard needsStop else { return nil }
         let result = StopResult()
-        old.stopCapture { error in
+        old.stopCapture { [weak self] error in
             Task { @MainActor in
+                if let error, AgentDesktopCapturePolicy.personStopped(error) { self?.onPersonStop?() }
                 result.failure = error.flatMap { AgentDesktopCapturePolicy.alreadyStopped($0) ? nil : $0.localizedDescription }
                 result.completed = true
             }
