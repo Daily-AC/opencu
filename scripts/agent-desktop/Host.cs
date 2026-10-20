@@ -20,6 +20,9 @@ using System.Windows.Forms;
 using Microsoft.Win32.SafeHandles;
 
 namespace OpenCUAgentDesktop {
+    sealed class SetupRequiredException : IOException {
+        internal SetupRequiredException(string reason) : base(reason + " Run in PowerShell: " + Tasks.SetupCommand) { }
+    }
     static class Native {
         [DllImport("wtsapi32.dll", SetLastError=true)] internal static extern bool WTSIsChildSessionsEnabled(out bool enabled);
         [DllImport("wtsapi32.dll", SetLastError=true)] internal static extern bool WTSGetChildSessionId(out uint session);
@@ -31,6 +34,16 @@ namespace OpenCUAgentDesktop {
         [DllImport("advapi32.dll", SetLastError=true)] internal static extern bool OpenProcessToken(IntPtr process, uint access, out IntPtr token);
         [DllImport("advapi32.dll", SetLastError=true)] internal static extern bool GetTokenInformation(IntPtr token, int kind, out int value, int size, out int returned);
         [DllImport("kernel32.dll")] internal static extern bool CloseHandle(IntPtr handle);
+        [DllImport("user32.dll")] internal static extern IntPtr GetForegroundWindow();
+        [DllImport("user32.dll", EntryPoint="GetWindowLongPtrW", SetLastError=true)] static extern IntPtr GetWindowLongPtr(IntPtr window, int index);
+        [DllImport("user32.dll", EntryPoint="SetWindowLongPtrW", SetLastError=true)] static extern IntPtr SetWindowLongPtr(IntPtr window, int index, IntPtr value);
+        [DllImport("user32.dll", SetLastError=true)] static extern bool SetWindowPos(IntPtr window, IntPtr after, int x, int y, int width, int height, uint flags);
+        internal static void AllowDeliberateActivation(IntPtr window) {
+            long style = GetWindowLongPtr(window, -20).ToInt64();
+            Check(SetWindowLongPtr(window, -20, new IntPtr(style & ~0x08000000L)) != IntPtr.Zero);
+            // Topmost, no activation, movement, resize or owner reordering.
+            Check(SetWindowPos(window, new IntPtr(-1), 0, 0, 0, 0, 0x1|0x2|0x10|0x20|0x200));
+        }
         [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] internal static extern SafePipeHandle CreateNamedPipe(string name, uint access, uint mode, uint instances, uint output, uint input, uint timeout, ref SecurityAttributes attributes);
         [StructLayout(LayoutKind.Sequential)] internal struct SecurityAttributes { internal int length; internal IntPtr descriptor; internal bool inherit; }
         [DllImport("kernel32.dll", SetLastError=true)] internal static extern IntPtr CreateJobObject(IntPtr attributes, string name);
@@ -46,7 +59,16 @@ namespace OpenCUAgentDesktop {
             internal UIntPtr processMemory, jobMemory, peakProcessMemory, peakJobMemory;
         }
         internal static void Check(bool ok) { if (!ok) throw new Win32Exception(Marshal.GetLastWin32Error()); }
-        internal static uint Child() { uint id; Check(WTSGetChildSessionId(out id)); return id; }
+        internal static uint ChildResult(bool success, uint id, int error) {
+            // Windows 11 also returns FALSE / ERROR_NOT_SUPPORTED with the
+            // documented no-child sentinel. An actual ID on failure is not valid.
+            if (!success && id != UInt32.MaxValue) throw new Win32Exception(error);
+            return id;
+        }
+        internal static uint Child() {
+            uint id; bool success = WTSGetChildSessionId(out id);
+            return ChildResult(success, id, Marshal.GetLastWin32Error());
+        }
         internal static bool Elevated(Process process) {
             IntPtr token; Check(OpenProcessToken(process.Handle, 8, out token));
             try { int value, returned; Check(GetTokenInformation(token, 20, out value, 4, out returned)); return value != 0; }
@@ -75,19 +97,31 @@ namespace OpenCUAgentDesktop {
         internal static readonly object OutputLock = new object();
         internal static string Json(object value) { return new JavaScriptSerializer { MaxJsonLength=64*1024*1024 }.Serialize(value); }
         internal static Dictionary<string, object> Parse(string line) {
-            return new JavaScriptSerializer { MaxJsonLength=64*1024*1024 }.Deserialize<Dictionary<string, object>>(line);
+            try { return new JavaScriptSerializer { MaxJsonLength=64*1024*1024 }.Deserialize<Dictionary<string, object>>(line); }
+            catch (ArgumentException) { throw new IOException("Invalid protocol JSON."); }
+        }
+        internal static string Message(Exception error) {
+            while ((error is TargetInvocationException || error is AggregateException) && error.InnerException != null) error = error.InnerException;
+            return error.Message;
         }
         internal static void Output(object value) { lock (OutputLock) Console.Out.WriteLine(Json(value)); }
         internal static void Line(string value) { lock (OutputLock) Console.Out.WriteLine(value); }
         internal static string Read(TextReader reader, int limit) {
             var text = new StringBuilder(); int ch;
             while ((ch = reader.Read()) != -1) {
-                if (ch == '\n') return text.ToString().TrimEnd('\r');
+                if (ch == '\n') return text.ToString();
+                if (ch == '\r') {
+                    if (reader.Read() != '\n') throw new IOException("A protocol CR must be followed by LF.");
+                    return text.ToString();
+                }
                 if (text.Length >= limit) throw new IOException("Protocol line limit exceeded.");
                 text.Append((char)ch);
             }
             if (text.Length != 0) throw new IOException("Truncated protocol line.");
             return null;
+        }
+        internal static StreamWriter Writer(Stream stream, int buffer = 65536) {
+            return new StreamWriter(stream, Utf8, buffer) { AutoFlush=true, NewLine="\n" };
         }
         internal static T Deadline<T>(Func<T> action, int milliseconds) {
             var task = Task.Run(action);
@@ -114,7 +148,13 @@ namespace OpenCUAgentDesktop {
 
     static class Tasks {
         internal static string Executable { get { return Assembly.GetExecutingAssembly().Location; } }
-        internal static string Name { get { return "OpenCU-AgentDesktop-" + WindowsIdentity.GetCurrent().User.Value; } }
+        internal static string Root { get { return Path.GetFullPath(Path.Combine(Path.GetDirectoryName(Executable), "../../..")); } }
+        internal static string SetupCommand { get { return "& '" + Path.Combine(Root, "bin/opencu.cmd").Replace("'", "''") + "' setup agent-desktop"; } }
+        internal static string Name { get {
+            // An offline verification install must not replace the real install's task.
+            using (var hash = SHA256.Create()) return "OpenCU-AgentDesktop-" + WindowsIdentity.GetCurrent().User.Value + "-" +
+                BitConverter.ToString(hash.ComputeHash(Encoding.UTF8.GetBytes(Root.ToUpperInvariant()))).Replace("-", "").Substring(0, 16);
+        } }
         internal static dynamic Service() { dynamic service = Activator.CreateInstance(Type.GetTypeFromProgID("Schedule.Service", true)); service.Connect(); return service; }
         internal static void Register() {
             dynamic service = Service(); dynamic task = service.NewTask(0);
@@ -130,14 +170,20 @@ namespace OpenCUAgentDesktop {
             service.GetFolder("\\").RegisterTaskDefinition(Name, task, 6, WindowsIdentity.GetCurrent().User.Value, null, 3, null);
         }
         internal static dynamic Verified() {
-            dynamic task = Service().GetFolder("\\").GetTask(Name); dynamic definition = task.Definition;
+            dynamic task;
+            try { task = Service().GetFolder("\\").GetTask(Name); }
+            catch (COMException e) {
+                if (e.ErrorCode == unchecked((int)0x80070002) || e.ErrorCode == unchecked((int)0x80070003)) throw new SetupRequiredException("Agent desktop task is missing.");
+                throw;
+            }
+            dynamic definition = task.Definition;
             string registeredUser = (string)definition.Principal.UserId;
             string registeredSid = registeredUser.StartsWith("S-1-") ? registeredUser : ((SecurityIdentifier)new NTAccount(registeredUser).Translate(typeof(SecurityIdentifier))).Value;
             if ((int)definition.Principal.LogonType != 3 || (int)definition.Principal.RunLevel != 0 ||
                 registeredSid != WindowsIdentity.GetCurrent().User.Value ||
                 (int)definition.Actions.Count != 1 || (int)definition.Triggers.Count != 0 ||
                 !String.Equals((string)definition.Actions[1].Path, Executable, StringComparison.OrdinalIgnoreCase) ||
-                (string)definition.Actions[1].Arguments != "bridge \"$(Arg0)\"") throw new IOException("Task differs from setup. Run opencu setup agent-desktop.");
+                (string)definition.Actions[1].Arguments != "bridge \"$(Arg0)\"") throw new SetupRequiredException("Agent desktop task differs from this installation.");
             return task;
         }
     }
@@ -175,6 +221,11 @@ namespace OpenCUAgentDesktop {
 
     sealed class Host : Form {
         readonly RdpControl control = new RdpControl();
+        readonly Panel view = new Panel { Dock=DockStyle.Fill };
+        // Disable the native ancestor of every ActiveX child HWND, rather than
+        // filtering managed MouseMove events that do not see native RDP input.
+        readonly Panel inputSurface = new Panel { Dock=DockStyle.Fill, Enabled=false };
+        readonly Label mode = new Label { Text="Starting agent desktop. Close to stop.", Dock=DockStyle.Top, Height=44, Padding=new Padding(10) };
         readonly Process parent;
         readonly Process guardian;
         readonly Mutex ownership;
@@ -183,7 +234,7 @@ namespace OpenCUAgentDesktop {
         readonly string ownerSid = WindowsIdentity.GetCurrent().User.Value;
         uint child = UInt32.MaxValue;
         volatile bool closing, ready;
-        bool launching, loggedOn;
+        bool launching, loggedOn, interactionClick, opening = true;
         string directory;
         NamedPipeServerStream pipe;
         StreamWriter pipeWriter;
@@ -199,18 +250,53 @@ namespace OpenCUAgentDesktop {
                 UseShellExecute=false, CreateNoWindow=true, RedirectStandardInput=true,
                 RedirectStandardOutput=true, RedirectStandardError=true
             });
+            guardian.StandardInput.NewLine = "\n";
             Text = "OpenCU agent desktop"; ClientSize = new Size(720, 500);
             TopMost = true;
             MinimizeBox = false; MaximizeBox = false; StartPosition = FormStartPosition.Manual;
             Location = new Point(Screen.PrimaryScreen.WorkingArea.Right - Width - 24, Screen.PrimaryScreen.WorkingArea.Bottom - Height - 24);
-            var label = new Label { Text="Agent apps run here. Focusing this view sends your keyboard here. Close to stop.", Dock=DockStyle.Top, Height=36, Padding=new Padding(10) };
-            Controls.Add(control); Controls.Add(label); control.Dock = DockStyle.Fill;
-            Shown += delegate { if (closing) { Close(); return; } try { Connect(); } catch (Exception e) { Fail("AGENT_DESKTOP_UNAVAILABLE", "Cannot initialize the child-session control: " + e.GetType().Name); } };
+            inputSurface.Controls.Add(control); control.Dock = DockStyle.Fill;
+            view.Controls.Add(inputSurface); Controls.Add(view); Controls.Add(mode);
+            view.MouseDown += delegate(object sender, MouseEventArgs e) {
+                if (!ready || closing || e.Button != MouseButtons.Left) return;
+                interactionClick = true; view.Capture = true;
+            };
+            view.MouseUp += delegate(object sender, MouseEventArgs e) {
+                if (!interactionClick || e.Button != MouseButtons.Left) return;
+                interactionClick = false; view.Capture = false;
+                if (!ready || closing || !view.ClientRectangle.Contains(e.Location)) return;
+                // Consume both halves of the mode-selection click before native
+                // RDP input is enabled. Do not forward even an unmatched button-up.
+                try {
+                    Activate();
+                    if (Native.GetForegroundWindow() == Handle) { SetInteractive(true); control.Focus(); }
+                } catch (Exception failure) { Fail("AGENT_DESKTOP_UNAVAILABLE", Protocol.Message(failure)); }
+            };
+            Shown += delegate { if (closing) { Close(); return; } try { Connect(); } catch (Exception e) { Fail("AGENT_DESKTOP_UNAVAILABLE", "Cannot initialize the child-session control: " + Protocol.Message(e)); } };
             timer.Interval = 100; timer.Tick += delegate { Tick(); }; timer.Start();
             // stdin EOF is observed even while connection or child startup is pending.
             Task.Run((Action)ReadRequests);
         }
         protected override bool ShowWithoutActivation { get { return true; } }
+        protected override CreateParams CreateParams {
+            get {
+                var parameters = base.CreateParams;
+                if (opening) parameters.ExStyle |= 0x08000000; // WS_EX_NOACTIVATE
+                parameters.ExStyle |= 0x00040000; // WS_EX_APPWINDOW: visible taskbar entry
+                return parameters;
+            }
+        }
+        void SetInteractive(bool interactive) {
+            inputSurface.Enabled = interactive;
+            mode.Text = interactive
+                ? "Interactive - mouse and keyboard go to the agent desktop. Escape stops the agent."
+                : "Watch only - click the view to interact. Close this window to stop the agent.";
+        }
+        protected override void OnDeactivate(EventArgs e) {
+            interactionClick = false; view.Capture = false;
+            SetInteractive(false);
+            base.OnDeactivate(e);
+        }
         protected override void OnHandleCreated(EventArgs e) {
             base.OnHandleCreated(e); Native.Check(Native.WTSRegisterSessionNotification(Handle, 0));
         }
@@ -277,7 +363,7 @@ namespace OpenCUAgentDesktop {
                     launching = true; BeginBridge();
                 }
                 if (ready && Native.Child() != child) Fail("AGENT_DESKTOP_LOST", "Child session ended. No reconnect was attempted.");
-            } catch (Exception e) { Fail("AGENT_DESKTOP_UNAVAILABLE", "Child-session lifecycle failed: " + e.GetType().Name); }
+            } catch (Exception e) { Fail("AGENT_DESKTOP_UNAVAILABLE", "Child-session lifecycle failed: " + Protocol.Message(e)); }
         }
         void BeginBridge() {
             var own = Process.GetCurrentProcess();
@@ -302,7 +388,7 @@ namespace OpenCUAgentDesktop {
                     pipe.EndWaitForConnection(waiting);
                     Pipes.Verify(pipe, connection, true);
                     var reader = new StreamReader(pipe, Protocol.Utf8, false, 65536, true);
-                    var writer = new StreamWriter(pipe, Protocol.Utf8, 65536, true) { AutoFlush=true };
+                    var writer = Protocol.Writer(pipe);
                     string token = Protocol.Deadline(() => Protocol.Read(reader, 64), 5000);
                     if (!Protocol.Equal(token, connection.token)) throw new IOException("Authentication failed.");
                     writer.WriteLine(connection.token);
@@ -310,12 +396,17 @@ namespace OpenCUAgentDesktop {
                     var result = Protocol.Parse(hello);
                     if (Convert.ToInt32(result["sessionId"]) != connection.childSession || !(bool)result["desktopAccessible"]) throw new IOException("Child engine is not ready.");
                     File.Delete(descriptor); Directory.Delete(directory); directory = null;
-                    pipeWriter = writer; ready = true;
+                    pipeWriter = writer;
+                    Invoke((Action)delegate {
+                        if (closing) throw new IOException("Host closed during startup.");
+                        Native.AllowDeliberateActivation(Handle);
+                        opening = false; ready = true; SetInteractive(false);
+                    });
                     Protocol.Output(new { @event="ready", sessionId=connection.childSession, hostPid=own.Id });
                     string line;
                     while ((line = Protocol.Read(reader, 64*1024*1024)) != null) Protocol.Line(line);
                     if (!closing) Fail("AGENT_DESKTOP_LOST", "Child engine transport ended. No reconnect was attempted.");
-                } catch (Exception e) { if (!closing) Fail("AGENT_DESKTOP_AUTH_FAILED", "Child bridge was not authenticated and ready: " + e.GetType().Name); }
+                } catch (Exception e) { if (!closing) Fail("AGENT_DESKTOP_AUTH_FAILED", "Child bridge was not authenticated and ready: " + Protocol.Message(e)); }
             });
         }
         void ReadRequests() {
@@ -326,7 +417,7 @@ namespace OpenCUAgentDesktop {
                     pipeWriter.WriteLine(line);
                 }
                 CloseOwned();
-            } catch { if (!closing) Fail("AGENT_DESKTOP_LOST", "Parent transport closed unexpectedly."); }
+            } catch (Exception failure) { if (!closing) Fail("AGENT_DESKTOP_LOST", "Parent transport closed unexpectedly: " + Protocol.Message(failure)); }
         }
         void Fail(string code, string text) {
             if (closing) return;
@@ -350,7 +441,7 @@ namespace OpenCUAgentDesktop {
                 if (child != UInt32.MaxValue && Native.Child() == child) Native.Check(Native.WTSLogoffSession(IntPtr.Zero, child, true));
                 loggedOff = child == UInt32.MaxValue || Native.Child() != child;
             }
-            catch { Protocol.Output(new { @event="failure", code="AGENT_DESKTOP_CLEANUP_FAILED", message="Could not confirm child logoff. Inspect Windows sessions before continuing." }); }
+            catch (Exception failure) { Protocol.Output(new { @event="failure", code="AGENT_DESKTOP_CLEANUP_FAILED", message="Could not confirm child logoff: " + Protocol.Message(failure) + " Inspect Windows sessions before continuing." }); }
             try { if (rdp != null && rdp.Connected != 0) rdp.Disconnect(); } catch { }
             try { if (directory != null) Directory.Delete(directory, true); } catch { }
             guardian.StandardInput.Close(); guardian.Dispose();
@@ -366,27 +457,30 @@ namespace OpenCUAgentDesktop {
             // GUI-subsystem processes may have pipes but no console code page.
             // Explicit streams also work for task modes with no standard handles.
             Console.SetIn(new StreamReader(Console.OpenStandardInput(), Protocol.Utf8));
-            Console.SetOut(new StreamWriter(Console.OpenStandardOutput(), Protocol.Utf8) { AutoFlush=true });
+            Console.SetOut(Protocol.Writer(Console.OpenStandardOutput()));
             try {
                 if (Native.Elevated(Process.GetCurrentProcess())) throw new IOException("Agent desktop requires a non-elevated user process.");
-                if (args.Length == 1 && args[0] == "register") { Tasks.Register(); return 0; }
+                if (args.Length == 1 && args[0] == "register") { Tasks.Register(); Protocol.Output(new { ok=true, taskName=Tasks.Name }); return 0; }
                 if (args.Length == 1 && args[0] == "self-test") { SelfTest(); return 0; }
                 if (args.Length == 1 && args[0] == "probe") {
-                    bool enabled; Native.Check(Native.WTSIsChildSessionsEnabled(out enabled)); Tasks.Verified();
-                    Protocol.Output(new { available=enabled, code=enabled ? null : "AGENT_DESKTOP_UNAVAILABLE", setupCommand="opencu setup agent-desktop",
+                    bool enabled; Native.Check(Native.WTSIsChildSessionsEnabled(out enabled));
+                    if (!enabled) throw new SetupRequiredException("Windows child sessions are disabled.");
+                    Tasks.Verified();
+                    Protocol.Output(new { available=enabled, taskName=Tasks.Name,
                         childSessionsEnabled=enabled, existingChildSession=Native.Child() }); return 0;
                 }
                 if (args.Length == 2 && args[0] == "bridge") { Bridge(args[1]); return 0; }
                 if (args.Length == 2 && args[0] == "guard") { Guard(Int32.Parse(args[1])); return 0; }
                 if (args.Length == 2 && args[0] == "host") {
                     bool enabled; Native.Check(Native.WTSIsChildSessionsEnabled(out enabled));
-                    if (!enabled) throw new IOException("Run opencu setup agent-desktop.");
+                    if (!enabled) throw new SetupRequiredException("Windows child sessions are disabled.");
                     Tasks.Verified(); Application.EnableVisualStyles(); Application.Run(new Host(Int32.Parse(args[1]))); return 0;
                 }
                 throw new ArgumentException("Unknown helper mode.");
             } catch (Exception e) {
                 // Do not log descriptors, command lines, app input or pipe tokens.
-                Protocol.Output(new { @event="failure", code="AGENT_DESKTOP_UNAVAILABLE", message="Agent desktop helper failed: " + e.GetType().Name + ". Run opencu setup agent-desktop." }); return 1;
+                Protocol.Output(new { @event="failure", code="AGENT_DESKTOP_UNAVAILABLE", setupRequired=e is SetupRequiredException,
+                    message=Protocol.Message(e) }); return 1;
             }
         }
         static void Guard(int hostPid) {
@@ -403,6 +497,26 @@ namespace OpenCUAgentDesktop {
         static void SelfTest() {
             // Real Windows named pipes, no window, task, child session or input.
             string token = Protocol.Token();
+            if (Native.ChildResult(false, UInt32.MaxValue, 50) != UInt32.MaxValue ||
+                Native.ChildResult(true, UInt32.MaxValue, 0) != UInt32.MaxValue ||
+                Native.ChildResult(true, 7, 0) != 7) throw new Exception("Child-session result mapping failed.");
+            bool refused = false;
+            try { Native.ChildResult(false, 7, 5); } catch (Win32Exception e) { refused = e.NativeErrorCode == 5; }
+            if (!refused) throw new Exception("Failed session query was accepted.");
+            foreach (string ending in new string[] { "\n", "\r\n" }) {
+                var lines = new StringReader(token + ending + "next" + ending);
+                if (Protocol.Read(lines, 64) != token || Protocol.Read(lines, 64) != "next" || Protocol.Read(lines, 64) != null)
+                    throw new Exception("Protocol line endings lost or changed data.");
+            }
+            foreach (string invalid in new string[] { token + "x\r\n", token + "\r\r\n", token + "\r", "a\rb\n", token }) {
+                refused = false;
+                try { Protocol.Read(new StringReader(invalid), 64); } catch (IOException) { refused = true; }
+                if (!refused) throw new Exception("Overlong or malformed protocol line was accepted.");
+            }
+            using (var bytes = new MemoryStream()) {
+                Protocol.Writer(bytes).WriteLine(token);
+                if (Protocol.Utf8.GetString(bytes.ToArray()) != token + "\n") throw new Exception("Writer is not LF-only.");
+            }
             if (!Protocol.Equal(token, token) || Protocol.Equal(token, new string('x', 64)) || Protocol.Equal(token, token + "x") || Protocol.Equal(token, null)) throw new Exception("Token comparison failed.");
             try { Protocol.Read(new StringReader(new string('x', 65) + "\n"), 64); throw new Exception("Handshake size was not bounded."); } catch (IOException) { }
             var own = Process.GetCurrentProcess();
@@ -429,7 +543,7 @@ namespace OpenCUAgentDesktop {
                     rejected = false;
                     try { Pipes.Verify(server, connection, true); } catch (IOException) { rejected = true; }
                     if (!rejected) throw new Exception("Wrong SID accepted.");
-                    var writer = new StreamWriter(client, Protocol.Utf8, 1024, true) { AutoFlush=true };
+                    var writer = Protocol.Writer(client, 1024);
                     var reader = new StreamReader(server, Protocol.Utf8, false, 1024, true);
                     writer.WriteLine(new string('x', 64));
                     if (Protocol.Equal(token, Protocol.Deadline(() => Protocol.Read(reader, 64), 3000))) throw new Exception("Wrong wire token accepted.");
@@ -437,18 +551,20 @@ namespace OpenCUAgentDesktop {
                     if (!Protocol.Equal(token, Protocol.Deadline(() => Protocol.Read(reader, 64), 3000))) throw new Exception("Valid wire token refused.");
                 }
             }
-            Protocol.Output(new { ok=true, checks=new string[] { "token-length-and-value", "handshake-bound", "first-pipe-instance", "peer-pid-lifetime", "peer-session", "peer-sid", "wire-token" } });
+            Protocol.Output(new { ok=true, checks=new string[] { "no-child-result", "lf-crlf-bound", "lf-writer", "token-length-and-value", "handshake-bound", "first-pipe-instance", "peer-pid-lifetime", "peer-session", "peer-sid", "wire-token" } });
         }
         static void Bridge(string descriptor) {
             if (new FileInfo(descriptor).Length > 16384) throw new IOException("Descriptor too large.");
-            var connection = new JavaScriptSerializer().Deserialize<Connection>(File.ReadAllText(descriptor, Protocol.Utf8));
+            Connection connection;
+            try { connection = new JavaScriptSerializer().Deserialize<Connection>(File.ReadAllText(descriptor, Protocol.Utf8)); }
+            catch (ArgumentException) { throw new IOException("Invalid connection descriptor JSON."); }
             var own = Process.GetCurrentProcess();
             if (own.SessionId == 0 || own.SessionId == connection.parentSession || own.SessionId != connection.childSession || WindowsIdentity.GetCurrent().User.Value != connection.sid)
                 throw new IOException("Bridge started in the wrong session.");
             using (var pipe = new NamedPipeClientStream(".", connection.pipe, PipeDirection.InOut, PipeOptions.Asynchronous, TokenImpersonationLevel.Identification)) {
                 pipe.Connect(10000); Pipes.Verify(pipe, connection, false);
                 var reader = new StreamReader(pipe, Protocol.Utf8, false, 65536, true);
-                var writer = new StreamWriter(pipe, Protocol.Utf8, 65536, true) { AutoFlush=true };
+                var writer = Protocol.Writer(pipe);
                 writer.WriteLine(connection.token);
                 if (!Protocol.Equal(connection.token, Protocol.Deadline(() => Protocol.Read(reader, 64), 5000))) throw new IOException("Host authentication failed.");
                 var start = new ProcessStartInfo(connection.engine, "serve") { UseShellExecute=false, CreateNoWindow=true, RedirectStandardInput=true, RedirectStandardOutput=true, RedirectStandardError=true, StandardOutputEncoding=Protocol.Utf8, StandardErrorEncoding=Protocol.Utf8 };
@@ -458,7 +574,7 @@ namespace OpenCUAgentDesktop {
                         job = Native.EngineJob(engine);
                         if (engine.SessionId != connection.childSession || Native.Elevated(engine)) throw new IOException("Engine session/integrity mismatch.");
                         engine.ErrorDataReceived += delegate { }; engine.BeginErrorReadLine();
-                        var input = new StreamWriter(engine.StandardInput.BaseStream, Protocol.Utf8) { AutoFlush=true };
+                        var input = Protocol.Writer(engine.StandardInput.BaseStream);
                         input.WriteLine("{\"id\":0,\"method\":\"doctor\",\"params\":{}}");
                         var doctor = Protocol.Parse(Protocol.Deadline(() => Protocol.Read(engine.StandardOutput, 16384), 10000));
                         var result = (Dictionary<string, object>)doctor["result"];
