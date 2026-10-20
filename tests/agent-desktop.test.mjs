@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import test from 'node:test';
-import { AgentDesktopRuntime, agentDesktopHelper, agentDesktopSetupCommand, parseAgentDesktopOutput, runAgentDesktopHelper, prepareAgentDesktop } from '../src/agent-desktop.mjs';
+import { AgentDesktopRuntime, agentDesktopHelper, agentDesktopSetupCommand, parseAgentDesktopOutput, runAgentDesktopHelper, prepareAgentDesktop, parentSessionLocked } from '../src/agent-desktop.mjs';
 
 const failure = code => Object.assign(new Error(code), { code });
 const object = result => JSON.parse(result.content[0].text);
@@ -13,6 +13,7 @@ function fixture(t, options = {}) {
   let hostFailure;
   const runtime = new AgentDesktopRuntime({ root: '/fixture', platform: 'win32',
     availability: async () => ({ available: true }),
+    parentLockState: async () => false,
     runtimeFactory: config => {
       const lane = config.spawnEngine ? 'child' : 'parent';
       const item = { config, lane, closed: false, response: undefined, close: async () => { item.closed = true; calls.push([lane, 'close']); },
@@ -213,4 +214,57 @@ test('automatic setup gates UAC and repairs only the directory DACL', async () =
   assert.match(source, /AccessControlSections\]::Access/);
   assert.match(source, /\[IO.Directory\]::SetAccessControl/);
   assert.doesNotMatch(source, /\$acl\.SetOwner|^Set-Acl\b/m);
+});
+
+test('parent lock/unlock reports fresh state without stopping, replacing or rerouting the child', async t => {
+  let parentLocked = true;
+  const f = fixture(t, { config: { parentLockState: async () => parentLocked } });
+  const inactive = object(await f.control('status'));
+  assert.equal(inactive.parentLocked, true);
+  assert.equal(inactive.state, 'inactive');
+  assert.equal(f.hosts.length, 0, 'A status query must not open a desktop');
+  parentLocked = false;
+  await f.control('start');
+  await f.runtime.call('get_app_state', { app: 'Fixture' });
+  for (const locked of [true, true, false]) {
+    parentLocked = locked;
+    const status = object(await f.control('status'));
+    assert.equal(status.parentLocked, locked);
+    assert.equal(status.state, 'running');
+    assert.equal(status.stoppedByPerson, false);
+    await f.runtime.call('click', { app: 'Fixture', element_index: 1 });
+    assert.equal(f.calls.at(-1)[0], 'child');
+    assert.equal(f.hosts[0].closed, false);
+  }
+  assert.equal(f.hosts.length, 1);
+  assert.equal(f.runtimes.length, 2, 'Lock/unlock does not create a new engine');
+  f.fail('USER_STOPPED'); parentLocked = true;
+  assert.equal(object(await f.control('status')).parentLocked, true);
+  parentLocked = false;
+  await assert.rejects(f.control('start'), { code: 'USER_STOPPED' });
+  await assert.rejects(f.runtime.call('click', {}), { code: 'USER_STOPPED' });
+});
+
+test('parent disconnect remains terminal even after unlock', async t => {
+  const f = fixture(t);
+  await f.control('start'); f.fail('SCREEN_LOCKED');
+  const status = object(await f.control('status'));
+  assert.equal(status.parentLocked, false);
+  assert.equal(status.state, 'failed');
+  await assert.rejects(f.runtime.call('list_apps'), { code: 'SCREEN_LOCKED' });
+  await assert.rejects(f.control('start'), { code: 'SCREEN_LOCKED' });
+  assert.equal(f.hosts.length, 1);
+});
+
+test('lock reporting uses only the parent engine doctor and never invents an unlocked result', async () => {
+  for (const value of [true, false]) {
+    assert.equal(await parentSessionLocked('/fixture', async (command, args) => {
+      assert.equal(command, path.join('/fixture', '.build/win/opencu-engine.exe'));
+      assert.deepEqual(args, ['--doctor']);
+      return { sessionLocked: value, desktopAccessible: !value };
+    }), value);
+  }
+  for (const value of [null, undefined, 'false']) {
+    await assert.rejects(parentSessionLocked('/fixture', async () => ({ sessionLocked: value })), { code: 'AGENT_DESKTOP_UNAVAILABLE' });
+  }
 });
