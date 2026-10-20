@@ -101,9 +101,12 @@ back to the whole window with a notice. `scope` is Windows-only for now.
 Both platforms accept `{"method":"wait","ms":1500}` inside `run_actions`
 (1–15000 ms, no input). Coordinates must precede every other action, including
 wait. Windows `press_key` defaults to a 50 ms hold and state warns when an open
-native IME may consume letter keys. The v0.3.3 Windows GUI cases are implemented
-but pending a run on an authorized idle desktop; earlier v0.3.2 evidence does not
-validate these changes.
+native IME may consume letter keys. v0.3.3 passed 40 fixture checks, including
+the six new compact-state and wait cases, in three consecutive runs on a fresh
+Windows 11 VM; a host-injected mouse move during a batch wait returned
+`PERSON_ACTIVE` ([evidence](evidence/opencu-windows-gui-2026-10-20-v0.3.3.json)).
+On a public chess site in an Edge app window, a read dropped from about 33,000 to
+19,900 characters, and 13,000 when scoped to the page document.
 
 
 Errors begin with a stable code that the agent sees, for example
