@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { setTimeout as pause } from 'node:timers/promises';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
-import { agentDesktopAvailability, agentDesktopHelper } from '../src/agent-desktop.mjs';
+import { agentDesktopAvailability, agentDesktopHelper, prepareAgentDesktop } from '../src/agent-desktop.mjs';
 
 if (process.platform !== 'win32') throw new Error('Windows-only acceptance; no desktop was touched.');
 if (!process.argv.includes('--allow-desktop')) throw new Error('Run with --allow-desktop FROM A FOREGROUND TERMINAL on an authorized idle Windows desktop; a headless launcher cannot test foreground theft.');
@@ -52,7 +52,9 @@ const index = (result, label) => {
   assert.ok(line, `Missing fixture element ${label}`); return Number(line.match(/^\s*\[(\d+)\]/)[1]);
 };
 try {
-  const capability = await agentDesktopAvailability(root);
+  // Exercise the same non-elevating preparation used by first start after an
+  // update. Disabled machines refuse with the real one-time setup command.
+  const capability = await prepareAgentDesktop(root);
   assert.equal(capability.available, true, JSON.stringify(capability)); check('setup-check', capability);
   const helper = await agentDesktopHelper(root);
   const ipc = JSON.parse(execFileSync(helper, ['self-test'], { windowsHide: true, encoding: 'utf8', timeout: 15000 }));
