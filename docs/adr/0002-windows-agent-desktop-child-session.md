@@ -13,22 +13,21 @@ OpenCU's activation calls does not prevent provider-driven activation. Checking
 foreground afterwards cannot undo interruption or detect every transient one.
 Those foreground-policy changes are not included here.
 
-On 2026-10-20 the owner's acceptance session installed the reproduced `29a0991`
-package on a clean cu-bench Windows 11 26H2 VM. After a local probe patch for four
-Windows-only defects, all eight acceptance checks passed. RunEx repeatedly started
-the child bridge at Medium integrity without a SYSTEM task. Post-enable sign-in
-allowed password-free start in about 3.3 seconds; before that sign-in the helper
-returned SIGN_IN_REQUIRED in 2.5 seconds with no credential dialog.
+The latest owner acceptance on a clean cu-bench Windows 11 26H2 VM used the
+reproduced `4b6c40d2...` package. The normal foreground suite passed three runs of
+40/40, package/update checks passed, and setup was repeatable without a second
+UAC prompt. Post-enable sign-in was password-free; before it start returned
+SIGN_IN_REQUIRED without credential UI. Medium-integrity RunEx, nonactivating
+open, watch-only hover, intentional Escape and physical close/no-reconnect passed.
 
-Six child rounds of click/click/type_text took about 0.55 seconds each while the
-parent received all twenty Hyper-V keyboard chunks and continuous hardware mouse
-movement, with unchanged parent foreground and no text leakage. Physical Escape
-latched on the next input action, host close logged off immediately without a
-reappearing child in twenty seconds, and MCP EOF left no OpenCU process. Under the original policy, parent
-lock ended the child and nothing resumed after unlock; the owner later changed
-that policy as recorded below. These are Windows acceptance
-measurements, not assumptions inferred from the earlier spike. They do not prove
-the follow-up fixes; see the [measurement details and limits](../windows-engine-contract.md#agent-desktop-040).
+The parent received exactly twenty Hyper-V text chunks while six agent rounds ran
+in the child, with unchanged foreground. But the parent's pointer moved when
+parked over the watch-only view: RDP applied server cursor-position updates despite
+disabled local input. Five locked-parent trials also showed that the child lost
+foreground and input failed (initial PERSON_ACTIVE, later ACTIVATION_FAILED, even
+after thirty seconds). Reads and WGC screenshots worked; input worked after
+unlock. The earlier locked-input success report is unreliable and is withdrawn.
+See the [measured results](../windows-engine-contract.md#agent-desktop-040).
 
 ## Decision
 
@@ -46,8 +45,12 @@ minimize and stops if externally minimized (the latter remains unmeasured). It d
 reconnect, clipboard, audio and device redirection. Hover over the old inactive
 view was measured to interrupt the child. The view now starts watch-only, with its
 native input ancestor disabled; a deliberate click enables interaction and focuses
-RDP, consuming that first click. Deactivation disables input again. This new input
-gate requires Windows re-acceptance, including rendering and physical Escape.
+RDP, consuming that first click. Deactivation disables input again. That local
+input gate passed acceptance, but does not block RDP server cursor-position updates.
+Require IgnoreServerGeneratedMouseMoves=true with readback before Connect. Because
+it is immutable once connected, it stays enabled even during interactive takeover.
+Failure to confirm it refuses startup; no cursor restoration or reconnect fallback
+is permitted. This additional protection needs Windows acceptance.
 
 `& "$env:LOCALAPPDATA\OpenCU\bin\opencu.cmd" setup agent-desktop` in normal
 PowerShell uses standard UAC only to enable child sessions. Setup explains the
@@ -95,9 +98,14 @@ A failed start or lost child transport never falls back to the parent engine.
 Explicit stop must confirm cleanup before routing can return to the parent.
 Normal parent timeout recovery is unchanged; child engine replacement is disabled.
 Host EOF ends ownership. Following the 2026-10-20 owner decision, parent lock is
-not a stop: the child keeps working. Unlock has no recovery/reconnect behavior.
-Console/remote disconnect and logoff still end ownership. The child's existing
-input and desktop guards remain unchanged.
+not a stop: the child stays alive for reads and screenshots. The latest measurements
+show input unavailable while locked. Its native engine is configured by the
+authenticated bridge with the parent session ID and refuses locked-parent input
+with SCREEN_LOCKED at preflight and safety fences. Partial input is reported
+honestly; no input is replayed. USER_STOPPED retains precedence. Ordinary parent
+engine foreground rules are unchanged. Unlock permits later explicit requests,
+not automatic recovery/reconnect. Console/remote disconnect and logoff still end
+ownership.
 
 ## Trade-offs and verification boundary
 
@@ -111,8 +119,8 @@ application databases still belong to the same user. Global single-instance apps
 may refuse startup or delegate to the parent; OpenCU will not follow them there.
 External minimize, covered/partly off-screen viewports, GPU/video/protected
 content, smart-card sign-in and unsupported editions remain unmeasured. WGC fixture
-capture and lock/unlock behavior were measured; that does not establish the
-remaining cases or the new watch-only gate.
+capture, retained session identity and lock status were measured; those do not
+establish locked input or the remaining cases.
 
 `scripts/verify-agent-desktop-win.mjs --allow-desktop` checks setup, real pipe
 authentication, child fixture launch/capture/actions, concurrent parent fixture
@@ -123,14 +131,16 @@ Escape through the new deliberate-interaction gate, automatic preparation,
 repeated setup and diagnostics, plus unmeasured disconnect and crash timing.
 This follow-up implementation job ran no new Windows GUI acceptance.
 
-A diagnostic variant with the lock handler removed could continue child work and
-WGC capture while the parent was locked, including after thirty seconds and after
-unlock. The owner chose this behavior on 2026-10-20: locking means the person has
-stepped away. The agent keeps working while the screen is locked, and nobody at
-the machine can see its work then. The caller can stop it by ending the MCP
-connection; after unlocking the person can close the host window or click its
-view and press Escape. Status exposes a fresh `parentLocked` boolean through a
-read-only query of the parent's session. An unavailable query is an error, not a
-guessed unlocked state. The final policy/status implementation still needs manual
-Windows re-acceptance. The automatic suite does not lock the parent because it
-cannot deterministically unlock without a password, which OpenCU must never obtain.
+The prior diagnostic claim of locked-parent input could not be reproduced. The
+latest five trials govern the contract: reads/screenshots work, input does not.
+No official, reliable foreground-activation mechanism meeting the no-elevation/
+no-parent-input boundaries was established, so no speculative bypass is shipped.
+The [input investigation](../windows-agent-desktop-input-findings.md) explains the
+public foreground APIs, child input-desktop checks, possible RDP focus sync, and
+the documented cursor setting.
+
+Nobody at the machine can see the child behind the parent lock screen. The caller
+can stop it by ending MCP; after unlocking the person can close the host or press
+Escape in its interactive view. Status retains parentLocked=true/false. Lock tests
+remain manual because the suite cannot unlock without a password. The final
+pointer-suppression and lock-refusal implementation still needs Windows verification.

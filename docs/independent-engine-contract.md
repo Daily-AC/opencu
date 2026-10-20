@@ -675,7 +675,8 @@ apply to ordinary operation. Tool stop logs off child apps and can lose unsaved 
 Host close and child physical Escape permanently latch `USER_STOPPED` across the
 MCP connection, including late replies during teardown. Status and cleanup can
 still run; switching or reconnecting cannot clear a person's stop. Parent locking
-keeps the child running; unlock does not restart or replace it. Console/remote
+keeps the child alive for reads/screenshots, with input refused as SCREEN_LOCKED;
+unlock does not restart or replace it. Console/remote
 disconnect and logoff still end the child without automatic resume. Failed cleanup
 prevents return
 to the parent route. See the [Windows contract](windows-engine-contract.md#agent-desktop-040)
@@ -685,16 +686,30 @@ The Windows view starts watch-only: its RDP input ancestor is disabled, so mouse
 travel over native ActiveX children is not forwarded. A deliberate click in the
 view enables input and focuses the control; that mode-selection click is consumed.
 Deactivation restores watch-only. Startup also holds WS_EX_NOACTIVATE until the
-bridge is ready, then removes it without activation. These follow-up UI changes
-need Windows re-acceptance, including physical Escape after entering interactive
-mode. They do not change the child or parent engine's input guards.
+bridge is ready, then removes it without activation. Those UI gates passed the latest VM acceptance. They need regression checks with
+the additional pointer-suppression setting, including physical Escape after
+entering interactive mode. The parent engine's input rules remain unchanged.
 
 Windows agent-desktop status reports `parentLocked: true | false` from a read-only
 query of the parent's session, including before helper preparation. Native doctor
 reports `sessionLocked` for its own session; an unknown lock state produces an
-explicit MCP status error, not a guessed false. The child engine's input rules are
-unchanged. While the parent screen is locked the agent keeps working and nobody
-at the machine can see its work. Stop by ending the MCP connection, or after
+explicit MCP status error, not a guessed false. Only the authenticated child bridge configures the internal
+`serve --agent-parent-session <id>` restriction. Its native input guards refuse a
+locked/unknown parent before input and check again at safety fences. Normal
+parent-desktop engines keep their foreground rules. While locked, child reads and
+screenshots remain available, input returns SCREEN_LOCKED, and nobody at the
+machine can see the child. The earlier locked-input success claim is withdrawn.
+A lock during input reports possible partial input rather than claiming no input;
+no failed action is replayed. USER_STOPPED precedence remains unchanged. Stop by ending the MCP connection, or after
 unlocking by closing the host window or pressing Escape inside its interactive
 view. Lock/unlock validation stays manual because OpenCU must not obtain a password
 to unlock the parent.
+
+The Windows host requires `IgnoreServerGeneratedMouseMoves=true` and Boolean
+readback before connecting. It remains on throughout the connection because the
+system property cannot be changed after Connect. The view's existing disabled
+input ancestor blocks local hover input; the RDP setting separately suppresses
+server-requested local cursor warps, including in interactive mode. Unsupported or
+unconfirmed suppression refuses startup, with no pointer-restoration fallback.
+See the [input findings](windows-agent-desktop-input-findings.md) for sources and
+pending Windows checks.
