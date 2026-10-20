@@ -7,7 +7,7 @@ one in front. It needs no account, model credentials or proprietary runtime: any
 MCP client can start it, and the calling agent supplies the model and decides
 what to do.
 
-**Status (v0.3.2):** macOS source builds and an unsigned Windows x64 package.
+**Status (v0.3.3):** macOS source builds and an unsigned Windows x64 package.
 On the development Mac, 9 of the last 10 runs of its 18-check background GUI
 suite passed, and it has completed a handful of real tasks. It has not been
 benchmarked at scale. Read [Limitations](#limitations) before relying on it.
@@ -92,6 +92,19 @@ tools require a preceding observation of the same app and return the updated
 state. Coordinates refer to the latest screenshot. `run_actions` runs up to 16
 known actions and returns one final state. `activate_app` brings the target to
 the front when a step needs it.
+
+On Windows, zero-size elements are omitted unless focused, while their children
+remain traversable. Pass `scope: <element index>` on a read, input tool or batch
+to return only that retained subtree, numbered from `[1]`; a missing root falls
+back to the whole window with a notice. `scope` is Windows-only for now.
+`waitForText` searches numbered element lines, excluding headers and summaries.
+Both platforms accept `{"method":"wait","ms":1500}` inside `run_actions`
+(1–15000 ms, no input). Coordinates must precede every other action, including
+wait. Windows `press_key` defaults to a 50 ms hold and state warns when an open
+native IME may consume letter keys. The v0.3.3 Windows GUI cases are implemented
+but pending a run on an authorized idle desktop; earlier v0.3.2 evidence does not
+validate these changes.
+
 
 Errors begin with a stable code that the agent sees, for example
 `STOPPED_BY_PERSON:`; the same code is in `_meta["opencu/error"]`. The full
