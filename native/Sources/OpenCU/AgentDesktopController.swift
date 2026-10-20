@@ -56,7 +56,7 @@ final class AgentDesktopController {
     private func transition(_ phase: AgentDesktopPhase) {
         state.change(phase); observedGeneration = nil; onInvalidate?(); event()
     }
-    private func requireUnlocked() throws {
+    private func requireUnlocked(checkDialog: Bool = true) throws {
         guard let session = CGSessionCopyCurrentDictionary() as? [String: Any],
               let onConsole = session[kCGSessionOnConsoleKey as String] as? Bool, onConsole else {
             throw OpenCUError("AGENT_DESKTOP_UNAVAILABLE", "The console session could not be verified.")
@@ -70,7 +70,7 @@ final class AgentDesktopController {
         }
         if locked { throw OpenCUError("SCREEN_LOCKED", "macOS is locked. Unlock and read fresh state before continuing.") }
         let front = NSWorkspace.shared.frontmostApplication
-        if ["UserNotificationCenter", "SecurityAgent"].contains(front?.bundleURL?.deletingPathExtension().lastPathComponent ?? "") {
+        if checkDialog && ["UserNotificationCenter", "SecurityAgent"].contains(front?.bundleURL?.deletingPathExtension().lastPathComponent ?? "") {
             throw OpenCUError("AGENT_DISPLAY_PERSON_ACTIVE", "A macOS confirmation is in the foreground. Agent desktop work is stopped; no input is replayed.")
         }
     }
@@ -160,7 +160,7 @@ final class AgentDesktopController {
     }
     func status() -> Arguments {
         var lockFailure: OpenCUError?
-        do { try requireUnlocked() }
+        do { try requireUnlocked(checkDialog: false) }
         catch let error as OpenCUError where error.code == "SCREEN_LOCKED" { }
         catch { lockFailure = error as? OpenCUError ?? OpenCUError("AGENT_DESKTOP_UNAVAILABLE", error.localizedDescription) }
         var result: Arguments = ["state": state.phase.rawValue, "stoppedByPerson": state.stoppedByPerson,
