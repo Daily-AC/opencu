@@ -25,6 +25,13 @@ def main() -> int:
             str(root / "tests/worker-transport.swift"), "-o", str(transport),
         ], cwd=root, check=True)
         subprocess.run([str(transport)], cwd=root, check=True, timeout=30)
+        capture = Path(directory) / "capture-policy-tests"
+        subprocess.run([
+            "xcrun", "swiftc", "-parse-as-library",
+            str(sources / "AgentDesktopCapturePolicy.swift"),
+            str(root / "tests/agent-desktop-capture.swift"), "-o", str(capture),
+        ], cwd=root, check=True)
+        subprocess.run([str(capture)], cwd=root, check=True, timeout=30)
         executable = Path(directory) / "native-logic-tests"
         compilation = subprocess.run([
             "xcrun", "swiftc", "-parse-as-library", "-module-name", "OpenCULogicTests",
