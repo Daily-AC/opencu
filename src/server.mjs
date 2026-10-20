@@ -6,7 +6,7 @@ import path from 'node:path';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { toolError } from './opencu-runtime.mjs';
-import { AgentDesktopRuntime } from './agent-desktop.mjs';
+import { AgentDesktopRuntime, agentDesktopSetupCommand } from './agent-desktop.mjs';
 import { normalizeArguments } from './tool-arguments.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -103,7 +103,7 @@ definitions.activate_app = {
   schema: { app, ...Object.fromEntries(Object.entries(stateOptions).filter(([key]) => key !== 'scope')) },
 };
 definitions.agent_desktop = {
-  description: 'Windows: start a visible separate desktop for agent apps, stop it (logs off its apps; unsaved work can be lost), or read status. While running, every app tool uses that desktop and cannot see the person’s windows. Setup must be done by the person with opencu setup agent-desktop. Never provide credentials. Closing its window or physical Escape permanently stops this MCP connection: never reconnect or restart without explicit permission. macOS is not supported yet.',
+  description: `Windows: start a visible separate desktop for agent apps, stop it (logs off its apps; unsaved work can be lost), or read status. While running, every app tool uses that desktop and cannot see the person’s windows. The view is watch-only until the person clicks it; losing activation returns to watch-only. For first-time enablement, the person runs in PowerShell: ${agentDesktopSetupCommand(process.platform === 'win32' ? root : undefined)}. Updates prepare the helper automatically without elevation. Never provide credentials. Closing its window or physical Escape permanently stops this MCP connection: never reconnect or restart without explicit permission. macOS is not supported yet.`,
   schema: { action: z.enum(['start', 'stop', 'status']) },
 };
 

@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import test from 'node:test';
-import { AgentDesktopRuntime, agentDesktopHelper } from '../src/agent-desktop.mjs';
+import { AgentDesktopRuntime, agentDesktopHelper, agentDesktopSetupCommand, parseAgentDesktopOutput, runAgentDesktopHelper, prepareAgentDesktop } from '../src/agent-desktop.mjs';
 
 const failure = code => Object.assign(new Error(code), { code });
 const object = result => JSON.parse(result.content[0].text);
@@ -119,7 +119,7 @@ test('missing setup and tampered local helper fail before execution', async t =>
   await mkdir(new URL('../.cache/', import.meta.url), { recursive: true });
   const root = await mkdtemp(path.resolve('.cache/agent-desktop-test-'));
   t.after(() => rm(root, { recursive: true, force: true }));
-  await assert.rejects(agentDesktopHelper(root), e => e.code === 'AGENT_DESKTOP_UNAVAILABLE' && e.message.includes('opencu setup agent-desktop'));
+  await assert.rejects(agentDesktopHelper(root), e => e.code === 'AGENT_DESKTOP_UNAVAILABLE' && e.setupRequired && e.message.includes("opencu.cmd' setup agent-desktop"));
   await mkdir(path.join(root, 'scripts/agent-desktop'), { recursive: true });
   await mkdir(path.join(root, '.build/win/agent-desktop'), { recursive: true });
   await writeFile(path.join(root, 'package.json'), '{"version":"0.4.0"}');
@@ -147,4 +147,70 @@ test('host forbids password APIs, disables credential prompts before Connect, an
   const setup = await readFile(new URL('../scripts/agent-desktop/setup.ps1', import.meta.url), 'utf8');
   assert.match(setup, /-Verb RunAs/);
   assert.doesNotMatch(setup, /Get-Credential|Read-Host|ConvertTo-SecureString/);
+});
+
+test('helper process failures retain their own message and suggest setup only when flagged', async () => {
+  const detail = { event: 'failure', code: 'AGENT_DESKTOP_UNAVAILABLE', message: 'The requested operation requires elevation.', setupRequired: false };
+  await assert.rejects(runAgentDesktopHelper(process.execPath, ['-e', `console.log(${JSON.stringify(JSON.stringify(detail))}); process.exit(1);`]),
+    e => e.code === detail.code && e.message === detail.message && !e.setupRequired);
+  assert.throws(() => parseAgentDesktopOutput(JSON.stringify({ ...detail, message: 'Task missing.', setupRequired: true }), 1),
+    e => e.message === 'Task missing.' && e.setupRequired === true);
+  assert.throws(() => parseAgentDesktopOutput('private-fixture-token', 1), e => !e.message.includes('private-fixture-token'));
+  assert.deepEqual(parseAgentDesktopOutput('{"available":true}', 0), { available: true });
+});
+
+test('setup instructions are executable PowerShell commands, including installation paths with spaces and quotes', () => {
+  assert.equal(agentDesktopSetupCommand(String.raw`C:\Users\O'Brien\OpenCU`), "& 'C:\\Users\\O''Brien\\OpenCU\\bin\\opencu.cmd' setup agent-desktop");
+  assert.equal(agentDesktopSetupCommand(), '& "$env:LOCALAPPDATA\\OpenCU\\bin\\opencu.cmd" setup agent-desktop');
+});
+
+test('missing update artifacts are prepared once without elevation, then revalidated', async () => {
+  const calls = [];
+  let prepared = false, release;
+  const gate = new Promise(resolve => { release = resolve; });
+  const dependencies = {
+    availability: async () => prepared ? { available: true, taskName: 'fixture' } : { available: false, setupRequired: true },
+    run: async (command, args) => { calls.push({ command, args }); await gate; prepared = true; return { prepared: true }; },
+  };
+  const first = prepareAgentDesktop('C:\\OpenCU fixture', dependencies);
+  const second = prepareAgentDesktop('C:\\OpenCU fixture', dependencies);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(calls.length, 1);
+  assert.ok(calls[0].args.includes('-PrepareOnly'));
+  assert.ok(!calls[0].args.includes('RunAs'));
+  release();
+  assert.equal((await first).available, true); assert.equal((await second).available, true);
+  await prepareAgentDesktop('C:\\OpenCU fixture', dependencies);
+  assert.equal(calls.length, 1, 'An already valid install is not rebuilt');
+});
+
+test('automatic preparation refuses disabled child sessions and does not retry or elevate', async () => {
+  let calls = 0;
+  const message = `Windows child sessions are disabled. Run in PowerShell: ${agentDesktopSetupCommand('C:\\OpenCU')}`;
+  await assert.rejects(prepareAgentDesktop('C:\\disabled-fixture', {
+    availability: async () => ({ available: false, setupRequired: true }),
+    run: async (_command, args) => { calls++; assert.ok(args.includes('-PrepareOnly')); throw Object.assign(new Error(message), { code: 'AGENT_DESKTOP_UNAVAILABLE' }); },
+  }), e => e.code === 'AGENT_DESKTOP_UNAVAILABLE' && e.message === message);
+  assert.equal(calls, 1);
+  await assert.rejects(prepareAgentDesktop('C:\\denied-fixture', {
+    availability: async () => ({ available: false, setupRequired: false, code: 'AGENT_DESKTOP_UNAVAILABLE', message: 'Access denied.' }),
+    run: async () => { throw new Error('Preparation must not run for an unrelated failure'); },
+  }), /Access denied/);
+});
+
+test('failed start explains the stop needed to clear failure, while person stops never offer a reset', async t => {
+  const f = fixture(t, { startError: 'AGENT_DESKTOP_SIGN_IN_REQUIRED' });
+  await assert.rejects(f.control('start'), e => e.code === 'AGENT_DESKTOP_SIGN_IN_REQUIRED' && e.message.includes('App tools are blocked') && e.message.includes('"action":"stop"'));
+  const person = fixture(t);
+  await person.control('start'); person.fail('USER_STOPPED');
+  await assert.rejects(person.control('start'), e => e.code === 'USER_STOPPED' && !e.message.includes('"action":"stop"'));
+});
+
+test('automatic setup gates UAC and repairs only the directory DACL', async () => {
+  const source = await readFile(new URL('../scripts/agent-desktop/setup.ps1', import.meta.url), 'utf8');
+  assert.ok(source.indexOf('if ($PrepareOnly)') < source.indexOf('-Verb RunAs'));
+  assert.ok(source.indexOf('Windows will now ask to let Windows PowerShell') < source.indexOf('-Verb RunAs'));
+  assert.match(source, /AccessControlSections\]::Access/);
+  assert.match(source, /\[IO.Directory\]::SetAccessControl/);
+  assert.doesNotMatch(source, /\$acl\.SetOwner|^Set-Acl\b/m);
 });
