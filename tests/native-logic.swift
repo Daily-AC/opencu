@@ -406,11 +406,10 @@ struct OpenCUInputLogicChecks {
             fails("STOPPED_BY_PERSON") { try presence.requireAllowed(method) }
         }
         fails("STOPPED_BY_PERSON") { try presence.requireAllowed("get_app_state", screenshot: true) }
-        for method in ["experimental_agent_display_create", "experimental_agent_display_move_window"] {
+        for method in ["agent_desktop_start"] {
             fails("STOPPED_BY_PERSON") { try presence.requireAllowed(method) }
         }
-        for method in ["get_app_state", "doctor", "list_apps", "experimental_agent_display_status",
-                       "experimental_agent_display_restore", "experimental_agent_display_destroy"] { try presence.requireAllowed(method) }
+        for method in ["get_app_state", "doctor", "list_apps", "agent_desktop_status", "agent_desktop_stop"] { try presence.requireAllowed(method) }
         presence.call(target: "other", now: 30); presence.pointer(now: 30)
         expect(presence.stopped && !presence.cursorVisible(at: 30), "Calls cannot clear the stop latch")
         presence.disconnect()
@@ -512,20 +511,20 @@ struct OpenCUInputLogicChecks {
         fails("AGENT_DISPLAY_BUSY") { try ledger.created(43) }
         let savedFrame = AgentDisplayLedger.SavedFrame(windowID: 21, displayID: 1, frame: originalFrame)
         try ledger.remember(savedFrame)
-        expect(ledger.saved == savedFrame && ledger.restorePending, "Frame committed before any AX mutation")
+        expect(ledger.pending == [savedFrame] && ledger.restorePending, "Frame committed before any AX mutation")
         fails("AGENT_DISPLAY_BUSY") {
-            try ledger.remember(.init(windowID: 22, displayID: 42, frame: movedFrame))
+            try ledger.remember(savedFrame)
         }
-        expect(ledger.saved == savedFrame, "Repeated/other-window move cannot overwrite original frame")
+        expect(ledger.pending == [savedFrame], "Repeated/other-window move cannot overwrite original frame")
         expect(ledger.cleanupSteps == [.restore, .releaseDisplay], "Disconnect and failure restore before release")
         ledger.released() // Simulated failed restore: still release the display.
-        expect(ledger.restorePending && ledger.saved == savedFrame && ledger.cleanupSteps == [.restore], "Failed restoration retains recovery state after release")
+        expect(ledger.restorePending && ledger.pending == [savedFrame] && ledger.cleanupSteps == [.restore], "Failed restoration retains recovery state after release")
         fails("AGENT_DISPLAY_BUSY") { try ledger.created(43) }
         ledger.restored()
         ledger.released()
         expect(ledger.cleanupSteps.isEmpty, "Successful restoration plus repeated destroy is idempotent")
         try ledger.created(43)
-        expect(ledger.saved == nil, "Fresh display clears completed bookkeeping")
+        expect(ledger.pending.isEmpty, "Fresh display clears completed bookkeeping")
         try ledger.remember(savedFrame)
         ledger.restored()
         expect(ledger.cleanupSteps == [.releaseDisplay], "Explicit restore prevents duplicate window writes at shutdown")
@@ -564,16 +563,76 @@ struct OpenCUInputLogicChecks {
         expect(returnedAgain == nil, "Manual return cannot be automatically undone")
         var multi = AgentDisplayLedger()
         try multi.created(44)
-        try multi.remember(savedFrame, multiple: true)
+        try multi.remember(savedFrame)
         let anotherFrame = AgentDisplayLedger.SavedFrame(windowID: 22, displayID: 2, frame: movedFrame)
-        try multi.remember(anotherFrame, multiple: true)
-        fails("AGENT_DISPLAY_BUSY") { try multi.remember(savedFrame, multiple: true) }
+        try multi.remember(anotherFrame)
+        fails("AGENT_DISPLAY_BUSY") { try multi.remember(savedFrame) }
         expect(multi.pending == [savedFrame, anotherFrame], "Multiple originals survive without substitution")
         multi.restored(22)
         multi.released()
         expect(multi.pending == [savedFrame], "Partial cleanup retains the failed original after display release")
         multi.restored(21)
         expect(multi.cleanupSteps.isEmpty, "Per-window completion is idempotent")
+        // A move refusal is local: rollback selects that exact ledger entry only.
+        var rollback = AgentDisplayLedger(); try rollback.created(50)
+        try rollback.remember(savedFrame); try rollback.remember(anotherFrame)
+        expect(rollback.restorations(windowID: 22) == [anotherFrame], "Interrupted second move never restores the first window")
+        rollback.restored(22)
+        expect(rollback.pending == [savedFrame], "First window stays admitted with its original recovery frame")
+        expect(rollback.restorations(windowID: 99).isEmpty, "An interruption before any write restores nothing")
+        for interruption in ["AGENT_DISPLAY_PERSON_ACTIVE", "SCREEN_LOCKED"] {
+            expect(!AgentDesktopAdmissionPolicy.tearsDownDesktop(interruption), "Input interruptions preserve desktop ownership")
+        }
+        expect(AgentDesktopAdmissionPolicy.tearsDownDesktop("AGENT_DISPLAY_LAYOUT_CHANGED"), "A real layout failure still cleans up")
+        expect(!AgentDesktopAdmissionPolicy.usableWindow(role: "AXWindow", minimized: true, fullScreen: false, onDisplay: false), "Minimized windows reduce without moving")
+        expect(!AgentDesktopAdmissionPolicy.usableWindow(role: "AXWindow", minimized: false, fullScreen: true, onDisplay: true), "Full-screen windows reduce without moving")
+        expect(!AgentDesktopAdmissionPolicy.usableWindow(role: "AXSheet", minimized: false, fullScreen: false, onDisplay: false), "Focused off-display sheets reduce without moving")
+        expect(AgentDesktopAdmissionPolicy.usableWindow(role: "AXSheet", minimized: false, fullScreen: false, onDisplay: true), "Sheets already on display can use process admission without geometry writes")
+        let missingReadBounds = try AgentDesktopAdmissionPolicy.readBounds(nil, reduced: true)
+        expect(missingReadBounds == .zero, "Unavailable bounds still permit reduced text traversal")
+        fails("WINDOW_BOUNDS_UNAVAILABLE") { _ = try AgentDesktopAdmissionPolicy.readBounds(nil, reduced: false) }
+        for reason in ["AGENT_DISPLAY_UNSUPPORTED_WINDOW", "AGENT_DISPLAY_AX_BOUNDS_UNAVAILABLE", "AGENT_DISPLAY_WINDOW_ID_UNAVAILABLE", "AGENT_DISPLAY_AMBIGUOUS_WINDOW", "AGENT_DISPLAY_ORIGINAL_DISPLAY_MISSING"] {
+            expect(AgentDesktopAdmissionPolicy.reducedReason(OpenCUError(reason, "fixture")) == reason, "Move-only failure becomes a reduced read with its reason")
+        }
+        expect(AgentDesktopAdmissionPolicy.reducedReason(OpenCUError("ACCESSIBILITY_PERMISSION_REQUIRED", "fixture")) == nil, "Permission failures are not masked as move refusals")
+        for explicit in [false, true] {
+            expect(AgentDesktopAdmissionPolicy.choice(admitted: false, onDisplay: true, sameProcess: true, sticky: false, explicit: explicit) == .inheritProcess, "Same-process windows already on display need no movement consent, including final reads")
+            expect(AgentDesktopAdmissionPolicy.choice(admitted: false, onDisplay: true, sameProcess: false, sticky: false, explicit: explicit) == (explicit ? .askUse : .reduced), "Other-process window uses a card only on an explicit read")
+            expect(AgentDesktopAdmissionPolicy.choice(admitted: false, onDisplay: false, sameProcess: true, sticky: false, explicit: explicit) == (explicit ? .askMove : .reduced), "Same process never authorizes a new move implicitly")
+            expect(AgentDesktopAdmissionPolicy.choice(admitted: false, onDisplay: true, sameProcess: true, sticky: true, explicit: explicit) == .reduced, "A declined/returned window cannot inherit admission")
+        }
+        for reason in ["lock", "MCP cancel", "tool stop"] {
+            var cancelled = AgentDesktopConsent()
+            let request = try cancelled.begin(window: reason, now: 0)!
+            cancelled.cancel()
+            expect(!cancelled.decide(token: request.token, approve: true, now: 1), "Cancelled approval cannot commit later")
+            let next = try cancelled.begin(window: reason, now: 2)
+            expect(next != nil && cancelled.reduced.isEmpty, "Lock/cancel/stop are not declines; another explicit read may ask")
+        }
+        fails("OBSERVATION_REQUIRED") { try AgentDesktopAdmissionPolicy.requireSnapshot(admitted: true, fresh: false) }
+        fails("AGENT_DESKTOP_CONSENT_REQUIRED") { try AgentDesktopAdmissionPolicy.requireSnapshot(admitted: false, fresh: true) }
+        try AgentDesktopAdmissionPolicy.requireSnapshot(admitted: true, fresh: true)
+        expect(!AgentDesktopState.stopError.message.contains("Text-only"), "Desktop stop never promises text reads")
+        var observedDesktop = AgentDesktopState(); observedDesktop.change(.running)
+        let beforeRead = observedDesktop.generation
+        try observedDesktop.requireGeneration(beforeRead)
+        observedDesktop.invalidate()
+        fails("OBSERVATION_REQUIRED") { try observedDesktop.requireGeneration(beforeRead) }
+        var queued = AgentDesktopRequestQueue()
+        try queued.enqueue("1"); queued.cancel("1")
+        do { try queued.begin("1"); expect(false, "Queued cancellation must precede dispatch") } catch is CancellationError { expect(true, "Early cancellation is retained") }
+        queued.cancel("1"); try queued.enqueue("2"); try queued.begin("2")
+        for index in 0..<128 { try queued.enqueue("limit-\(index)") }
+        fails("INVALID_REQUEST") { try queued.enqueue("overflow") }
+        var monitorCursor = 0
+        let manyWindows = Array(UInt32(1)...UInt32(100))
+        var visited = Set<UInt32>()
+        for _ in 0..<100 {
+            let batch = AgentDesktopMonitoring.batch(ids: manyWindows, cursor: &monitorCursor, observed: 90)
+            expect(batch.count <= 2 && Set(batch).count == batch.count, "Every monitor tick has at most two bounded AX targets")
+            visited.formUnion(batch)
+        }
+        expect(visited.count == 100, "Bounded monitor rotates through every admitted window")
         // The same remote focus works in the foreground and must be refused in
         // the background. A host-PID panel proxy must also be refused; unknown
         // focus in ordinary apps keeps the existing PID-targeted path.

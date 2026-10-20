@@ -68,7 +68,10 @@ final class AgentDesktopWindow: NSObject, NSWindowDelegate {
         decision = answer
         let title = String(proposal.title.replacingOccurrences(of: "\n", with: " ").prefix(80))
         let appName = String(proposal.app.name.prefix(48))
-        message.stringValue = "Move ‘\(title)’ from \(appName) to the agent desktop? It will return when this desktop closes. The app stays open.\(proposal.frame.size != proposal.destination.size ? " The window will be resized to fit." : "")"
+        allow.title = proposal.requiresMove ? "Move once" : "Allow once"
+        message.stringValue = proposal.requiresMove
+            ? "Move ‘\(title)’ from \(appName) to the agent desktop? It will return when this desktop closes. The app stays open. Keep the mouse still for 2 seconds after clicking."
+            : "Allow this window for the agent? ‘\(title)’ from \(appName) is already on the agent display. OpenCU will not move or restore it."
         allow.isHidden = false; decline.isHidden = false
     }
     func clearConsent() {

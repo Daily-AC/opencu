@@ -51,7 +51,6 @@ struct AgentDisplayLedger {
     }
     enum CleanupStep: Equatable { case restore, releaseDisplay }
     private(set) var displayID: UInt32?
-    private(set) var saved: SavedFrame?
     private(set) var pending: [SavedFrame] = []
     var restorePending: Bool { !pending.isEmpty }
 
@@ -60,16 +59,17 @@ struct AgentDisplayLedger {
             throw OpenCUError("AGENT_DISPLAY_BUSY", "Destroy/restore the previous agent display before creating another.")
         }
         displayID = id
-        saved = nil
     }
-    mutating func remember(_ value: SavedFrame, multiple: Bool = false) throws {
-        guard displayID != nil, (!restorePending || multiple),
+    mutating func remember(_ value: SavedFrame) throws {
+        guard displayID != nil,
               !pending.contains(where: { $0.windowID == value.windowID }) else {
-            throw OpenCUError("AGENT_DISPLAY_BUSY", "Create a display and restore its previous target before moving a window.")
+            throw OpenCUError("AGENT_DISPLAY_BUSY", "Create a display and do not overwrite an outstanding original window frame.")
         }
         // Commit before the first AX write, including when that write fails.
-        saved = value
         pending.append(value)
+    }
+    func restorations(windowID: UInt32? = nil) -> [SavedFrame] {
+        pending.reversed().filter { windowID == nil || $0.windowID == windowID }
     }
     mutating func restored(_ windowID: UInt32? = nil) {
         if let windowID { pending.removeAll { $0.windowID == windowID } }
@@ -85,7 +85,7 @@ func agentDisplayRectJSON(_ rect: CGRect) -> [String: Double] {
     ["x": rect.minX, "y": rect.minY, "width": rect.width, "height": rect.height]
 }
 
-/// Experimental relocation only. Ordinary input/capture still requires its
+/// Relocation identity matching. Ordinary input/capture still requires its
 /// existing exact-window identity path. On-screen state is never a match filter.
 struct AgentDisplayWindowIdentity {
     struct Candidate {

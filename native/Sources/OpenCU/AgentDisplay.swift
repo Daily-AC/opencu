@@ -13,21 +13,25 @@ final class AgentDisplay {
         let displayID: UInt32
         let destination: CGRect
         let title: String
+        let requiresMove: Bool
         var key: String { "\(app.pid):\(app.application.launchDate?.timeIntervalSince1970 ?? 0):\(windowID)" }
     }
     private var targets: [UInt32: Proposal] = [:]
     private var admitted = Set<UInt32>()
     private var agentFrame: CGRect?
-    var multipleWindows = false
     var beforeMutation: (() throws -> Void)?
     var id: UInt32? { ledger.displayID }
     var frame: CGRect? { agentFrame }
     var restorePending: Bool { ledger.restorePending }
-    var savedWindows: [Arguments] { ledger.pending.map { saved in
-        ["windowID": saved.windowID, "app": targets[saved.windowID]?.app.id ?? "",
-         "originalFrame": agentDisplayRectJSON(saved.frame), "originalDisplayID": saved.displayID,
-         "restorePending": true, "state": admitted.contains(saved.windowID) ? "admitted" : "restore_pending"]
-    } }
+    var savedWindows: [Arguments] {
+        targets.values.filter { target in admitted.contains(target.windowID) || ledger.pending.contains { $0.windowID == target.windowID } }.map { target in
+            let saved = ledger.pending.first { $0.windowID == target.windowID }
+            var result: Arguments = ["windowID": target.windowID, "app": target.app.id,
+                "restorePending": saved != nil, "state": admitted.contains(target.windowID) ? "admitted" : "restore_pending"]
+            if let saved { result["originalFrame"] = agentDisplayRectJSON(saved.frame); result["originalDisplayID"] = saved.displayID }
+            return result
+        }
+    }
 
     private var requestedFrame: CGRect?
     private var baseline: [Display] = []
@@ -37,64 +41,27 @@ final class AgentDisplay {
     private let reconfiguration = DisplayReconfiguration()
 
     private typealias Display = OnlineDisplay
-    // Once this process has released a display, its CG cache is not a reliable
-    // inventory even after callbacks/run-loop service. All later reads use a
-    // fresh process too, including status and idempotent destroy responses.
+    // The owner CG cache can outlive a released display. Preserve the confirmed
+    // fresh snapshot for status/idempotent cleanup; unresolved restorations refresh
+    // it off the main actor. Never reintroduce the stale owner inventory.
     private var requiresFreshDisplayList = false
+    private var lastFreshDisplays: [OnlineDisplay]?
+    private var monitorCursor = 0
 
     private func displays() throws -> [Display] {
-        try requiresFreshDisplayList ? FreshOnlineDisplays.list() : OnlineDisplays.current()
+        if requiresFreshDisplayList {
+            guard let lastFreshDisplays else { throw OpenCUError("AGENT_DISPLAY_STATUS_FAILED", "No confirmed fresh display snapshot is available.") }
+            return lastFreshDisplays
+        }
+        return try OnlineDisplays.current()
     }
 
-    // No window titles. Owner names explain movement warnings in local evidence;
-    // a changing frame alone cannot distinguish display effects from user input.
-    private func windowFrames() throws -> [Arguments] {
-        guard let records = CGWindowListCopyWindowInfo(.optionAll, kCGNullWindowID) as? [Arguments] else {
-            throw OpenCUError("AGENT_DISPLAY_STATUS_FAILED", "WindowServer window frames are unavailable; collateral movement cannot be checked.")
-        }
-        return records.compactMap { record in
-            guard let layer = record[kCGWindowLayer as String] as? Int,
-                  [0, Int(CGWindowLevelForKey(.dockWindow)), Int(CGWindowLevelForKey(.mainMenuWindow))].contains(layer),
-                  let id = record[kCGWindowNumber as String] as? UInt32,
-                  let pid = record[kCGWindowOwnerPID as String] as? Int,
-                  let dictionary = record[kCGWindowBounds as String] as? NSDictionary,
-                  let rect = CGRect(dictionaryRepresentation: dictionary as CFDictionary) else { return nil }
-            return ["id": id, "pid": pid, "ownerName": record[kCGWindowOwnerName as String] as? String ?? "PID \(pid)",
-                    "layer": layer, "onScreen": record[kCGWindowIsOnscreen as String] ?? NSNull(),
-                    "frame": agentDisplayRectJSON(rect)]
-        }
-    }
-
-    func status(displaySnapshot: [OnlineDisplay]? = nil) throws -> Arguments {
-        let current = try displaySnapshot ?? displays()
-        var result: Arguments = ["displays": current.map(\.json), "windowFrames": try windowFrames(),
-                                 "restorePending": ledger.restorePending, "backingScale": scale,
-                                 "agentDisplayID": ledger.displayID.map { $0 as Any } ?? NSNull()]
-        if let lastMove { result["lastMove"] = lastMove }
+    /// No AX reads or child process on the main actor, including repeated destroy.
+    private func status(displaySnapshot: [OnlineDisplay]? = nil) -> Arguments {
+        var result: Arguments = ["agentDisplayID": ledger.displayID.map { $0 as Any } ?? NSNull(),
+            "restorePending": ledger.restorePending, "windows": savedWindows,
+            "displays": (displaySnapshot ?? lastFreshDisplays ?? []).map(\.json)]
         if let lastRemoval { result["lastRemoval"] = lastRemoval }
-        result["displayReconfigurationEvents"] = reconfiguration.snapshot()
-        if let requestedFrame { result["requestedFrame"] = agentDisplayRectJSON(requestedFrame) }
-        if let agent = current.first(where: { $0.id == ledger.displayID }) {
-            result["actualFrame"] = agentDisplayRectJSON(agent.frame)
-            result["placementAdjustedByOS"] = requestedFrame != agent.frame
-        }
-        if let saved = ledger.saved, let target = targets[saved.windowID] {
-            let rect = !target.app.application.isTerminated ? axRect(target.window) : nil
-            let record = (CGWindowListCopyWindowInfo(.optionIncludingWindow, saved.windowID) as? [Arguments])?
-                .first { ($0[kCGWindowNumber as String] as? UInt32) == saved.windowID
-                    && ($0[kCGWindowOwnerPID as String] as? Int32) == target.app.pid }
-            var info: Arguments = ["pid": target.app.pid, "windowID": saved.windowID,
-                                   "originalDisplayID": saved.displayID, "originalFrame": agentDisplayRectJSON(saved.frame),
-                                   "frame": rect.map { agentDisplayRectJSON($0) as Any } ?? NSNull(),
-                                   "windowServerOnScreen": record?[kCGWindowIsOnscreen as String] ?? NSNull(),
-                                   "displayIDs": rect.map { rect in current.filter { $0.frame.intersects(rect) }.map(\.id) } ?? []]
-            if let dictionary = record?[kCGWindowBounds as String] as? NSDictionary,
-               let frame = CGRect(dictionaryRepresentation: dictionary as CFDictionary) {
-                info["windowServerFrame"] = agentDisplayRectJSON(frame)
-                info["windowServerDisplayIDs"] = current.filter { area($0.frame.intersection(frame)) > 0 }.map(\.id)
-            }
-            result["target"] = info
-        }
         return result
     }
 
@@ -114,7 +81,6 @@ final class AgentDisplay {
         scale = Int(screen.backingScaleFactor)
         requestedFrame = try AgentDisplayGeometry.placement(main: main.frame,
             others: baseline.filter { !$0.main }.map(\.frame), size: CGSize(width: 1728, height: 1117))
-        let windowsBefore = try windowFrames()
         targets.removeAll()
         admitted.removeAll()
         lastMove = nil
@@ -157,21 +123,7 @@ final class AgentDisplay {
                 throw OpenCUError("AGENT_DISPLAY_LAYOUT_CHANGED", "macOS changed the original layout, main display, mirroring, or requested logical size.")
             }
             agentFrame = current.first(where: { $0.id == ledger.displayID })?.frame
-            let after = try windowFrames()
-            var warnings: [Arguments] = []
-            for before in windowsBefore {
-                if let now = after.first(where: { ($0["id"] as? UInt32) == (before["id"] as? UInt32) && ($0["pid"] as? Int) == (before["pid"] as? Int) }),
-                   (now["frame"] as? [String: Double]) != (before["frame"] as? [String: Double]) {
-                    warnings.append(["windowID": before["id"]!, "pid": before["pid"]!,
-                                     "ownerName": now["ownerName"]!, "before": before["frame"]!, "after": now["frame"]!,
-                                     "beforeOnScreen": before["onScreen"]!, "afterOnScreen": now["onScreen"]!,
-                                     "beforeSize": (before["frame"] as! [String: Double]).filter { ["width", "height"].contains($0.key) },
-                                     "reason": "Window movement observed; cause cannot be attributed to the probe."])
-                }
-            }
-            var result = try status()
-            result["windowMovementWarnings"] = warnings
-            return result
+            return status()
         } catch {
             let cleanup = await destroy()
             throw OpenCUError((error as? OpenCUError)?.code ?? "AGENT_DISPLAY_CREATE_FAILED",
@@ -179,8 +131,9 @@ final class AgentDisplay {
         }
     }
 
-    func moveWindow(_ app: TargetApp, proposal: Proposal? = nil) async throws -> Arguments {
+    func moveWindow(_ proposal: Proposal) async throws -> Arguments {
         try requireAccessibility()
+        let app = proposal.app
         let checkDesktop = quietDesktopCheck()
         let started = ProcessInfo.processInfo.systemUptime
         var diagnostic: Arguments = ["pid": app.pid, "elapsedMs": 0]
@@ -198,14 +151,8 @@ final class AgentDisplay {
             }
             let root = AXUIElementCreateApplication(app.pid)
             AXUIElementSetMessagingTimeout(root, 1)
-            // Like ordinary observation, allow AX to publish a newly launched
-            // background window. No raise, focus, activation or visibility filter.
-            for _ in 0..<20 {
-                selected = proposal?.window ?? axSelectedWindow(root)
-                if selected != nil { break }
-                try await Task.sleep(nanoseconds: 100_000_000)
-            }
-            if let proposal { try validateProposal(proposal) }
+            selected = proposal.window
+            try validateProposal(proposal)
             diagnostic["before"] = observation()
             guard let window = selected else {
                 throw OpenCUError("AGENT_DISPLAY_AX_WINDOW_UNAVAILABLE", "AX exposes no selected or sole window; see attribute errors and CG candidates in move diagnostics.")
@@ -233,13 +180,11 @@ final class AgentDisplay {
             diagnostic["requestedFrame"] = agentDisplayRectJSON(destination)
             diagnostic["requestedDisplayID"] = id
             diagnostic["originalDisplayInferred"] = area(originalDisplay.frame.intersection(frame)) == 0
-            try ledger.remember(.init(windowID: identity.id, displayID: originalDisplay.id, frame: frame), multiple: multipleWindows)
-            targets[identity.id] = proposal ?? Proposal(app: app, window: window, windowID: identity.id,
-                frame: frame, displayID: originalDisplay.id, destination: destination,
-                title: axString(window, kAXTitleAttribute) ?? "Untitled window")
+            try ledger.remember(.init(windowID: identity.id, displayID: originalDisplay.id, frame: frame))
+            targets[identity.id] = proposal
             let writeGuard = {
                 try checkDesktop()
-                if let proposal {
+                do {
                     guard !proposal.app.application.isTerminated,
                           let current = axSelectedWindow(root), CFEqual(current, proposal.window),
                           let bounds = axRect(proposal.window),
@@ -259,6 +204,7 @@ final class AgentDisplay {
                       let record = windowRecords(pid: app.pid).first(where: { $0.id == identity.id }) else { return false }
                 return record.onScreen && agent.frame.contains(record.frame)
             }
+            AXUIElementSetMessagingTimeout(window, 0.25)
             admitted.insert(identity.id)
             diagnostic["ok"] = true
             diagnostic["elapsedMs"] = (ProcessInfo.processInfo.systemUptime - started) * 1000
@@ -266,7 +212,7 @@ final class AgentDisplay {
             diagnostic["writes"] = writes
             diagnostic["observations"] = observations
             lastMove = diagnostic
-            return try status()
+            return status()
         } catch {
             diagnostic["ok"] = false
             diagnostic["elapsedMs"] = (ProcessInfo.processInfo.systemUptime - started) * 1000
@@ -275,16 +221,17 @@ final class AgentDisplay {
             diagnostic["writes"] = writes
             diagnostic["observations"] = observations
             lastMove = diagnostic
+            if error is CancellationError { throw error }
             throw OpenCUError((error as? OpenCUError)?.code ?? "AGENT_DISPLAY_MOVE_FAILED",
                               error.localizedDescription, details: ["move": diagnostic])
         }
     }
 
-    private func windowRecords(pid: pid_t) -> [AgentDisplayWindowIdentity.Candidate] {
-        let records = CGWindowListCopyWindowInfo(.optionAll, kCGNullWindowID) as? [Arguments] ?? []
+    private func windowRecords(pid: pid_t, id: CGWindowID? = nil) -> [AgentDisplayWindowIdentity.Candidate] {
+        let records = CGWindowListCopyWindowInfo(id == nil ? .optionAll : .optionIncludingWindow, id ?? kCGNullWindowID) as? [Arguments] ?? []
         return records.compactMap { record in
             guard (record[kCGWindowOwnerPID as String] as? Int32) == pid,
-                  (record[kCGWindowLayer as String] as? Int) == 0,
+                  (id != nil || (record[kCGWindowLayer as String] as? Int) == 0),
                   let id = record[kCGWindowNumber as String] as? UInt32,
                   let dictionary = record[kCGWindowBounds as String] as? NSDictionary,
                   let frame = CGRect(dictionaryRepresentation: dictionary as CFDictionary) else { return nil }
@@ -294,8 +241,9 @@ final class AgentDisplay {
     }
 
     private func resolveIdentity(_ window: AXUIElement, pid: pid_t, frame: CGRect) throws -> (id: UInt32, source: String) {
-        try AgentDisplayWindowIdentity.resolve(pid: pid, title: axString(window, kAXTitleAttribute), frame: frame,
-            exactID: exactWindowID(window, pid: pid), candidates: windowRecords(pid: pid))
+        let exact = exactWindowID(window, pid: pid)
+        return try AgentDisplayWindowIdentity.resolve(pid: pid, title: axString(window, kAXTitleAttribute), frame: frame,
+            exactID: exact, candidates: windowRecords(pid: pid, id: exact))
     }
 
     private func windowEvidence(pid: pid_t, window: AXUIElement?, id: CGWindowID?) -> Arguments {
@@ -341,26 +289,54 @@ final class AgentDisplay {
     }
 
     func propose(_ app: TargetApp) throws -> Proposal? {
-        guard let agent = agentFrame, ledger.displayID != nil else {
+        guard let agent = agentFrame, let agentID = ledger.displayID else {
             throw OpenCUError("AGENT_DISPLAY_REQUIRED", "Create an agent display first.")
         }
-        guard let window = axSelectedWindow(AXUIElementCreateApplication(app.pid)) else { return nil }
-        guard axString(window, kAXRoleAttribute) == kAXWindowRole,
-              (axValue(window, kAXMinimizedAttribute) as? Bool) != true,
-              (axValue(window, "AXFullScreen") as? Bool) != true else {
-            throw OpenCUError("AGENT_DISPLAY_UNSUPPORTED_WINDOW", "Only ordinary, non-minimized windows can move to the agent desktop.")
-        }
+        let root = AXUIElementCreateApplication(app.pid)
+        AXUIElementSetMessagingTimeout(root, 0.25)
+        guard let window = axSelectedWindow(root) else { return nil }
+        AXUIElementSetMessagingTimeout(window, 0.25)
         guard let frame = axRect(window), AgentDisplayGeometry.valid(frame) else {
             throw OpenCUError("AGENT_DISPLAY_AX_BOUNDS_UNAVAILABLE", "Window position or size is unavailable.")
         }
+        let onDisplay = agent.contains(frame)
+        let role = axString(window, kAXRoleAttribute)
+        guard AgentDesktopAdmissionPolicy.usableWindow(role: role,
+            minimized: (axValue(window, kAXMinimizedAttribute) as? Bool) == true,
+            fullScreen: (axValue(window, "AXFullScreen") as? Bool) == true, onDisplay: onDisplay) else {
+            throw OpenCUError("AGENT_DISPLAY_UNSUPPORTED_WINDOW", "This minimized, full-screen or focused sheet window cannot be moved; text-only state remains available.")
+        }
         let id = try resolveIdentity(window, pid: app.pid, frame: frame).id
-        let originals = try displays().filter { $0.id != ledger.displayID }
-        guard let source = originals.min(by: { distance(frame, to: $0.frame) < distance(frame, to: $1.frame) }) else {
+        let originals = try displays().filter { $0.id != agentID }
+        guard onDisplay || !originals.isEmpty else {
             throw OpenCUError("AGENT_DISPLAY_ORIGINAL_DISPLAY_MISSING", "No original display remains.")
         }
-        return Proposal(app: app, window: window, windowID: id, frame: frame, displayID: source.id,
-            destination: try AgentDisplayGeometry.destination(original: frame, display: agent),
-            title: axString(window, kAXTitleAttribute) ?? "Untitled window")
+        let source = originals.min(by: { distance(frame, to: $0.frame) < distance(frame, to: $1.frame) })
+        return Proposal(app: app, window: window, windowID: id, frame: frame, displayID: onDisplay ? agentID : source!.id,
+            destination: onDisplay ? frame : try AgentDisplayGeometry.destination(original: frame, display: agent),
+            title: axString(window, kAXTitleAttribute) ?? "Untitled window", requiresMove: !onDisplay)
+    }
+
+    func hasAdmittedProcess(_ app: TargetApp) -> Bool {
+        admitted.contains { id in
+            guard let target = targets[id], target.app.application == app.application,
+                  !target.app.application.isTerminated, let agentFrame, let frame = axRect(target.window) else { return false }
+            // A covered/minimized parent can open a new window. Visibility is an
+            // input condition, not a reason to discard this process's admission.
+            return agentFrame.contains(frame)
+        }
+    }
+
+    func admitWithoutMoving(_ proposal: Proposal) throws {
+        try validateProposal(proposal)
+        guard !proposal.requiresMove, let agentFrame, agentFrame.contains(proposal.frame),
+              let record = windowRecords(pid: proposal.app.pid, id: proposal.windowID).first, record.onScreen,
+              agentFrame.contains(record.frame) else {
+            throw OpenCUError("WINDOW_CHANGED", "The window no longer resides on the agent display.")
+        }
+        AXUIElementSetMessagingTimeout(proposal.window, 0.25)
+        targets[proposal.windowID] = proposal
+        admitted.insert(proposal.windowID) // No geometry write and no restoration record.
     }
 
     func validateProposal(_ proposal: Proposal) throws {
@@ -379,7 +355,7 @@ final class AgentDisplay {
               !target.app.application.isTerminated, target.app.application == proposal.app.application,
               CFEqual(target.window, proposal.window), let agentFrame,
               let frame = axRect(proposal.window), agentFrame.contains(frame),
-              let record = windowRecords(pid: target.app.pid).first(where: { $0.id == proposal.windowID }),
+              let record = windowRecords(pid: target.app.pid, id: proposal.windowID).first,
               record.onScreen, agentFrame.contains(record.frame) else { return false }
         return true
     }
@@ -394,7 +370,7 @@ final class AgentDisplay {
 
     /// A person/app moving an admitted window out revokes both input and restoration.
     /// A partially failed OpenCU move is never mistaken for an external return.
-    func externalReturns() -> [Proposal] {
+    func externalReturns(frames: [UInt32: CGRect]? = nil) -> [Proposal] {
         var returned: [Proposal] = []
         guard let agentFrame else { return returned }
         for id in Array(admitted) {
@@ -402,11 +378,24 @@ final class AgentDisplay {
             if target.app.application.isTerminated {
                 admitted.remove(id); ledger.restored(id); continue
             }
-            if let frame = axRect(target.window), !agentFrame.contains(frame) {
+            if let frame = frames != nil ? frames?[id] : axRect(target.window), !agentFrame.contains(frame) {
                 admitted.remove(id); ledger.restored(id); returned.append(target)
             }
         }
         return returned
+    }
+
+    /// Read at most two bounded AX targets off the main actor per timer tick.
+    func sampleFrames(observedID: UInt32?) async -> [UInt32: CGRect] {
+        let ids = AgentDesktopMonitoring.batch(ids: admitted.sorted(), cursor: &monitorCursor, observed: observedID)
+        let windows = ids.compactMap { id in targets[id].map { (id, $0.window) } }
+        return await Task.detached {
+            var frames: [UInt32: CGRect] = [:]
+            for (id, window) in windows {
+                if let frame = axRect(window) { frames[id] = frame }
+            }
+            return frames
+        }.value
     }
 
     func validateLayout() throws {
@@ -418,12 +407,15 @@ final class AgentDisplay {
         }
     }
 
-    func restore() async throws -> Arguments {
+    func restore(windowID: UInt32? = nil) async throws -> Arguments {
+        if requiresFreshDisplayList && ledger.restorePending {
+            lastFreshDisplays = try await Task.detached { try FreshOnlineDisplays.list() }.value
+        }
         let deadline = ProcessInfo.processInfo.systemUptime + 10
         var errors: [String] = []
         // Check manual returns before touching geometry, including immediately after EOF.
-        if multipleWindows { _ = externalReturns() }
-        for saved in ledger.pending.reversed() {
+        if windowID == nil { _ = externalReturns() }
+        for saved in ledger.restorations(windowID: windowID) {
             guard let target = targets[saved.windowID] else { continue }
             do {
                 guard ProcessInfo.processInfo.systemUptime < deadline else {
@@ -465,7 +457,7 @@ final class AgentDisplay {
         if !errors.isEmpty {
             throw OpenCUError("AGENT_DESKTOP_CLEANUP_FAILED", errors.joined(separator: "; "), details: ["windows": savedWindows])
         }
-        return try status()
+        return status()
     }
 
     /// Always release, even if AX restoration fails. Report errors; do not hide a
@@ -493,6 +485,7 @@ final class AgentDisplay {
                 try await Task.detached { try FreshOnlineDisplays.list(timeout: budget) }.value
             }
             freshSnapshot = confirmation.displays
+            if let freshSnapshot { lastFreshDisplays = freshSnapshot }
             if confirmation.removed { ledger.released() }
             if let error = confirmation.error { errors.append("Display removal was not observed: \(error)") }
             lastRemoval = ["displayID": removedID, "elapsedMs": confirmation.elapsedMs,
@@ -500,9 +493,7 @@ final class AgentDisplay {
                            "observationMechanism": "fresh posix_spawn --online-displays process per check",
                            "reconfigurationEvents": reconfiguration.snapshot(since: started * 1000)]
         }
-        var result: Arguments = [:]
-        do { result = try status(displaySnapshot: freshSnapshot) }
-        catch { errors.append("Cleanup status unavailable: \(error.localizedDescription)") }
+        var result = status(displaySnapshot: freshSnapshot)
         result["cleanupErrors"] = errors
         result["ok"] = errors.isEmpty
         return result
