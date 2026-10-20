@@ -12,6 +12,11 @@ private final class CursorWindow: NSPanel {
 final class PresenceController: NSObject, NSMenuDelegate {
     private(set) var state = PresenceState()
     let setup = PermissionSetup()
+    var desktopVisible = false {
+        didSet {
+            if desktopVisible { called(target: nil, name: "agent desktop"); finishedCall() }
+        }
+    }
     var onStop: (() -> Void)?
     var onPersonInteraction: (() -> Void)?
     private var statusItem: NSStatusItem?
@@ -85,7 +90,7 @@ final class PresenceController: NSObject, NSMenuDelegate {
     }
     func menuWillOpen(_ menu: NSMenu) { trackingMenu = true; onPersonInteraction?() }
     func menuDidClose(_ menu: NSMenu) { trackingMenu = false }
-    @objc private func stop() {
+    @objc func stop() {
         state.stop(); hideCursor()
         badgeLifetime.stop(now: now)
         badgeView.text = BadgeAction(method: "stopped").localized(PresenceStrings().text)
@@ -180,7 +185,7 @@ final class PresenceController: NSObject, NSMenuDelegate {
     }
     private func tick() {
         let time = now
-        if !state.menuVisible(at: time), !trackingMenu, let item = statusItem {
+        if !desktopVisible, !state.menuVisible(at: time), !trackingMenu, let item = statusItem {
             NSStatusBar.system.removeStatusItem(item); statusItem = nil
         }
         if state.cursorVisible(at: time), let motion, let id = targetWindow, let pid = targetPID,

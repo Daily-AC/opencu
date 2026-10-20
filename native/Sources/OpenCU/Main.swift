@@ -9,6 +9,9 @@ final class Engine {
     private var snapshot: WindowSnapshot?
     private let focusGuard = FocusGuard()
     private let agentDisplay = AgentDisplay()
+    private lazy var desktop = AgentDesktopController(display: agentDisplay)
+    private var activeRequestID: String?
+    private var desktopCleanup: Task<Void, Never>?
 
     private let presence = PresenceController()
     private var activeTask: Task<Any, Error>?
@@ -18,31 +21,80 @@ final class Engine {
         input.pointerDelivered = { [weak self] point, snapshot, click in
             self?.presence.pointer(point, snapshot: snapshot, click: click)
         }
-        input.requireInputAllowed = { [weak self] in try self?.presence.state.requireAllowed("click") }
-        observer.requireCaptureAllowed = { [weak self] in try self?.presence.state.requireAllowed("get_app_state", screenshot: true) }
+        input.requireInputAllowed = { [weak self] in
+            guard let self else { throw CancellationError() }
+            try self.presence.state.requireAllowed("click")
+            if self.desktop.ownsDesktop { try self.desktop.requireInput(self.snapshot) }
+        }
+        observer.requireCaptureAllowed = { [weak self] in
+            guard let self else { throw CancellationError() }
+            try self.presence.state.requireAllowed("get_app_state", screenshot: true)
+            if self.desktop.ownsDesktop { try self.desktop.state.requireRunning() }
+        }
+        desktop.onInvalidate = { [weak self] in self?.snapshot = nil; self?.input.releaseFocus(); self?.focusGuard.cancel() }
+        desktop.onPersonStop = { [weak self] in self?.presence.stop() }
+        desktop.onFailure = { [weak self] in self?.scheduleDesktopCleanup(keepFailure: true) }
         presence.onPersonInteraction = { [weak self] in self?.focusGuard.cancel() }
         presence.onStop = { [weak self] in
             guard let self else { return }
             if self.activeSensitive { self.activeTask?.cancel() }
             self.input.releaseFocus()
+            if self.desktop.ownsDesktop {
+                self.desktop.latchPersonStop()
+                self.scheduleDesktopCleanup(keepFailure: true)
+            }
         }
+    }
+    private func scheduleDesktopCleanup(keepFailure: Bool) {
+        activeTask?.cancel(); desktop.cancelConsent()
+        guard desktopCleanup == nil else { return }
+        let operation = activeTask
+        desktopCleanup = Task { [weak self] in
+            _ = await operation?.result
+            guard let self else { return }
+            _ = await self.desktop.stop(keepFailure: keepFailure)
+            self.presence.desktopVisible = false
+            self.desktopCleanup = nil
+        }
+    }
+    func control(_ method: String, _ args: Arguments) async throws -> Any {
+        if method == "agent_desktop_status" { return desktop.status() }
+        if method == "agent_desktop_cancel" {
+            if args["requestID"] as? String == activeRequestID { activeTask?.cancel(); desktop.cancelConsent() }
+            return ["ok": true]
+        }
+        desktop.requestStop(); activeTask?.cancel()
+        _ = await activeTask?.result
+        if let desktopCleanup { await desktopCleanup.value }
+        let result = await desktop.stop()
+        presence.desktopVisible = false
+        return result
     }
     func disconnected() {
         presence.disconnect()
-        if activeSensitive { activeTask?.cancel() }
+        if activeSensitive || desktop.ownsDesktop { activeTask?.cancel() }
+        desktop.cancelConsent()
         focusGuard.cancel()
     }
     func shutdown() async {
         disconnected()
         input.releaseFocus()
         observer.restoreAccessibilityModes()
-        let cleanup = await agentDisplay.destroy()
+        if let desktopCleanup { await desktopCleanup.value }
+        let cleanup: Arguments
+        if desktop.ownsDesktop {
+            let status = await desktop.stop()
+            cleanup = status["cleanup"] as? Arguments ?? ["ok": false]
+        } else { cleanup = await agentDisplay.destroy() }
         if cleanup["ok"] as? Bool == false {
             FileHandle.standardError.write(Data("Agent display cleanup errors: \(cleanup["cleanupErrors"] ?? []); removal: \(cleanup["lastRemoval"] ?? [:])\n".utf8))
         }
     }
 
-    func dispatch(_ method: String, _ args: Arguments) async throws -> Any {
+    func dispatch(_ method: String, _ args: Arguments, requestID: String) async throws -> Any {
+        activeRequestID = requestID
+        defer { activeRequestID = nil }
+        if desktop.state.stoppedByPerson { throw PresenceState.stopError }
         let screenshot = args["includeScreenshot"] as? Bool ?? false
         let appCall = PresenceState.inputMethods.contains(method) || method == "get_app_state"
         defer { if appCall { presence.finishedCall() } }
@@ -53,7 +105,7 @@ final class Engine {
         if args["scope"] != nil {
             throw OpenCUError("INVALID_ARGUMENT", "scope is Windows-only for now.")
         }
-        activeSensitive = PresenceState.requiresPermissionToContinue(method, screenshot: screenshot)
+        activeSensitive = desktop.ownsDesktop || method == "agent_desktop_start" || PresenceState.requiresPermissionToContinue(method, screenshot: screenshot)
         let task = Task { try await self.perform(method, args) }
         activeTask = task
         defer { activeTask = nil; activeSensitive = false }
@@ -64,11 +116,21 @@ final class Engine {
         } catch {
             try presence.state.requireAllowed(method, screenshot: screenshot)
             let failure = error as? OpenCUError ?? OpenCUError("ENGINE_ERROR", error.localizedDescription)
+            if desktop.ownsDesktop || method == "agent_desktop_start" { throw failure }
             throw presence.permissionFailure(failure)
         }
     }
 
     private func perform(_ method: String, _ args: Arguments) async throws -> Any {
+        if method == "agent_desktop_start" {
+            presence.desktopVisible = true
+            do { return try await desktop.start() }
+            catch { presence.desktopVisible = false; throw error }
+        }
+        if desktop.ownsDesktop {
+            try desktop.state.requireRunning()
+            if method == "activate_app" { throw OpenCUError("BACKGROUND_INPUT_UNSUPPORTED", "Agent desktop is watch-only and uses background input. activate_app would take the person's foreground.") }
+        }
         if method == "doctor" { return permissions() }
         if method == "list_apps" { return observer.listApps() }
         if method == "wait" {
@@ -84,6 +146,9 @@ final class Engine {
             return ["ok": true]
         }
         if method.hasPrefix("experimental_agent_display_") {
+            guard !desktop.ownsDesktop else {
+                throw OpenCUError("AGENT_DISPLAY_BUSY", "Experimental operations cannot bypass agent desktop ownership or consent.")
+            }
             if method == "experimental_agent_display_status" { return try agentDisplay.status() }
             // Any attempted geometry mutation invalidates prior indexes and
             // screenshot coordinates, including on partial failure.
@@ -141,10 +206,29 @@ final class Engine {
                 self?.presence.badge(method: method, args: args, snapshot: window)
             }
             defer { observer.willObserveWindow = nil }
-            let state = try await observer.observe(app, includeScreenshot: args["includeScreenshot"] as? Bool ?? false)
+            let admitted = desktop.ownsDesktop ? try await desktop.prepareObservation(app, explicit: args["desktopExplicitObservation"] as? Bool == true) : true
+            observer.requireWindowAllowed = desktop.ownsDesktop && admitted ? { [weak self] candidate in
+                try self?.agentDisplay.requireAdmitted(candidate)
+            } : nil
+            defer { observer.requireWindowAllowed = nil }
+            let state = try await observer.observe(app, includeScreenshot: admitted && (args["includeScreenshot"] as? Bool ?? false))
             presence.observed(state.snapshot)
-            snapshot = state.snapshot
-            return state.json
+            var result = state.json
+            if desktop.ownsDesktop {
+                if admitted { try desktop.observed(state.snapshot) }
+                else {
+                    result["text"] = state.text + "\nAgent desktop: reduced, read-only. This window has not been admitted; no screenshot or input is allowed. Declined/expired windows stay reduced until tool stop and a new start."
+                }
+                result["agentDesktop"] = ["windowState": admitted ? "admitted" : "reduced", "consent": desktop.observationConsent, "generation": desktop.state.generation]
+            }
+            snapshot = admitted ? state.snapshot : nil
+            return result
+        }
+        if desktop.ownsDesktop {
+            guard snapshot?.app.pid == app.pid else {
+                throw OpenCUError("AGENT_DESKTOP_CONSENT_REQUIRED", "This window has no current admitted observation. No input was sent.")
+            }
+            try desktop.requireInput(snapshot)
         }
         guard let current = snapshot, current.app.pid == app.pid, current.app.id == app.id else {
             throw OpenCUError("OBSERVATION_REQUIRED", "Read this application's state before sending input. No input was sent.")
@@ -252,7 +336,7 @@ struct OpenCUMain {
         for number in [SIGINT, SIGTERM, SIGHUP] {
             signal(number, SIG_IGN)
             let source = DispatchSource.makeSignalSource(signal: number, queue: .main)
-            source.setEventHandler { stopping = true; finishInput?() }
+            source.setEventHandler { stopping = true; engine.disconnected(); finishInput?() }
             source.resume()
             signalSources.append(source)
         }
@@ -264,27 +348,49 @@ struct OpenCUMain {
                 await MainActor.run { engine.disconnected() }
             }
         }
-        for await line in lines {
-            if stopping { break }
-            var id: Any = NSNull()
+        var tail: Task<Void, Never>?
+        var controls: [UUID: Task<Void, Never>] = [:]
+        func respond(_ request: Arguments, control: Bool) async {
+            let id = request["id"] ?? NSNull()
             do {
-                guard line.utf8.count <= 4_194_304,
-                      let data = line.data(using: .utf8),
-                      let request = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      let requestID = request["id"], let method = request["method"] as? String,
-                      let args = request["params"] as? Arguments else {
-                    throw OpenCUError("INVALID_REQUEST", "Expected a JSON object with id, method and params.")
+                guard let method = request["method"] as? String, let args = request["params"] as? Arguments else {
+                    throw OpenCUError("INVALID_REQUEST", "Expected id, method and params.")
                 }
-                id = requestID
-                let result = try await engine.dispatch(method, args)
-                if !emit(["id": id, "result": result]) { break }
+                let result: Any
+                if control { result = try await engine.control(method, args) }
+                else { result = try await engine.dispatch(method, args, requestID: String(describing: id)) }
+                if !emit(["id": id, "result": result]) { engine.disconnected(); stopping = true; finishInput?() }
             } catch {
                 let failure = error as? OpenCUError ?? OpenCUError("ENGINE_ERROR", error.localizedDescription)
                 var errorJSON: Arguments = ["code": failure.code, "message": failure.message]
                 if let details = failure.details { errorJSON["data"] = details }
-                if !emit(["id": id, "error": errorJSON]) { break }
+                if !emit(["id": id, "error": errorJSON]) { engine.disconnected(); stopping = true; finishInput?() }
             }
         }
+        for await line in lines {
+            if stopping { break }
+            guard line.utf8.count <= 4_194_304, let data = line.data(using: .utf8),
+                  let request = try? JSONSerialization.jsonObject(with: data) as? Arguments,
+                  request["id"] != nil else {
+                _ = emit(["id": NSNull(), "error": ["code": "INVALID_REQUEST", "message": "Expected a JSON object with id, method and params."]])
+                continue
+            }
+            let method = request["method"] as? String ?? ""
+            if ["agent_desktop_status", "agent_desktop_stop", "agent_desktop_cancel"].contains(method) {
+                let key = UUID()
+                controls[key] = Task { await respond(request, control: true); controls.removeValue(forKey: key) }
+            } else {
+                let previous = tail
+                tail = Task {
+                    await previous?.value
+                    if !stopping { await respond(request, control: false) }
+                }
+            }
+        }
+        stopping = true
+        engine.disconnected()
+        await tail?.value
+        for task in Array(controls.values) { await task.value }
         await engine.shutdown()
         for source in signalSources { source.cancel() }
     }
