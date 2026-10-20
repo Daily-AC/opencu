@@ -362,6 +362,7 @@ pub unsafe fn observe(uia: &IUIAutomation, app: App, include: bool) -> Result<(V
     let mut identities = ElementIdentities::default();
     let mut identity_missing = Vec::<usize>::new();
     let mut hidden = 0;
+    let mut zero_size = 0;
     // Target first, then its owned descendants; all unrelated windows are summaries.
     let mut order: Vec<_> = desktop
         .iter()
@@ -449,7 +450,9 @@ pub unsafe fn observe(uia: &IUIAutomation, app: App, include: bool) -> Result<(V
                     .map(|s| s.to_string())
                     .unwrap_or_default(),
             );
-            let outside = outside_chromium(chromium, node.bounds, client);
+            let zero = zero_size_omitted(node.bounds, node.focused);
+            zero_size += usize::from(zero);
+            let outside = !zero && !node.focused && outside_chromium(chromium, node.bounds, client);
             if outside {
                 omitted += 1;
             }
@@ -497,6 +500,7 @@ pub unsafe fn observe(uia: &IUIAutomation, app: App, include: bool) -> Result<(V
         text += &omitted_line(omitted);
         // Continue summaries even if a tree exhausts its traversal budget.
     }
+    text += &zero_size_line(zero_size);
     text += &hidden_windows_line(hidden);
     if truncated {
         text+="Tree truncated: limit 1200 listed / 8000 inspected nodes, depth 120, 180000 bytes, or 8 seconds.\n";
