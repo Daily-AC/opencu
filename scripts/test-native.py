@@ -36,6 +36,7 @@ def main() -> int:
             str(sources / "BackgroundFocus.swift"),
             str(sources / "InputController.swift"),
             str(sources / "AgentDisplayLogic.swift"),
+            str(sources / "AgentDesktopLogic.swift"),
             str(sources / "AppNames.swift"),
             str(sources / "CaptureSafety.swift"),
             str(sources / "OnlineDisplays.swift"),
