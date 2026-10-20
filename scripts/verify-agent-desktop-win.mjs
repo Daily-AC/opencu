@@ -1,5 +1,7 @@
 #!/usr/bin/env node
-// Explicitly run on an authorized, idle Windows desktop. Disposable fixtures only.
+// Run FROM A FOREGROUND TERMINAL on an authorized idle Windows desktop.
+// The parent fixture and launcher need foreground rights to test nonactivation.
+// Disposable fixtures only; do not run this suite from a headless shell.
 // Parent stimuli are SendInput, NOT evidence of hardware/physical Escape behavior.
 import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
@@ -12,7 +14,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { agentDesktopAvailability, agentDesktopHelper } from '../src/agent-desktop.mjs';
 
 if (process.platform !== 'win32') throw new Error('Windows-only acceptance; no desktop was touched.');
-if (!process.argv.includes('--allow-desktop')) throw new Error('Run with --allow-desktop on an authorized idle Windows desktop.');
+if (!process.argv.includes('--allow-desktop')) throw new Error('Run with --allow-desktop FROM A FOREGROUND TERMINAL on an authorized idle Windows desktop; a headless launcher cannot test foreground theft.');
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 await mkdir(path.join(root, '.cache'), { recursive: true });
 const area = await mkdtemp(path.join(root, '.cache/agent-desktop-acceptance-'));
@@ -21,8 +23,9 @@ const parentExe = path.join(temporary, 'OpenCU-Parent-Fixture.exe');
 const childExe = path.join(temporary, 'OpenCU-Child-Fixture.exe');
 const report = { test: 'windows-agent-desktop', ok: false, checks: [],
   parentStimulus: 'SendInput in parent session; not hardware input',
-  manualFollowups: ['physical Escape through the focused RDP view', 'parent lock and disconnect',
-    'pre-setup sign-in and smart-card credential refusal', 'host crash during startup', 'covered viewport and GPU/video', 'unsupported Windows editions/policies'] };
+  manualFollowups: ['deliberate click enables interaction; deactivation returns to watch-only; physical Escape still stops',
+    'parent lock/disconnect regression', 'smart-card sign-in', 'host crash during startup',
+    'external minimize, covered or partly off-screen viewport, GPU/video', 'unsupported Windows editions/policies'] };
 let client, parent;
 const check = (name, data = {}) => { report.checks.push({ name, ...data }); console.log(name); };
 async function waitFor(fn, description, ms = 20000) {
@@ -60,7 +63,7 @@ try {
     path.join(root, 'tests/fixtures/AgentDesktopFixture.cs')], { windowsHide: true, stdio: 'pipe' });
   await cp(parentExe, childExe);
   parent = spawn(parentExe, ['parent'], { windowsHide: false, stdio: 'ignore' });
-  const baseline = await waitFor(async () => { const s = await state(parentExe); return s?.foreground && s; }, 'parent foreground');
+  const baseline = await waitFor(async () => { const s = await state(parentExe); return s?.foreground && s; }, 'parent foreground; launch this script FROM A FOREGROUND TERMINAL, not a headless shell');
   await command(parentExe, 'monitor');
   client = new Client({ name: 'opencu-agent-desktop-acceptance', version: '1' });
   const transport = new StdioClientTransport({ command: process.execPath, args: [path.join(root, 'src/server.mjs')], stderr: 'pipe' });
@@ -70,6 +73,7 @@ try {
   assert.equal(started.state, 'running'); assert.notEqual(started.sessionId, baseline.sessionId);
   check('start-child-session', { childSession: started.sessionId, parentSession: baseline.sessionId });
   assert.equal((await state(parentExe)).foreignForeground, 0, 'Opening host stole parent foreground');
+  check('nonactivating-open-from-foreground-launcher');
   const first = await call('get_app_state', { app: childExe, includeScreenshot: true, disableDiff: true });
   assert.ok(first.content.some(c => c.type === 'image'), 'Child WGC screenshot is required');
   const child = await waitFor(() => state(childExe), 'child fixture');
@@ -77,6 +81,17 @@ try {
   const inventory = text(await call('list_apps'));
   assert.ok(!inventory.includes(`"pid":${baseline.pid}`), 'Parent window leaked into child inventory');
   check('child-launch-capture-and-inventory');
+  // Keep the actual parent cursor over the inactive preview while the child
+  // monitor fences input. These are SendInput moves, NOT Hyper-V hardware input.
+  await command(parentExe, `hover:${started.hostPid}`);
+  await waitFor(async () => (await state(parentExe))?.hoverMoves >= 5, 'pointer over watch-only view');
+  const watched = await call('run_actions', { app: childExe, actions: [{ method: 'wait', ms: 1000 }], disableDiff: true });
+  await call('click', { app: childExe, element_index: index(watched, 'Increment fixture') });
+  await command(parentExe, 'hover-stop');
+  const hovered = await state(parentExe);
+  assert.equal(hovered.foreignForeground, 0); assert.equal(hovered.injectedFailures, 0);
+  assert.ok(hovered.hoverMoves >= 5);
+  check('watch-only-hover-does-not-interrupt', { stimulus: 'parent SendInput mouse moves; no clicks or hardware input', moves: hovered.hoverMoves });
   await command(parentExe, 'begin');
   for (let round = 0; round < 6; round++) {
     let current = await call('get_app_state', { app: childExe, disableDiff: true });
@@ -89,7 +104,7 @@ try {
   const childAfter = await state(childExe);
   assert.equal(parentAfter.foreignForeground, 0); assert.equal(parentAfter.injectedFailures, 0);
   assert.equal(parentAfter.unexpectedCursor, 0); assert.equal(parentAfter.clicks, 0);
-  assert.equal(childAfter.clicks, 6);
+  assert.equal(childAfter.clicks, 7); // One hover check, then six concurrent rounds.
   assert.equal(childAfter.text, Array.from({ length: 6 }, (_, i) => `agent-${i};`).join(''));
   check('concurrent-input-isolation', { parent: parentAfter, child: childAfter });
   const stopped = await control('stop'); assert.equal(stopped.state, 'inactive');
