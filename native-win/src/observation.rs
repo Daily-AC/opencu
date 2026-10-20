@@ -192,3 +192,12 @@ pub fn zero_size_line(count: usize) -> String {
     if count == 0 { String::new() }
     else { format!("Zero-size: {count} elements omitted; descendants are still inspected.\n") }
 }
+
+/// Validate a retained object, never resolve an old index in a new tree.
+/// Missing, detached, or unreadable roots all select the whole-window fallback.
+pub fn live_scope<T>(retained: Option<T>, attached: impl FnOnce(&T) -> bool) -> Option<T> {
+    retained.filter(attached)
+}
+pub fn scope_gone_line(requested: bool, live: bool) -> &'static str {
+    if requested && !live { "Scope element is gone; showing the whole window.\n" } else { "" }
+}

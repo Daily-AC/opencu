@@ -344,3 +344,14 @@ fn zero_size_nodes_have_no_index_but_children_and_focus_survive() {
     assert_eq!(zero_size_line(135).lines().count(), 1);
     assert!(zero_size_line(135).contains("135 elements omitted"));
 }
+
+#[test]
+fn scope_retains_object_and_falls_back_when_missing_or_detached() {
+    let retained = String::from("original UIA object");
+    assert_eq!(live_scope(Some(&retained), |_| true), Some(&retained));
+    assert_eq!(live_scope(Some(&retained), |_| false), None); // detached / other family
+    assert_eq!(live_scope(None::<&String>, |_| panic!("no object to validate")), None);
+    assert_eq!(scope_gone_line(true, false), "Scope element is gone; showing the whole window.\n");
+    assert_eq!(scope_gone_line(true, true), "");
+    assert_eq!(scope_gone_line(false, false), "");
+}

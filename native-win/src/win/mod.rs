@@ -33,6 +33,8 @@ impl Drop for Apartment {
 struct Engine {
     automation: IUIAutomation,
     snapshot: Option<observe::Snapshot>,
+    scope: Option<(String, String, observe::Scope)>,
+    scope_serial: u64,
     monitor: safety::Monitor,
     indicator: indicator::Indicator,
     launches: std::collections::BTreeSet<String>,
@@ -51,6 +53,8 @@ impl Engine {
         Ok(Self {
             automation,
             snapshot: None,
+            scope: None,
+            scope_serial: 0,
             monitor: safety::Monitor::new()?,
             indicator: indicator::Indicator::new()?,
             launches: Default::default(),
@@ -95,6 +99,20 @@ impl Engine {
         }
         let observing = method == "get_app_state" || method == "activate_app";
         if observing {
+            if let Some(index) = args.get("scope") {
+                let index = index.as_u64().filter(|n| *n > 0 && *n <= usize::MAX as u64)
+                    .ok_or_else(|| Error::new("INVALID_ARGUMENT", "scope must be a positive integer"))? as usize;
+                let query = string(args, "app")?;
+                let request = args["scopeRequest"].as_str();
+                if !self.scope.as_ref().is_some_and(|(key, app, _)| request == Some(key.as_str()) && app == query) {
+                    self.scope_serial += 1;
+                    let root = self.snapshot.as_ref().and_then(|s| s.elements.get(index - 1)).cloned();
+                    let identity = root.as_ref().and_then(|e| observe::runtime_id(&e.element)
+                        .map(|id| format!("{}:{}:{:?}:{id:?}", e.window.pid, e.window.hwnd.0 as usize, e.window.created)))
+                        .unwrap_or_else(|| format!("request:{}", self.scope_serial));
+                    self.scope = Some((request.unwrap_or("").into(), query.into(), observe::Scope { root, identity }));
+                }
+            } else { self.scope = None; }
             self.snapshot = None;
         }
         // Guard includes resolution/launch and activation; no action is replayed.
@@ -127,6 +145,7 @@ impl Engine {
                 &self.automation,
                 app,
                 args["includeScreenshot"].as_bool().unwrap_or(false),
+                self.scope.as_ref().map(|(_, _, scope)| scope),
             )?;
             if let Some(g) = guard.as_mut() {
                 g.finish()?;

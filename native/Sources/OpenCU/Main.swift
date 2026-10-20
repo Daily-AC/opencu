@@ -50,6 +50,9 @@ final class Engine {
             presence.beginCall(query: query)
         }
         try presence.state.requireAllowed(method, screenshot: screenshot)
+        if args["scope"] != nil {
+            throw OpenCUError("INVALID_ARGUMENT", "scope is Windows-only for now.")
+        }
         activeSensitive = PresenceState.requiresPermissionToContinue(method, screenshot: screenshot)
         let task = Task { try await self.perform(method, args) }
         activeTask = task
