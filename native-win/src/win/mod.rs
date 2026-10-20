@@ -62,6 +62,9 @@ impl Engine {
         })
     }
     unsafe fn dispatch(&mut self, method: &str, args: &Value) -> Result<Value> {
+        self.dispatch_inner(method, args).map_err(|error| safety::parent_input_error(error))
+    }
+    unsafe fn dispatch_inner(&mut self, method: &str, args: &Value) -> Result<Value> {
         if method == "doctor" {
             return Ok(doctor());
         }
@@ -223,7 +226,9 @@ fn doctor() -> Value {
         .ok()
         .map(|_| session);
     let locked = session_id.and_then(|id| unsafe { session_locked(id) });
-    json!({"engine":"independent","version":env!("CARGO_PKG_VERSION"),"platform":"win32","desktopAccessible":status.is_ok(),"desktopError":status.err().map(|e| e.json()),"accountRequired":false,"proprietaryRuntimeRequired":false,"foregroundOnly":true,"sessionId":session_id,"sessionLocked":locked,"childSessionsEnabled":child_sessions,"executable":std::env::current_exe().ok()})
+    let agent_parent = safety::agent_parent_session();
+    let agent_parent_locked = agent_parent.and_then(|id| unsafe { session_locked(id) });
+    json!({"engine":"independent","version":env!("CARGO_PKG_VERSION"),"platform":"win32","desktopAccessible":status.is_ok(),"desktopError":status.err().map(|e| e.json()),"accountRequired":false,"proprietaryRuntimeRequired":false,"foregroundOnly":true,"sessionId":session_id,"sessionLocked":locked,"agentParentSession":agent_parent,"agentParentLocked":agent_parent_locked,"childSessionsEnabled":child_sessions,"executable":std::env::current_exe().ok()})
 }
 pub fn main() {
     // The GUI subsystem suppresses a console window; inherited standard handles
@@ -236,6 +241,18 @@ pub fn main() {
     if mode != "serve" {
         eprintln!("Usage: opencu-engine.exe serve | --doctor");
         std::process::exit(2);
+    }
+    let extra: Vec<String> = std::env::args().skip(2).collect();
+    if !extra.is_empty() {
+        let parent = if extra.len() == 2 && extra[0] == "--agent-parent-session" {
+            extra[1].parse::<u32>().ok()
+        } else { None };
+        let configured = parent.ok_or_else(|| Error::new("INVALID_ARGUMENT", "Invalid agent parent session argument"))
+            .and_then(|id| unsafe { safety::configure_agent_parent(id) });
+        if let Err(error) = configured {
+            eprintln!("{error}");
+            std::process::exit(2);
+        }
     }
     let mut engine = unsafe { Engine::new() };
     let stdin = io::stdin();

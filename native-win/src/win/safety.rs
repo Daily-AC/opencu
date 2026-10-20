@@ -3,7 +3,7 @@ use opencu_engine::{foreground, Error, Result};
 use std::{
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering::SeqCst},
-        mpsc,
+        mpsc, OnceLock,
     },
     thread,
     time::{Duration, Instant},
@@ -30,7 +30,37 @@ static EVENTS: AtomicU64 = AtomicU64::new(0);
 static FAILED: AtomicBool = AtomicBool::new(false);
 static HEARTBEAT: AtomicU64 = AtomicU64::new(0);
 static QUIET_UNTIL: AtomicU64 = AtomicU64::new(0);
+static AGENT_PARENT_SESSION: OnceLock<u32> = OnceLock::new();
 pub use foreground::INPUT_TAG;
+pub fn agent_parent_session() -> Option<u32> {
+    AGENT_PARENT_SESSION.get().copied()
+}
+pub unsafe fn configure_agent_parent(session: u32) -> Result<()> {
+    let mut own = 0;
+    ProcessIdToSessionId(GetCurrentProcessId(), &mut own)?;
+    if session == 0 || session == u32::MAX || session == own || own == 0 {
+        return Err(Error::new("INVALID_ARGUMENT", "Agent parent must be a different interactive session"));
+    }
+    AGENT_PARENT_SESSION.set(session)
+        .map_err(|_| Error::new("INVALID_ARGUMENT", "Agent parent session is already configured"))
+}
+unsafe fn parent_input_allowed(before_input: bool) -> Result<()> {
+    let parent = agent_parent_session();
+    let locked = parent.and_then(|id| super::session_locked(id));
+    opencu_engine::agent_parent_input_policy(parent.is_some(), locked, before_input)
+}
+pub unsafe fn parent_input_error(error: Error) -> Error {
+    // A lock can happen between a guard and the OS/provider call. Do not replay
+    // it or claim that the already-attempted action sent no input.
+    if agent_parent_session().is_none() { return error; }
+    if STOPPED.load(SeqCst) && matches!(error.code, "SCREEN_LOCKED" | "PERSON_ACTIVE" | "ACTIVATION_FAILED" | "WINDOW_FOCUS_CHANGED") {
+        return user_stopped();
+    }
+    if matches!(error.code, "PERSON_ACTIVE" | "ACTIVATION_FAILED" | "WINDOW_FOCUS_CHANGED") {
+        if let Err(locked) = parent_input_allowed(false) { return locked; }
+    }
+    error
+}
 pub fn person() -> Error {
     Error::new(
         "PERSON_ACTIVE",
@@ -345,6 +375,7 @@ impl Monitor {
             indicator.hide();
             return Err(user_stopped());
         }
+        parent_input_allowed(true)?;
         if NEEDS_OBSERVATION.load(SeqCst) {
             return Err(Error::new(
                 "OBSERVATION_REQUIRED",
@@ -396,6 +427,7 @@ impl Guard<'_> {
             self.indicator.hide();
             return Err(user_stopped());
         }
+        parent_input_allowed(false)?;
         if EVENTS.load(SeqCst) != self.epoch {
             return Err(person());
         }
