@@ -29,6 +29,8 @@ class AgentDesktopFixture : Form {
     readonly string command = Application.ExecutablePath + ".command";
     int clicks, chunks, foreignForeground, injectedFailures, unexpectedCursor, hoverMoves;
     Process hoverHost;
+    bool parkRequest, parkPending, parked;
+    POINT parkedCursor;
     bool monitor, injecting, parentMode;
     string expected = "";
     DateTime next = DateTime.MinValue;
@@ -58,8 +60,9 @@ class AgentDesktopFixture : Form {
             if (action == "begin" && parentMode) { injecting=true; next=DateTime.UtcNow; }
             if (action == "end") { monitor=false; injecting=false; }
             if (action == "hover-stop") { if (hoverHost != null) hoverHost.Dispose(); hoverHost=null; }
-            if (parentMode && action.StartsWith("hover:")) {
-                hoverHost = Process.GetProcessById(Int32.Parse(action.Substring(6)));
+            if (parentMode && (action.StartsWith("hover:") || action.StartsWith("park:"))) {
+                parkRequest = action.StartsWith("park:"); parked=false; parkPending=false;
+                hoverHost = Process.GetProcessById(Int32.Parse(action.Substring(action.IndexOf(':') + 1)));
                 if (hoverHost.SessionId != Process.GetCurrentProcess().SessionId || hoverHost.MainWindowTitle != "OpenCU agent desktop") {
                     hoverHost.Dispose(); hoverHost=null; injectedFailures++;
                 }
@@ -68,6 +71,11 @@ class AgentDesktopFixture : Form {
         if (monitor && GetForegroundWindow() != Handle) foreignForeground++;
         POINT cursor; GetCursorPos(out cursor);
         if (monitor && hasCursor && (Math.Abs(cursor.x-lastCursor.x) > 2 || Math.Abs(cursor.y-lastCursor.y) > 2)) unexpectedCursor++;
+        if (parkPending) {
+            // Sample the actual pixel after the one SendInput move has settled.
+            // No further move is sent during the parked-pointer check.
+            parkedCursor=cursor; lastCursor=cursor; parked=true; parkPending=false;
+        }
         if (hoverHost != null) {
             RECT bounds;
             if (hoverHost.HasExited || GetForegroundWindow() != Handle || !GetClientRect(hoverHost.MainWindowHandle, out bounds)) {
@@ -75,7 +83,10 @@ class AgentDesktopFixture : Form {
             } else {
                 var point = new POINT { x=bounds.right/2 + hoverMoves%20, y=bounds.bottom*3/4 };
                 if (!ClientToScreen(hoverHost.MainWindowHandle, ref point) || GetAncestor(WindowFromPoint(point), 2) != hoverHost.MainWindowHandle) injectedFailures++;
-                else { MovePointer(point); hoverMoves++; }
+                else {
+                    MovePointer(point); hoverMoves++;
+                    if (parkRequest) { parkPending=true; hoverHost.Dispose(); hoverHost=null; }
+                }
             }
         }
         if (injecting && DateTime.UtcNow >= next && chunks < 20) {
@@ -101,7 +112,8 @@ class AgentDesktopFixture : Form {
         }
         var state = new { pid=Process.GetCurrentProcess().Id, sessionId=Process.GetCurrentProcess().SessionId, text=edit.Text, clicks=clicks,
             chunks=chunks, expected=expected, foreignForeground=foreignForeground, injectedFailures=injectedFailures, unexpectedCursor=unexpectedCursor,
-            foreground=GetForegroundWindow()==Handle, title=Text, hoverMoves=hoverMoves };
+            foreground=GetForegroundWindow()==Handle, title=Text, hoverMoves=hoverMoves,
+            cursor=cursor, parked=parked, parkedCursor=parkedCursor };
         string temp=file + ".tmp";
         try {
             File.WriteAllText(temp, new JavaScriptSerializer().Serialize(state), new UTF8Encoding(false));
