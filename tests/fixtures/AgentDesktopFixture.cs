@@ -25,6 +25,7 @@ class AgentDesktopFixture : Form {
     [StructLayout(LayoutKind.Sequential)] struct MOUSE { public int dx, dy; public uint data, flags, time; public UIntPtr extra; }
     readonly TextBox edit = new TextBox { Name="FixtureText", AccessibleName="Fixture text", Location=new Point(20,60), Width=500 };
     readonly Button button = new Button { Text="Increment fixture", Location=new Point(20,110), Width=180 };
+    readonly Label counter = new Label { Text="Clicks: 0", Location=new Point(220,115), AutoSize=true };
     readonly string file = Application.ExecutablePath + ".json";
     readonly string command = Application.ExecutablePath + ".command";
     int clicks, chunks, foreignForeground, injectedFailures, unexpectedCursor, hoverMoves;
@@ -44,8 +45,8 @@ class AgentDesktopFixture : Form {
         parentMode = parent;
         Text = "OpenCU disposable " + Path.GetFileNameWithoutExtension(Application.ExecutablePath);
         StartPosition = FormStartPosition.Manual; Location = new Point(30,30); ClientSize = new Size(560,220);
-        Controls.Add(edit); Controls.Add(button);
-        button.Click += delegate { clicks++; };
+        Controls.Add(edit); Controls.Add(button); Controls.Add(counter);
+        button.Click += delegate { clicks++; counter.Text="Clicks: " + clicks; };
         Shown += delegate { Activate(); edit.Focus(); };
         var timer = new Timer { Interval=40 };
         timer.Tick += delegate { Tick(); }; timer.Start();

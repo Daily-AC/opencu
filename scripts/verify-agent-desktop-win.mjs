@@ -4,8 +4,8 @@
 // Disposable fixtures only; do not run this suite from a headless shell.
 // Parent stimuli are SendInput, NOT evidence of hardware/physical Escape behavior.
 // Lock/unlock remains manual: the suite cannot unlock without a password and must
-// never obtain one. Manually check retained reads/capture, SCREEN_LOCKED input
-// refusals, parentLocked true/false and later explicit input after unlock.
+// never obtain one. --locked-parent pauses for manual lock/unlock and checks
+// pattern delivery, retained reads/capture and synthetic-input refusal.
 import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
 import { cp, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
@@ -18,6 +18,7 @@ import { agentDesktopAvailability, agentDesktopHelper, prepareAgentDesktop } fro
 
 if (process.platform !== 'win32') throw new Error('Windows-only acceptance; no desktop was touched.');
 if (!process.argv.includes('--allow-desktop')) throw new Error('Run with --allow-desktop FROM A FOREGROUND TERMINAL on an authorized idle Windows desktop; a headless launcher cannot test foreground theft.');
+const lockedParent = process.argv.includes('--locked-parent');
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 await mkdir(path.join(root, '.cache'), { recursive: true });
 const area = await mkdtemp(path.join(root, '.cache/agent-desktop-acceptance-'));
@@ -27,7 +28,7 @@ const childExe = path.join(temporary, 'OpenCU-Child-Fixture.exe');
 const report = { test: 'windows-agent-desktop', ok: false, checks: [],
   parentStimulus: 'SendInput in parent session; not hardware input',
   manualFollowups: ['deliberate click enables interaction; deactivation returns to watch-only; physical Escape still stops',
-    'locked parent: reads/capture work, input SCREEN_LOCKED; parentLocked true/false; explicit input after manual unlock; disconnect/logoff still stop', 'smart-card sign-in', 'host crash during startup',
+    'locked parent: --locked-parent checks patterns and refused typing; separately verify lock mid-action, physical Escape and disconnect/logoff', 'smart-card sign-in', 'host crash during startup',
     'external minimize, covered or partly off-screen viewport, GPU/video', 'unsupported Windows editions/policies'] };
 let client, parent;
 const check = (name, data = {}) => { report.checks.push({ name, ...data }); console.log(name); };
@@ -35,6 +36,16 @@ async function waitFor(fn, description, ms = 20000) {
   const until = Date.now() + ms;
   while (Date.now() < until) { const result = await fn(); if (result) return result; await pause(75); }
   throw new Error(`Timed out: ${description}`);
+}
+async function waitForParentLock(locked) {
+  const until = Date.now() + 180000;
+  while (Date.now() < until) {
+    const status = await control('status');
+    assert.equal(status.state, 'running', 'Manual lock/unlock must keep the same child');
+    if (status.parentLocked === locked) return status;
+    await pause(500);
+  }
+  throw new Error(`Timed out waiting for manual parent ${locked ? 'lock' : 'unlock'}; nothing was retried.`);
 }
 async function state(exe) { try { return JSON.parse(await readFile(`${exe}.json`, 'utf8')); } catch { return null; } }
 async function command(exe, value) {
@@ -133,6 +144,49 @@ try {
   assert.equal(childAfter.clicks, 10); // One hover, three parked-pointer, six concurrent checks.
   assert.equal(childAfter.text, Array.from({ length: 6 }, (_, i) => `agent-${i};`).join(''));
   check('concurrent-input-isolation', { parent: parentAfter, child: childAfter });
+  if (lockedParent) {
+    // Complete all parent stimuli before inviting manual interaction. Locking
+    // changes parent foreground/cursor, so finish that monitor too.
+    await command(parentExe, 'end');
+    await call('get_app_state', { app: childExe, disableDiff: true });
+    const before = await state(childExe);
+    console.log('MANUAL: lock the parent with Win+L now. Keep it locked until the checks finish (up to three minutes to lock). No password is collected.');
+    const locked = await waitForParentLock(true);
+    assert.equal(locked.sessionId, started.sessionId);
+    assert.equal(locked.hostPid, started.hostPid);
+    let current = await call('get_app_state', { app: childExe, includeScreenshot: true, disableDiff: true });
+    assert.ok(current.content.some(c => c.type === 'image'), 'Locked child screenshot is required');
+    const clicked = await call('click', { app: childExe, element_index: index(current, 'Increment fixture') });
+    assert.notEqual(clicked._meta?.['opencu/actionOutcome'], 'unknown', text(clicked));
+    assert.match(text(clicked), new RegExp(`Clicks: ${before.clicks + 1}`));
+    await waitFor(async () => (await state(childExe))?.clicks === before.clicks + 1, 'exactly one locked pattern click');
+    assert.equal((await control('status')).parentLocked, true, 'Parent unlocked during click');
+    current = await call('get_app_state', { app: childExe, disableDiff: true });
+    const value = 'locked pattern value';
+    const valued = await call('set_value', { app: childExe, element_index: index(current, 'Fixture text'), value });
+    assert.notEqual(valued._meta?.['opencu/actionOutcome'], 'unknown', text(valued));
+    assert.ok(text(valued).includes(value), 'Fresh state must show the new value');
+    await waitFor(async () => (await state(childExe))?.text === value, 'locked ValuePattern text');
+    assert.equal((await control('status')).parentLocked, true, 'Parent unlocked during set_value');
+    const refused = await call('type_text', { app: childExe, text: 'MUST-NOT-APPEAR' }, 'SCREEN_LOCKED');
+    assert.match(text(refused), /indexed.*set_value.*perform_secondary_action/);
+    await pause(250);
+    const after = await state(childExe);
+    assert.equal(after.clicks, before.clicks + 1);
+    assert.equal(after.text, value);
+    assert.equal(after.sessionId, started.sessionId);
+    assert.equal((await control('status')).parentLocked, true, 'Parent unlocked before refusal check finished');
+    check('locked-parent-patterns-and-refused-typing', { before, after, locked });
+    console.log('MANUAL: locked checks passed. Unlock the parent now (up to three minutes). No input will be replayed.');
+    const unlocked = await waitForParentLock(false);
+    assert.equal(unlocked.sessionId, started.sessionId);
+    assert.equal(unlocked.hostPid, started.hostPid);
+    await pause(500);
+    const afterUnlock = await state(childExe);
+    assert.equal(afterUnlock.clicks, after.clicks);
+    assert.equal(afterUnlock.text, after.text, 'Refused typing was replayed after unlock');
+    check('manual-unlock-keeps-child-without-replay', { unlocked });
+  }
   const stopped = await control('stop'); assert.equal(stopped.state, 'inactive');
   assert.equal((await agentDesktopAvailability(root)).existingChildSession, null, 'Tool stop left a child session');
   check('tool-stop-logs-off');
