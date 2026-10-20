@@ -787,3 +787,47 @@ mod session_state_tests {
         assert_eq!(session_locked_flag(2), None);
     }
 }
+
+/// Extra restriction only for the authenticated agent-desktop bridge. Ordinary
+/// parent-desktop engines keep their existing input rules unchanged.
+pub fn agent_parent_input_policy(guarded: bool, locked: Option<bool>, before_input: bool) -> Result<()> {
+    if !guarded || locked == Some(false) { return Ok(()); }
+    let reason = if locked == Some(true) {
+        "The person's screen is locked. Reading and screenshots still work; input is available after they unlock."
+    } else {
+        "Cannot verify whether the person's screen is locked. Reading and screenshots remain available; input was refused."
+    };
+    let outcome = if before_input {
+        "No input was sent."
+    } else {
+        "Remaining input was stopped; earlier input may have run. No input was replayed."
+    };
+    Err(Error::new("SCREEN_LOCKED", format!("{reason} {outcome}")))
+}
+
+#[cfg(test)]
+mod agent_parent_input_tests {
+    use super::agent_parent_input_policy;
+    #[test]
+    fn lock_guard_is_child_only_and_does_not_guess_unknown_state() {
+        for locked in [Some(true), Some(false), None] {
+            assert!(agent_parent_input_policy(false, locked, true).is_ok());
+        }
+        assert!(agent_parent_input_policy(true, Some(false), true).is_ok());
+        let locked = agent_parent_input_policy(true, Some(true), true).unwrap_err();
+        assert_eq!(locked.code, "SCREEN_LOCKED");
+        assert!(locked.message.contains("Reading and screenshots still work"));
+        assert!(locked.message.ends_with("No input was sent."));
+        let unknown = agent_parent_input_policy(true, None, true).unwrap_err();
+        assert_eq!(unknown.code, "SCREEN_LOCKED");
+        assert!(unknown.message.contains("Cannot verify"));
+    }
+    #[test]
+    fn a_lock_during_input_preserves_the_partial_outcome() {
+        let partial = agent_parent_input_policy(true, Some(true), false).unwrap_err();
+        assert_eq!(partial.code, "SCREEN_LOCKED");
+        assert!(partial.message.contains("earlier input may have run"));
+        assert!(!partial.message.contains("No input was sent."));
+        assert!(agent_parent_input_policy(true, Some(false), false).is_ok());
+    }
+}

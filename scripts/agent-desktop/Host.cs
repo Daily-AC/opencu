@@ -30,6 +30,18 @@ namespace OpenCUAgentDesktop {
             return reason == 2 || reason == 4 || reason == 6;
         }
     }
+    static class RdpPointerPolicy {
+        internal const string Property = "IgnoreServerGeneratedMouseMoves";
+        internal static void Configure(Action<string, bool> set, Func<string, object> get) {
+            // This setting suppresses server Pointer Position Update PDUs. The
+            // documented property cannot change after Connect, so keep it on in
+            // interactive mode too; never reconnect just to toggle cursor warping.
+            set(Property, true);
+            object confirmed = get(Property);
+            if (!(confirmed is bool) || !(bool)confirmed)
+                throw new IOException("RDP did not confirm server pointer-move suppression; agent desktop was not connected.");
+        }
+    }
     static class Native {
         [DllImport("wtsapi32.dll", SetLastError=true)] internal static extern bool WTSIsChildSessionsEnabled(out bool enabled);
         [DllImport("wtsapi32.dll", SetLastError=true)] internal static extern bool WTSGetChildSessionId(out uint session);
@@ -76,6 +88,7 @@ namespace OpenCUAgentDesktop {
             uint id; bool success = WTSGetChildSessionId(out id);
             return ChildResult(success, id, Marshal.GetLastWin32Error());
         }
+        internal static uint? ReportedChild(uint id) { return id == UInt32.MaxValue ? (uint?)null : id; }
         internal static bool Elevated(Process process) {
             IntPtr token; Check(OpenProcessToken(process.Handle, 8, out token));
             try { int value, returned; Check(GetTokenInformation(token, 20, out value, 4, out returned)); return value != 0; }
@@ -113,6 +126,11 @@ namespace OpenCUAgentDesktop {
         }
         internal static void Output(object value) { lock (OutputLock) Console.Out.WriteLine(Json(value)); }
         internal static void Line(string value) { lock (OutputLock) Console.Out.WriteLine(value); }
+        internal static void RequireReady(StreamWriter writer, bool ready, string message) {
+            if (ready) return;
+            writer.WriteLine(Json(new { failure=message }));
+            throw new IOException(message);
+        }
         internal static string Read(TextReader reader, int limit) {
             var text = new StringBuilder(); int ch;
             while ((ch = reader.Read()) != -1) {
@@ -351,6 +369,9 @@ namespace OpenCUAgentDesktop {
             ComEventsHelper.Combine(control.Ocx, events, 3, loginComplete);
             ComEventsHelper.Combine(control.Ocx, events, 4, disconnected);
             ComEventsHelper.Combine(control.Ocx, events, 22, logon);
+            RdpPointerPolicy.Configure(
+                delegate(string name, bool enabled) { object setting = enabled; extended.set_Property(name, ref setting); },
+                name => extended.get_Property(name));
             rdp.Connect();
         }
         void SignInRequired() { Fail("AGENT_DESKTOP_SIGN_IN_REQUIRED", "Windows cannot sign in to the child session automatically. Sign out and back in once after setup. Smart-card-only sign-in is unsupported. OpenCU never requests a password."); }
@@ -402,6 +423,8 @@ namespace OpenCUAgentDesktop {
                     writer.WriteLine(connection.token);
                     string hello = Protocol.Deadline(() => Protocol.Read(reader, 16384), 15000);
                     var result = Protocol.Parse(hello);
+                    object failure;
+                    if (result.TryGetValue("failure", out failure)) throw new IOException(Convert.ToString(failure));
                     if (Convert.ToInt32(result["sessionId"]) != connection.childSession || !(bool)result["desktopAccessible"]) throw new IOException("Child engine is not ready.");
                     File.Delete(descriptor); Directory.Delete(directory); directory = null;
                     pipeWriter = writer;
@@ -472,16 +495,16 @@ namespace OpenCUAgentDesktop {
                 if (args.Length == 1 && args[0] == "self-test") { SelfTest(); return 0; }
                 if (args.Length == 1 && args[0] == "probe") {
                     bool enabled; Native.Check(Native.WTSIsChildSessionsEnabled(out enabled));
-                    if (!enabled) throw new SetupRequiredException("Windows child sessions are disabled.");
+                    if (!enabled) throw new SetupRequiredException("Windows child sessions are disabled; one-time setup is required.");
                     Tasks.Verified();
                     Protocol.Output(new { available=enabled, taskName=Tasks.Name,
-                        childSessionsEnabled=enabled, existingChildSession=Native.Child() }); return 0;
+                        childSessionsEnabled=enabled, existingChildSession=Native.ReportedChild(Native.Child()) }); return 0;
                 }
                 if (args.Length == 2 && args[0] == "bridge") { Bridge(args[1]); return 0; }
                 if (args.Length == 2 && args[0] == "guard") { Guard(Int32.Parse(args[1])); return 0; }
                 if (args.Length == 2 && args[0] == "host") {
                     bool enabled; Native.Check(Native.WTSIsChildSessionsEnabled(out enabled));
-                    if (!enabled) throw new SetupRequiredException("Windows child sessions are disabled.");
+                    if (!enabled) throw new SetupRequiredException("Windows child sessions are disabled; one-time setup is required.");
                     Tasks.Verified(); Application.EnableVisualStyles(); Application.Run(new Host(Int32.Parse(args[1]))); return 0;
                 }
                 throw new ArgumentException("Unknown helper mode.");
@@ -504,6 +527,18 @@ namespace OpenCUAgentDesktop {
         }
         static void SelfTest() {
             // Real Windows named pipes, no window, task, child session or input.
+            bool pointerSetting = false;
+            RdpPointerPolicy.Configure((name, value) => { if (name != RdpPointerPolicy.Property) throw new Exception("Wrong RDP property."); pointerSetting=value; }, name => pointerSetting);
+            foreach (object invalid in new object[] { false, null, "true", 1 }) {
+                bool rejected = false;
+                try { RdpPointerPolicy.Configure((name, value) => {}, name => invalid); } catch (IOException) { rejected = true; }
+                if (!rejected) throw new Exception("Unconfirmed pointer suppression was accepted.");
+            }
+            bool unsupported = false;
+            try { RdpPointerPolicy.Configure((name, value) => { throw new COMException("Unsupported property."); }, name => true); }
+            catch (COMException) { unsupported = true; }
+            if (!unsupported || Native.ReportedChild(UInt32.MaxValue) != null || Native.ReportedChild(7) != 7)
+                throw new Exception("Pointer property refusal or absent-child reporting failed.");
             foreach (int reason in new int[] { 2, 4, 6 }) {
                 if (!ParentSessionPolicy.EndsDesktop(reason)) throw new Exception("Disconnect/logoff must end the agent desktop.");
             }
@@ -565,7 +600,7 @@ namespace OpenCUAgentDesktop {
                     if (!Protocol.Equal(token, Protocol.Deadline(() => Protocol.Read(reader, 64), 3000))) throw new Exception("Valid wire token refused.");
                 }
             }
-            Protocol.Output(new { ok=true, checks=new string[] { "parent-session-policy", "no-child-result", "lf-crlf-bound", "lf-writer", "token-length-and-value", "handshake-bound", "first-pipe-instance", "peer-pid-lifetime", "peer-session", "peer-sid", "wire-token" } });
+            Protocol.Output(new { ok=true, checks=new string[] { "required-pointer-suppression", "no-child-null", "parent-session-policy", "no-child-result", "lf-crlf-bound", "lf-writer", "token-length-and-value", "handshake-bound", "first-pipe-instance", "peer-pid-lifetime", "peer-session", "peer-sid", "wire-token" } });
         }
         static void Bridge(string descriptor) {
             if (new FileInfo(descriptor).Length > 16384) throw new IOException("Descriptor too large.");
@@ -581,7 +616,7 @@ namespace OpenCUAgentDesktop {
                 var writer = Protocol.Writer(pipe);
                 writer.WriteLine(connection.token);
                 if (!Protocol.Equal(connection.token, Protocol.Deadline(() => Protocol.Read(reader, 64), 5000))) throw new IOException("Host authentication failed.");
-                var start = new ProcessStartInfo(connection.engine, "serve") { UseShellExecute=false, CreateNoWindow=true, RedirectStandardInput=true, RedirectStandardOutput=true, RedirectStandardError=true, StandardOutputEncoding=Protocol.Utf8, StandardErrorEncoding=Protocol.Utf8 };
+                var start = new ProcessStartInfo(connection.engine, "serve --agent-parent-session " + connection.parentSession) { UseShellExecute=false, CreateNoWindow=true, RedirectStandardInput=true, RedirectStandardOutput=true, RedirectStandardError=true, StandardOutputEncoding=Protocol.Utf8, StandardErrorEncoding=Protocol.Utf8 };
                 using (var engine = Process.Start(start)) {
                     IntPtr job = IntPtr.Zero;
                     try {
@@ -592,7 +627,11 @@ namespace OpenCUAgentDesktop {
                         input.WriteLine("{\"id\":0,\"method\":\"doctor\",\"params\":{}}");
                         var doctor = Protocol.Parse(Protocol.Deadline(() => Protocol.Read(engine.StandardOutput, 16384), 10000));
                         var result = (Dictionary<string, object>)doctor["result"];
-                        if (!(bool)result["desktopAccessible"]) throw new IOException("Child desktop inaccessible.");
+                        Protocol.RequireReady(writer, (bool)result["desktopAccessible"], "Child desktop inaccessible.");
+                        Protocol.RequireReady(writer, result.ContainsKey("agentParentSession") && Convert.ToInt32(result["agentParentSession"]) == connection.parentSession,
+                            "Child engine parent-session guard was not configured.");
+                        Protocol.RequireReady(writer, result.ContainsKey("agentParentLocked") && result["agentParentLocked"] is bool,
+                            "Child engine cannot query the parent session lock state.");
                         writer.WriteLine(Protocol.Json(new { sessionId=engine.SessionId, desktopAccessible=true }));
                         var inbound = Task.Run(delegate {
                             string request;
