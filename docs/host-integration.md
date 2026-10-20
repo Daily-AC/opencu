@@ -123,8 +123,13 @@ tool name plus its `app` argument.
 
 Relay the new `agent_desktop` lifecycle tool dynamically like other tools. It
 accepts only `action: start | stop | status`; no credentials or session selector.
-The person runs `opencu setup agent-desktop` separately to approve Windows UAC
-and prepare the user-only helper. The MCP tool never performs setup or elevation.
+For one-time enablement the person runs this from normal PowerShell:
+`& "$env:LOCALAPPDATA\OpenCU\bin\opencu.cmd" setup agent-desktop`.
+Errors use the actual installation path. Only this explicit command may request
+UAC, preceded by an explanation of the Windows PowerShell prompt. On first start
+after an update, missing/stale helpers are rebuilt offline and the installation's
+ordinary-user task is registered automatically, only if child sessions are already
+enabled. The automatic path refuses disabled child sessions and never elevates.
 Missing setup returns `AGENT_DESKTOP_UNAVAILABLE`; automatic sign-in failure returns
 `AGENT_DESKTOP_SIGN_IN_REQUIRED`. Never collect or forward a session password.
 
@@ -137,9 +142,10 @@ the entire MCP connection; host approvals must not reconnect around it.
 
 Child transport failures/timeouts do not replace its engine, reconnect RDP, or
 fall back to the parent's desktop. Parent-engine timeout recovery above is unchanged.
-Status/cleanup are available after failure. Locking or disconnecting the parent
-ends the child without automatic resume; that lifecycle still requires Windows
-acceptance. The feature is not a file/account sandbox and macOS currently returns
+Status/cleanup are available after failure; errors explain that `agent_desktop`
+with `{"action":"stop"}` is required before app tools can resume. This is not a
+person-stop reset. Locking or disconnecting the parent ends the child without
+automatic resume. Parent lock/unlock was measured; disconnect remains a follow-up. The feature is not a file/account sandbox and macOS currently returns
 `UNSUPPORTED_ON_MACOS`. See the [Windows contract](windows-engine-contract.md#agent-desktop-040).
 
 ## Compatibility

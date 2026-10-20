@@ -565,101 +565,173 @@ read), a whole read was 19,900 characters and a read scoped to the page
 
 ## Agent desktop (0.4.0)
 
-Status: implementation and local tests only; **this implementation has not run on
-Windows**. The owner-reported spike and design choices are recorded in
-[ADR 0002](adr/0002-windows-agent-desktop-child-session.md). Existing 0.3.x
-foreground acceptance above is not acceptance of this feature.
+On 2026-10-20 the owner's acceptance session installed candidate `29a0991` from
+its byte-for-byte reproduced ZIP (`b05014a0...`) on the clean `base` snapshot of
+the cu-bench Windows 11 26H2 VM. Setup used the real UAC prompt. Four defects
+(no-child result mapping, CRLF bounds, repeated-setup ACLs, and foreground theft)
+blocked the candidate. With a local diagnostic patch, all eight checks in the
+original agent-desktop acceptance script passed. The follow-up implementation
+fixes these and adds watch-only input and automatic update preparation. **Those
+follow-up changes still need Windows re-acceptance.** See [ADR 0002](adr/0002-windows-agent-desktop-child-session.md).
 
-Run `opencu setup agent-desktop` from a normal Windows terminal. It asks Windows
-for UAC approval to enable child sessions, then compiles the helper offline with
-Windows' .NET Framework compiler and registers an ordinary-user, demand-only task.
-It never registers a SYSTEM task or supplies a password. If the parent signed in
-before enablement, sign out and back in once. Smart-card-only sign-in is unsupported.
-An update that changes the helper source/version requires running setup again.
-`opencu doctor` reports helper/task availability; native doctor additionally reports
-its session ID and whether Windows child sessions are enabled.
+### Measured on the Windows VM
 
-MCP `agent_desktop` accepts only `action: start | stop | status`. Start opens the
-visible **OpenCU agent desktop** window and waits for an authenticated child bridge
-and accessible engine. All app tools, including inventory, launches, action batches
-and final observations, then run inside it. No per-app parent override exists.
-Closing the host, or physical Escape received inside the child, latches
-`USER_STOPPED` for the entire MCP connection. Status and cleanup remain available;
-start, app calls and reconnect cannot bypass it. Tool stop logs off the child and
-returns to ordinary operation only after confirmed cleanup. Switching requires a
-fresh app observation before input. A failed start or broken child transport never
-silently sends the next app call to the parent's desktop.
+- Non-elevated RunEx with AS_SELF and USE_SESSION_ID repeatedly started the bridge
+  in the child at Medium integrity, including the second explicit start. No SYSTEM
+  task was needed.
+- After enabling and signing in again (reboot with autologon), start reached
+  running without a password in about 3.3 seconds. Before that sign-in it returned
+  `AGENT_DESKTOP_SIGN_IN_REQUIRED` in 2.5 seconds without a visible credential dialog.
+- The real-pipe self-test passed after fixing CRLF handling: token, handshake
+  bound, first instance, peer PID/session/SID and wire-token checks.
+- With a Hyper-V mouse click giving the parent fixture real foreground, the agent
+  ran six child rounds of indexed click, click and type_text (about 0.55 seconds
+  per round). Twenty Hyper-V keyboard chunks and continuous mouse movement stayed
+  in the parent. Parent and child received exactly their own text, with unchanged
+  parent foreground. This used hardware input, not SendInput.
+- Physical Escape through the focused view returned USER_STOPPED on the next
+  input action; later list_apps, get_app_state and start were refused. Reads before
+  that next input action still succeeded, matching the engine's existing contract.
+- Clicking the host close button with the Hyper-V mouse immediately logged off
+  the child. All later calls returned USER_STOPPED; no child reappeared within
+  twenty seconds. MCP EOF also logged off the child, leaving no OpenCU process.
+- Parent LockWorkStation ended the child and latched SCREEN_LOCKED. After unlock,
+  status remained failed and nothing resumed.
 
-The v9 system RDP ActiveX control uses ConnectToChildSession and CredSSP with all
-credential prompts/saving and automatic reconnection disabled. Clipboard, drives,
-printers, ports, smart cards, dynamic devices and audio redirection are disabled.
-The topmost host opens without requesting activation. Intentionally focusing its viewport
-sends keyboard input into the child. Minimizing externally stops it; no global
-RemoteDesktop_SuppressWhenMinimized registry override is installed. Parent
-lock/disconnect also stops it, because Windows child sessions themselves cannot
-lock. These UI/session behaviors still need real Windows acceptance.
+A separate diagnostic variant **with the lock handler removed** continued child
+work while the parent displayed the lock screen: three rounds, a WGC screenshot
+containing real content (`vm-acceptance-1/locked-child.png` in the acceptance job),
+another check after thirty seconds, and work after unlock. This is a measured OS
+capability, not supported OpenCU policy. The shipped handler still ends the child
+on parent lock; no continue-on-lock option was added.
 
-The parent obtains its child ID with WTSGetChildSessionId. Task Scheduler RunEx
-selects that session with AS_SELF and USE_SESSION_ID, using the current user's
-interactive token and least privilege. No logon trigger, HKCU Run entry, password,
-SYSTEM broker or automatic startup retry is used. The bridge verifies its own
-session, then authenticates over a local-only first-instance named pipe. Its
-protected DACL allows only the user's SID; both peers verify OS peer session/SID
-and non-elevation, and the bridge also pins the host PID and process start time.
-A random 32-byte token travels through a private descriptor and the authenticated
-pipe, never through command arguments or logs. The descriptor is deleted after
-readiness. The engine's inherited JSON-lines protocol is forwarded unchanged;
-message sizes and authentication waits are bounded.
+The old ShowWithoutActivation-only host stole foreground when its launcher had
+foreground rights: the log saw it about 1.1 seconds after the fixture, for about
+4.3 seconds; three runs counted 39, 18 and 10 foreground violations. A headless
+launcher did not reproduce this. WS_EX_TOPMOST alone did not fix it; holding
+WS_EX_NOACTIVATE through startup and clearing it at readiness did in the probe.
+Hovering an inactive old view also caused PERSON_ACTIVE in the child, which is why
+the follow-up defaults to watch-only.
 
-A job object contains the child engine. Pipe EOF closes its stdin, allows up to
-35 seconds for normal cleanup, then terminates it. The host logs off its adopted
-child on close/EOF after rechecking the parent-child relationship; a separate
-parent-session guardian also logs it off when its inherited host pipe closes.
-Startup failure before adoption and guardian/host crash races require explicit
-Windows checks. A missing logoff acknowledgement returns
-`AGENT_DESKTOP_CLEANUP_FAILED`, not a successful return to parent routing.
-Normal parent-engine timeout replacement remains unchanged. Child timeout
-replacement is disabled; no action or connection is automatically replayed.
+### Setup and updates
+
+From a normal PowerShell terminal, one time:
+
+```powershell
+& "$env:LOCALAPPDATA\OpenCU\bin\opencu.cmd" setup agent-desktop
+& "$env:LOCALAPPDATA\OpenCU\bin\opencu.cmd" doctor
+```
+
+Setup explains that Windows will ask to let Microsoft Windows PowerShell make
+changes only to enable child sessions, then requests the standard UAC prompt.
+The remaining work imports the installed RDP type library, compiles with the
+built-in .NET Framework compiler, and registers a normal-user demand-only task.
+Repeated setup changes only the helper directory's DACL, not its owner/group.
+No SYSTEM task or password is used. Sign out/back in once if the current sign-in
+predates enablement. Smart-card-only sign-in remains unsupported and unmeasured.
+
+The first start after an update automatically prepares missing/outdated helpers
+using the same installed hash-pinned sources, **only if Windows child sessions are
+already enabled**. The internal PrepareOnly path refuses disabled child sessions
+before UAC. It never elevates or connects a session during preparation. The helper
+receipt is revalidated before launching. Preparation is serialized per installation;
+tasks include a hash of the installation path so temporary verification installs
+do not overwrite the normal install's task. Doctor/status report availability
+without compiling or elevating. Errors include an executable PowerShell command
+using the real installation path when initial enablement is required.
+
+### Routing, view and stopping
+
+MCP `agent_desktop` accepts only `action: start | stop | status`. Start opens a
+visible topmost window and waits for an authenticated bridge and accessible engine.
+All app tools, including inventory, launches, batches and final observations, then
+use the child. There is no per-app parent override. Windows engine input guards,
+including the ten-second foreground rule, remain unchanged.
+
+The host holds WS_EX_NOACTIVATE during startup, then removes it without activation.
+The view starts **Watch only**. Its disabled native input ancestor prevents hover
+or keyboard messages reaching ActiveX children. Clicking the view deliberately
+enables **Interactive** mode and focuses RDP; the mode-selection click is consumed,
+not replayed into an app. Deactivation returns to Watch only, and the label shows
+the mode. The close button is always available. This follow-up mechanism needs
+live Windows re-acceptance for rendering, hover, intentional activation and Escape.
+
+The v9 control uses ConnectToChildSession and CredSSP. Credential prompts/saving,
+automatic reconnect, clipboard, drive/printer/port/smart-card/dynamic-device and
+audio redirection are disabled. External minimization stops the host; no global
+RemoteDesktop_SuppressWhenMinimized override is installed. Parent lock/disconnect
+ends the child without automatic resume. External minimize and disconnect still
+need dedicated measurement.
+
+Host close and a reported child USER_STOPPED permanently latch the MCP connection.
+Status and cleanup remain available; switching or reconnecting cannot bypass them.
+Tool stop alone logs off child apps and permits ordinary operation only after
+confirmed cleanup. Switching requires a new app observation. Failed start or child
+transport loss never falls back to the parent; error text tells the caller to use
+`agent_desktop` with `{"action":"stop"}` before app tools can resume. This cleanup
+instruction never clears a person's stop. Helper failure messages survive nonzero
+process exits; unrelated OS failures do not suggest repeating setup.
+
+### IPC and cleanup
+
+WTSGetChildSessionId returning FALSE with `0xFFFFFFFF` means no child (the VM
+reported error 50); FALSE with another ID remains an error. The bridge verifies
+its session before engine launch. A local-only, first-instance named pipe uses a
+protected user-SID DACL, random 32-byte token in a private descriptor, OS peer
+session/SID/integrity checks, and host PID/start-time validation. No token enters
+arguments or diagnostics. The descriptor is removed after readiness. Writers use
+LF; bounded readers also accept one CR before LF without counting it as payload.
+Repeated/embedded CR, truncated lines and oversized payloads are refused.
+
+The engine's inherited JSON-lines protocol is unchanged. A job object contains it;
+pipe EOF closes stdin, allows up to thirty-five seconds for normal cleanup and
+then terminates it. The host rechecks its child relationship before logoff. A
+separate parent-session guardian also logs off the adopted child on host EOF.
+Missing logoff acknowledgement returns AGENT_DESKTOP_CLEANUP_FAILED and prevents
+parent fallback. Normal parent timeout recovery is unchanged; child replacement,
+input replay and RDP reconnect are disabled. Crash races before child adoption
+remain unmeasured.
 
 | Code | Meaning |
 | --- | --- |
-| `AGENT_DESKTOP_UNAVAILABLE` | Missing/stale setup, unsupported capability or startup failure; message identifies setup guidance. |
-| `AGENT_DESKTOP_SIGN_IN_REQUIRED` | Windows could not authenticate automatically; sign in again after enabling, without providing OpenCU credentials. Smart cards remain unsupported. |
-| `AGENT_DESKTOP_BUSY` | A child already exists for the parent; OpenCU will not attach to it. Other ownership/policy conflicts fail startup. |
-| `AGENT_DESKTOP_AUTH_FAILED` | Child bridge peer/token/readiness validation failed. |
+| `AGENT_DESKTOP_UNAVAILABLE` | Missing enablement, preparation/capability or startup failure; the actual reason is retained. Setup guidance appears only for setup problems. |
+| `AGENT_DESKTOP_SIGN_IN_REQUIRED` | Windows cannot authenticate automatically; sign in again after enablement, never provide OpenCU credentials. |
+| `AGENT_DESKTOP_BUSY` | A child already exists for the parent; OpenCU does not attach to it. |
+| `AGENT_DESKTOP_AUTH_FAILED` | Bridge peer/token/readiness validation failed. |
 | `AGENT_DESKTOP_LOST` | Host, child or pipe ended; no reconnect/fallback. |
-| `AGENT_DESKTOP_CLEANUP_FAILED` | Child logoff was not confirmed; inspect sessions before continuing. |
-| `USER_STOPPED` | Also covers closing/minimizing the visible host; cannot be cleared by desktop switching. |
+| `AGENT_DESKTOP_CLEANUP_FAILED` | Child logoff was not confirmed. |
+| `USER_STOPPED` | Person stop, including host close; cannot be cleared by desktop switching. |
 
-UI isolation is not account, file or application-data isolation. Single-instance
-apps may refuse a second process or delegate to the parent's process; no child
-window is then available. Apps share profiles and files, so concurrent edits can
-conflict. There is only one connected child per machine. Capability probes are
-used instead of claiming support for untested Windows editions. Protected video,
-GPU applications, RDP screenshot behavior, covered rendering and lock/disconnect
-semantics need measurement. No parent screenshot fallback is allowed.
+### Remaining acceptance
 
-On an authorized idle Windows VM, with dependencies and the engine present:
+External minimize, covered or partly off-screen viewports, GPU/video/protected
+content, smart-card sign-in and unsupported Windows editions are **unmeasured**.
+Also check the new watch/interactive transitions, physical Escape after deliberate
+activation, repeated setup, post-update automatic preparation, the new diagnostics,
+disconnect, startup crashes and real cross-user pipe ACL refusals. Earlier WGC and
+hardware-input results do not establish those cases. Apps still share the user's
+profiles/files, and global single-instance apps may refuse a child instance or
+start in the parent; OpenCU never follows them across sessions. There is only one
+connected child per machine. No parent screenshot fallback is allowed.
+
+From a **foreground terminal** on the authorized idle Windows VM, in the checkout:
 
 ```powershell
 .\bin\opencu.cmd setup agent-desktop
-# Sign out/back in once if this sign-in predates enablement; then:
-.\bin\opencu.cmd doctor
+# Sign out/back in once if this sign-in predates enablement.
 node scripts/verify-agent-desktop-win.mjs --allow-desktop
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\verify-package-win.ps1 -Zip dist\opencu-win-x64.zip
 ```
 
-The script compiles disposable parent/child WinForms fixtures, runs actual named
-pipe authentication checks, starts the child, verifies its process session and WGC
-image, checks child-only inventory, sends six rounds of child input concurrently
-with twenty parent SendInput chunks and pointer movement, verifies foreground and
-input counters, stops by tool, starts again, closes the exact host window through
-WM_CLOSE, and verifies the permanent stop latch on the same connection. It writes
-fixture-only evidence under `.cache/agent-desktop-acceptance-*`. It never performs
-setup/elevation itself. It has not been run in this job.
+The GUI script needs a foreground launcher to reproduce the activation bug. It
+checks real pipe authentication, child launch/capture/inventory, nonactivating open,
+parent SendInput mouse moves over the watch-only view without PERSON_ACTIVE, six
+concurrent child rounds and twenty parent chunks, tool logoff, second start and
+exact-host WM_CLOSE latching. These synthetic stimuli are not hardware-input
+measurements. Evidence remains under ignored `.cache/agent-desktop-acceptance-*`.
 
-The parent SendInput stimulus is not hardware input and does not establish physical
-Escape handling. Separately check Escape via the focused RDP view with a person
-or Hyper-V keyboard, credential refusal before the post-setup sign-in, smart cards,
-parent lock/disconnect, killing the host during connection and during input,
-minimization, covered rendering, busy-machine behavior and extracted offline setup.
-Never reconnect after a person stop merely to finish the test.
+The offline package verifier additionally exercises non-elevating preparation,
+repeated setup, the extended helper self-test and rebuilding after directory
+replacement when the machine is already enabled. Otherwise it checks refusal
+without UAC. It removes only its temporary install's demand task. Neither updated
+script was run on Windows during this follow-up implementation job.
