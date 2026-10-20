@@ -645,3 +645,32 @@ around a 1500 ms batch wait. A scoped title-only text wait must return
 `WAIT_TIMEOUT` even though its header contains that title. These checks use
 fixture data only and have not run on Windows for 0.3.3; host tests/cross-compilation
 are not evidence of their GUI/provider behavior.
+
+## Agent desktop lifecycle (0.4.0)
+
+MCP exposes `agent_desktop({action: "start" | "stop" | "status"})`. Windows uses
+a visible loopback child session and routes **all** app tools to its engine until
+tool stop completes. The Windows engine's JSON-lines methods and foreground
+guards are unchanged. macOS returns `UNSUPPORTED_ON_MACOS` for this tool; normal
+macOS tools and the experimental direct display methods retain their behavior.
+
+Setup is an explicit local command, `opencu setup agent-desktop`, with a Windows
+UAC prompt for enabling child sessions and ordinary-user helper/task preparation.
+The MCP tool cannot elevate, accept credentials or select an arbitrary endpoint.
+Windows automatic child sign-in is required. Missing setup returns
+`AGENT_DESKTOP_UNAVAILABLE` with that command; credential refusal returns
+`AGENT_DESKTOP_SIGN_IN_REQUIRED` with sign-out/in guidance and the smart-card limit.
+
+Start retires the parent engine before child routing. Both directions of switching
+invalidate indexes, screenshot grants and text diffs; a successful new
+`get_app_state` is required before input/activation. Start failure or child transport
+failure never routes calls back to the parent automatically. Child request timeouts
+are terminal for that desktop; the parent timeout-replacement rules above still
+apply to ordinary operation. Tool stop logs off child apps and can lose unsaved work.
+
+Host close and child physical Escape permanently latch `USER_STOPPED` across the
+MCP connection, including late replies during teardown. Status and cleanup can
+still run; switching or reconnecting cannot clear a person's stop. Parent lock or
+disconnect ends the child without automatic resume. Failed cleanup prevents return
+to the parent route. See the [Windows contract](windows-engine-contract.md#agent-desktop-040)
+for IPC, setup, limits and pending real-device acceptance.

@@ -19,7 +19,7 @@ OpenCU is installed when this per-user manifest exists:
 ```json
 {
   "name": "opencu",
-  "version": "0.3.3",
+  "version": "0.4.0",
   "platform": "win32",
   "mcp": {
     "command": "C:\\Users\\me\\AppData\\Local\\OpenCU\\node\\node.exe",
@@ -99,7 +99,7 @@ Tool errors begin with a stable code followed by a colon, for example
 `USER_STOPPED: ...`; the code is also in `_meta["opencu/error"]`. These stops
 need host action:
 
-- `USER_STOPPED` (Windows, physical Esc) and `STOPPED_BY_PERSON` (macOS, menu
+- `USER_STOPPED` (Windows, physical Esc or closing/minimizing the agent desktop) and `STOPPED_BY_PERSON` (macOS, menu
   Stop): the person stopped OpenCU. The latch lives on the connection, so a
   reconnect would silently clear it. The host must refuse further OpenCU calls
   for that agent session, without reconnecting, until the person explicitly
@@ -118,6 +118,29 @@ OpenCU has no approval step, allowlist or blocklist. The host decides which
 calls to allow. `annotations.readOnlyHint` marks tools that send no input, but
 `get_app_state` can launch the requested app. A useful approval summary is the
 tool name plus its `app` argument.
+
+## Agent desktop (0.4.0)
+
+Relay the new `agent_desktop` lifecycle tool dynamically like other tools. It
+accepts only `action: start | stop | status`; no credentials or session selector.
+The person runs `opencu setup agent-desktop` separately to approve Windows UAC
+and prepare the user-only helper. The MCP tool never performs setup or elevation.
+Missing setup returns `AGENT_DESKTOP_UNAVAILABLE`; automatic sign-in failure returns
+`AGENT_DESKTOP_SIGN_IN_REQUIRED`. Never collect or forward a session password.
+
+Start opens a visible window and routes every app tool to the child-session
+engine. The normal foreground rules still apply inside that session. Tool stop
+logs off its apps and may lose unsaved work; only confirmed cleanup permits return
+to the parent. Switching invalidates all observations and requires a new state
+read. The person's host-close/Escape stop survives stop/start and mode changes for
+the entire MCP connection; host approvals must not reconnect around it.
+
+Child transport failures/timeouts do not replace its engine, reconnect RDP, or
+fall back to the parent's desktop. Parent-engine timeout recovery above is unchanged.
+Status/cleanup are available after failure. Locking or disconnecting the parent
+ends the child without automatic resume; that lifecycle still requires Windows
+acceptance. The feature is not a file/account sandbox and macOS currently returns
+`UNSUPPORTED_ON_MACOS`. See the [Windows contract](windows-engine-contract.md#agent-desktop-040).
 
 ## Compatibility
 

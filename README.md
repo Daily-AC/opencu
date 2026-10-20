@@ -7,11 +7,13 @@ one in front. It needs no account, model credentials or proprietary runtime: any
 MCP client can start it, and the calling agent supplies the model and decides
 what to do.
 
-**Status (v0.3.3):** macOS source builds and an unsigned Windows x64 package.
+**Status (v0.4.0):** macOS source builds and an unsigned Windows x64 package.
 On the development Mac, 9 of the last 10 runs of its 18-check background GUI
 suite passed, and it has completed a handful of real tasks. It has not been
 benchmarked at scale. Read [Limitations](#limitations) before relying on it.
-The Windows engine is a foreground-only [preview](#windows-preview).
+The Windows engine uses foreground input. Version 0.4.0 adds an optional visible
+[agent desktop](#windows-agent-desktop) to isolate that input in a child session;
+its Windows acceptance is still pending.
 
 ## What it does on macOS
 
@@ -83,7 +85,7 @@ The pi coding agent can load OpenCU as an extension (tested with pi 0.83):
 
 `list_apps`, `get_app_state`, `activate_app`, `click`, `drag`, `press_key`,
 `type_text`, `paste`, `scroll`, `set_value`, `select_text`,
-`perform_secondary_action` and `run_actions`.
+`perform_secondary_action`, `run_actions` and `agent_desktop` (Windows only for now).
 
 Start with `get_app_state`. It takes a bundle identifier, app name or `.app`
 path, launches the app in the background if needed, and returns indexed
@@ -148,6 +150,14 @@ The measurements behind this section are in
 
 ### Background operation
 
+- **Windows agent desktop (0.4.0).** This implementation has not yet run its Windows
+  acceptance. It needs administrator approval once and may need one sign-out/in;
+  smart-card-only sign-in is unsupported. There is one child session per machine.
+  Its window stays visible; focusing it sends your keyboard into the child. Closing
+  it stops the connection permanently. Apps still share your account, profiles and
+  files; single-instance apps may refuse a second instance. GPU/video, RDP capture,
+  covered rendering and parent lock/disconnect require real-device checks. This is
+  UI isolation, not a security sandbox. macOS does not expose this shared tool yet.
 - **Stage Manager.** A window in the Stage Manager strip cannot become the key
   window: many commands are disabled, Chromium stops rendering its pages, and a
   screenshot may show only the thumbnail. Reading and indexed actions still work.
@@ -264,11 +274,41 @@ before updating. It prints the installed version, manifest path and desktop stat
 The package is unsigned; SmartScreen or Defender may warn or block it. Check the
 release source and your local policy; the installer does not disable protection.
 To uninstall, close OpenCU sessions and delete `%LOCALAPPDATA%\OpenCU`.
+If agent-desktop setup was used, also remove its demand-only task
+`OpenCU-AgentDesktop-<your Windows SID>` in Task Scheduler. Child-session enablement
+is a machine setting and is not automatically reversed for other applications.
 
 Programs that start OpenCU on an agent's behalf, such as remote-control services,
 follow the [host integration contract](docs/host-integration.md). Building the
 package, its offline checks, error codes and safety behavior are in the
 [Windows contract](docs/windows-engine-contract.md).
+
+### Windows agent desktop
+
+After installing 0.4.0, run this once from a **normal**, non-administrator terminal:
+
+```powershell
+& "$env:LOCALAPPDATA\OpenCU\bin\opencu.cmd" setup agent-desktop
+& "$env:LOCALAPPDATA\OpenCU\bin\opencu.cmd" doctor
+```
+
+Windows asks for UAC approval to enable child sessions. Setup then prepares the
+helper offline using the built-in .NET Framework compiler; no extra runtime is
+downloaded. If your sign-in predates enablement, sign out and back in once.
+OpenCU never asks for, accepts or stores a session password. Helper updates may
+require running setup again.
+
+The agent can call `agent_desktop` with `{"action":"start"}` to open the visible
+**OpenCU agent desktop** window. All app tools then operate inside that session,
+using ordinary foreground input while your desktop remains separate. Read fresh
+app state after starting. `{"action":"status"}` reports state and availability;
+`{"action":"stop"}` logs off the child apps, so save their work first.
+
+Closing the window or physical Escape inside its focused view permanently stops
+that MCP connection. The agent must not reconnect or restart without your explicit
+permission. A failed start or broken connection never falls back to your desktop.
+The owner-reported spike demonstrated isolation, but this implementation's startup,
+IPC and lifecycle still need the [Windows acceptance](docs/windows-engine-contract.md#agent-desktop-040).
 
 ## Development
 
