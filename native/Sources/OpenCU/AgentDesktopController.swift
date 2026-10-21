@@ -167,7 +167,7 @@ final class AgentDesktopController {
         state.stopByPerson(); failure = AgentDesktopState.stopError
         cancelConsent(); observedGeneration = nil; onInvalidate?(); event()
     }
-    /// Closing or minimizing only hides the preview; the menu bar shows it again.
+    /// Closing or minimizing tucks the preview into the Dock; the menu bar also shows it again.
     func showWindow() { window.reveal() }
     func cancelConsent() {
         consent.cancel(); consentAnswer = false; window.clearConsent()

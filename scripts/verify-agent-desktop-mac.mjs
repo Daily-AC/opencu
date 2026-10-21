@@ -27,7 +27,7 @@ const labels = [
   'Stage Manager: indexed/coordinate/CJK/shortcut/menu effects; foreground/pointer unchanged',
   'manual return: input revoked and cleanup leaves the window there',
   'tool stop: exact restoration, apps open, fresh removal, idempotence',
-  'preview window: start amid pointer activity; close/minimize hide, menu shows, keep on top, clean view, full screen; Stop latches',
+  'preview window: start amid pointer activity; close/minimize go to the Dock, Dock shows, keep on top, clean view, full screen; Stop latches',
   'EOF: pending consent and idle leave no host, stream, display or worker',
   'idle: an unused desktop returns its window and stops itself; the next app call is told',
 ];
@@ -331,14 +331,14 @@ try {
       const current = await client.desktop('status');
       assert.equal(current.state, 'running'); assert.equal(current.stoppedByPerson, false);
     };
-    await ask('Bring the OpenCU agent desktop / OpenCU agent 桌面 window forward (if it is hidden, use Show agent desktop / 显示 agent 桌面 from the black-and-white V-shaped OpenCU arrow icon in the menu bar, not the purple macOS screen-sharing indicator). Then click the red close button among the three buttons at the top left of that window itself (not the Stop / 停止 button), then type yes here.');
+    await ask('Bring the OpenCU agent desktop / OpenCU agent 桌面 window forward (it is an ordinary window and may be covered; do not use the purple macOS screen-sharing indicator). Then click the red close button among the three buttons at the top left of that window itself (not the Stop / 停止 button), then type yes here.');
     await until(async () => !(await shown()), 'preview hidden by close'); await running();
-    await ask('Click the black-and-white V-shaped OpenCU arrow icon in the menu bar (not the purple macOS screen-sharing indicator) and choose Show agent desktop / 显示 agent 桌面, then type yes here.');
-    await until(shown, 'preview shown from the menu bar');
+    await ask('Click the OpenCU agent desktop / OpenCU agent 桌面 thumbnail at the right end of the Dock; the preview should come back. Then type yes here.');
+    await until(shown, 'preview shown from the Dock');
     await ask('Click the yellow minimize button of the preview window, then type yes here.');
     await until(async () => !(await shown()), 'preview minimized'); await running();
-    await ask('Show it again from the menu bar (Show agent desktop / 显示 agent 桌面), then type yes here.');
-    await until(shown, 'preview shown again from the menu bar');
+    await ask('Show it again by clicking its thumbnail at the right end of the Dock, then type yes here.');
+    await until(shown, 'preview shown again from the Dock');
     await ask('Click the pin button (Keep on top / 置顶) at the right end of the preview title bar, then type yes here.');
     await until(async () => (await current()).layer > 0, 'preview kept on top');
     await ask('Click the pin button (Keep on top / 置顶) again to turn it off, then type yes here.');
