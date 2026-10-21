@@ -164,8 +164,8 @@ async function guarded(operation) {
 async function consent(client, fixture, approve) {
   const name = fixture.app.split('Fixture ')[1];
   console.log(approve
-    ? `>>> In the OpenCU consent card for Fixture ${name}, click MOVE ONCE (the first button) within 60 seconds, then keep hands off the mouse for 2 seconds. Do not click the preview.`
-    : `>>> In the OpenCU consent card for Fixture ${name}, click KEEP HERE (the second button) within 60 seconds. Do not click Move once or the preview.`);
+    ? `>>> In the OpenCU consent card for Fixture ${name}, click the first button (Move once / 挪过来一次) within 60 seconds, then keep hands off the mouse for 2 seconds. Do not click the preview.`
+    : `>>> In the OpenCU consent card for Fixture ${name}, click the second button (Keep here / 留在原处) within 60 seconds. Do not click the first button (Move once / 挪过来一次) or the preview.`);
   const pending = client.call('get_app_state', { app: fixture.app, includeScreenshot: !approve, disableDiff: true });
   // Attach error handling immediately while polling the independent control lane.
   pending.catch(() => {});
@@ -301,7 +301,7 @@ try {
   });
   await check(5, async () => {
     const status = await startDesktop(client);
-    await ask('No tool call is in flight. Close the OpenCU agent desktop window using its close button, then type yes here.');
+    await ask('No tool call is in flight. Close the OpenCU agent desktop / OpenCU agent 桌面 window using its title-bar close button (not the Stop / 停止 button), then type yes here.');
     await until(async () => (await client.desktop('status')).stoppedByPerson === true, 'idle person-stop event');
     for (const [name, args] of [['get_app_state', { app: a.app }], ['agent_desktop', { action: 'start' }]]) {
       assert.equal((await client.call(name, args, true))._meta['opencu/error'], 'STOPPED_BY_PERSON');

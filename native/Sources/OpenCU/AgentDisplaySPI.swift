@@ -76,7 +76,7 @@ enum AgentDisplaySPI {
         let idIMP = try method(displayClass, "displayID", result: ["I"], args: [])
 
         let descriptor = try make(descriptorClass)
-        try setObject(descriptor, "setName:", "OpenCU Agent Display" as NSString)
+        try setObject(descriptor, "setName:", PresenceStrings().text("OpenCU Agent Display") as NSString)
         try setObject(descriptor, "setQueue:", DispatchQueue.global(qos: .userInitiated) as AnyObject)
         try setUInt(descriptor, "setMaxPixelsWide:", UInt32(1728 * scale))
         try setUInt(descriptor, "setMaxPixelsHigh:", UInt32(1117 * scale))

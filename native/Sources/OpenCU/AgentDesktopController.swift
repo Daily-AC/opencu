@@ -119,7 +119,7 @@ final class AgentDesktopController {
             try Task.checkCancellation(); try requireUnlocked(checkDialog: false)
             if let failure { throw failure }
             transition(.running)
-            window.status("Watch only · Waiting for an app")
+            window.status(.watchOnly)
             let timer = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in
                 MainActor.assumeIsolated { self?.monitor() }
             }
@@ -148,11 +148,11 @@ final class AgentDesktopController {
                     self.checkReturns(frames: frames)
                     if let (id, previous) = self.observedFrame, let current = frames[id], !AgentDisplayGeometry.close(previous, current) { self.invalidate() }
                 }
-                self.window.status("Watch only · Waiting for an app")
+                self.window.status(.watchOnly)
             } catch let error as OpenCUError where !AgentDesktopAdmissionPolicy.tearsDownDesktop(error.code) {
                 self.inputPause = error
                 self.onInputPause?()
-                self.window.status(error.code == "SCREEN_LOCKED" ? "Paused while this Mac is locked" : "Input paused for a macOS confirmation")
+                self.window.status(error.code == "SCREEN_LOCKED" ? .locked : .confirmation)
             } catch { self.fail(error as? OpenCUError ?? OpenCUError("AGENT_DESKTOP_LOST", error.localizedDescription)) }
         }
     }
