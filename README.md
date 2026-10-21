@@ -13,9 +13,8 @@ suite passed, and it has completed a handful of real tasks. It has not been
 benchmarked at scale. Read [Limitations](#limitations) before relying on it.
 The Windows engine uses foreground input. Version 0.4.0 adds an optional visible
 [agent desktop](#windows-agent-desktop) to isolate that input in a child session;
-the 0.4.0 baseline passed acceptance on a Windows 11 VM with locked-parent
-input refused. This branch adds limited indexed control patterns while locked;
-that new path **needs Windows acceptance** and is not a release.
+locked-parent indexed button clicks and value setting passed acceptance on a
+Windows 11 VM, while ordinary input remained blocked. See the measured scope below.
 
 ## What it does on macOS
 
@@ -159,13 +158,12 @@ The measurements behind this section are in
   ([evidence](evidence/opencu-windows-agent-desktop-2026-10-21-v0.4.0.json)).
   Administrator approval is needed once, possibly followed by one sign-out/in;
   smart-card-only sign-in is unsupported and unmeasured. While the parent screen
-  is locked, the child stays alive for reads and screenshots. This branch also
-  permits indexed single-left click, ValuePattern `set_value` and listed secondary
-  actions through supported accessibility patterns. **The new pattern path needs
-  Windows acceptance.** Synthetic input and foreground acquisition failed in the
-  locked-child probe; an MSAA button default action took effect. Other input and
-  launches return `SCREEN_LOCKED`. Nobody at the machine can see the child
-  while the lock screen is shown.
+  is locked, the child stays alive for reads, screenshots and supported indexed
+  control patterns. Locked button click/value setting and refused typing were
+  accepted on a Windows 11 VM; the button's selected pattern was not recorded.
+  Other input returns `SCREEN_LOCKED`. Read-triggered launch without OpenCU
+  activation is restored and **needs Windows acceptance**. Nobody at the machine
+  can see the child while the lock screen is shown.
   Status reports `parentLocked`. After unlocking, close the host window or click
   the view and press Escape to stop; the caller can also end the MCP connection.
   Console/remote disconnect and logoff still end the child. One child session per
@@ -333,22 +331,34 @@ app state after starting. `{"action":"status"}` reports state and availability;
 Locking the parent screen keeps the child alive for reading and screenshots.
 Only the locked child uses supported patterns for a single left indexed `click`
 without modifiers or duration, `set_value` via ValuePattern, and listed
-`perform_secondary_action`. Click chooses Invoke, Toggle, SelectionItem.Select,
+`perform_secondary_action`. Click chooses SelectionItem.Select, Invoke, Toggle,
 ExpandCollapse (expand collapsed/partially expanded, collapse expanded), then a
 nonempty MSAA default action. Selection uses capabilities, never control names.
 It calls one action, with no synthetic-input fallback or replay. Missing patterns
 return `UNSUPPORTED_ACTION`. Coordinate or modified/multiple clicks, typing, keys,
-scroll, drag, paste, activation, batch waits and launches still return `SCREEN_LOCKED`.
+scroll, drag, paste, activation and batch waits still return `SCREEN_LOCKED`.
+`get_app_state` may launch a child app without OpenCU activating it; this restored
+launch-while-locked path **needs Windows acceptance**.
 
-Each completed pattern call returns fresh state/diff. No observed accessibility
-change means an unknown outcome and stops the batch; explicitly read state before
-continuing. A three-second provider deadline also returns unknown, and a still
-outstanding call blocks further writes. Provider success does not prove the intended
-effect. The owner measured an MSAA button click while locked; Invoke/Value/Toggle
-worked on WinForms, WPF and Chromium in earlier unlocked tests, but could activate
-their windows. Those focus changes are acceptable inside the agent child. **This
-new engine path still needs Windows acceptance**, including its Toggle fix and
-provider timeout behavior. The ordinary and unlocked paths are unchanged.
+Each completed pattern call returns fresh state/diff. A changed observation stops
+any remaining batch actions because indexes were refreshed. No change or an error
+after dispatch returns unknown outcome; explicitly read state before continuing.
+An already issued call is never reported as a plain failure or replayed. A client
+call still outstanding after its three-second deadline blocks further writes;
+a provider timeout may return earlier without leaving a pending client call.
+OpenCU sends no synthetic input on this path; provider implementations can differ.
+The ordinary and unlocked paths are unchanged.
+
+On 2026-10-21, from a clean Windows 11 26H2 VM checkpoint, the owner passed
+verify-gui-win three times (40/40 each), the package verifier, and the agent-desktop
+suite with `--locked-parent` behind the real lock screen. The indexed Increment
+click changed 10 to 11, `set_value` produced "locked pattern value", `type_text`
+returned SCREEN_LOCKED, and unlock retained the same child with no replay.
+Hardware concurrency, parked-pointer, hover, Escape and close regressions also
+passed. A locked indexed click on the text box returned UNSUPPORTED_ACTION in
+about two seconds. The run did not record which pattern/default action delivered
+the button click; Invoke versus MSAA must not be inferred.
+
 The child window is hidden by the lock screen, so nobody at the machine can see it. `status` reports `parentLocked: true` or `false`.
 Unlocking does not restart anything: the same child and host window remain.
 The agent must issue a new call, under the normal input rules.
@@ -361,7 +371,7 @@ permission. A failed start or broken connection never falls back to your desktop
 After a failed start, app tools remain blocked until `agent_desktop` with
 `{"action":"stop"}` finishes cleanup. This never clears a person's stop. The
 [Windows contract](docs/windows-engine-contract.md#agent-desktop-040) separates the
-measured VM results from the follow-up fixes still awaiting Windows acceptance.
+measured VM results from the remaining provider and follow-up regression checks.
 
 ## Development
 

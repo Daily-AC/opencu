@@ -103,27 +103,46 @@ This distinguishes synthetic input from semantic accessibility calls. The earlie
 and Toggle functional on WinForms, WPF and Chromium (Edge --app), but activating
 the target. That disqualified general same-desktop background UIA. Activation
 inside an agent-owned child is acceptable; it does not authorize UIA operations
-on the person's desktop while locked. Neither measurement accepts the new engine
-implementation across providers.
+on the person's desktop while locked. These earlier measurements did not accept the engine implementation across providers.
+
+## Engine acceptance (owner, 2026-10-21)
+
+On 2026-10-21, from a clean Windows 11 26H2 VM checkpoint, the owner passed
+verify-gui-win three times (40/40 each), the package verifier, and the agent-desktop
+suite with `--locked-parent` behind the real lock screen. The indexed Increment
+click changed 10 to 11, `set_value` produced "locked pattern value", `type_text`
+returned SCREEN_LOCKED, and unlock retained the same child with no replay.
+Hardware concurrency, parked-pointer, hover, Escape and close regressions also
+passed. A locked indexed click on the text box returned UNSUPPORTED_ACTION in
+about two seconds. The run did not record which pattern/default action delivered
+the button click; Invoke versus MSAA must not be inferred.
+
+The private job artifacts `vm-acceptance/ad-14-locked.txt` and `chain.log` record
+the locked suite and successful command exits. They are not committed. The checks
+below distinguish that accepted implementation from subsequent review corrections.
 
 ## Branch behavior and acceptance boundary
 
 The 0.4.0 baseline at `1cf23f8` accepted pointer isolation and explicit locked-input
-refusal. This branch keeps version 0.4.0 and has not been released. Only a child
-configured by the authenticated bridge with `--agent-parent-session` and a
+refusal. Only an engine in a WTS-verified RDP process session, configured by
+the authenticated bridge with `--agent-parent-session` and a
 positively verified locked parent enters the new pattern path. Ordinary desktop
 and unlocked-child routing remain unchanged. Unknown parent state refuses input.
 
 Supported actions are plain single-left indexed click (no modifiers/duration),
 ValuePattern `set_value`, and listed `perform_secondary_action`. Click selects
-Invoke, Toggle, SelectionItem.Select, ExpandCollapse, then a nonempty Legacy MSAA
+SelectionItem.Select, Invoke, Toggle, ExpandCollapse, then a nonempty Legacy MSAA
 default action. ExpandCollapse expands collapsed/partially expanded controls,
 collapses expanded controls, and skips leaf nodes. Names and roles do not choose
 a pattern. A failed provider call never triggers another pattern or input replay.
 Missing capability returns UNSUPPORTED_ACTION; read-only Value returns
 ATTRIBUTE_NOT_SETTABLE. RangeValue, scroll, coordinate/modified/multiple clicks,
-typing, keys, paste, drag, activation, waits and launches are not enabled while locked.
+typing, keys, paste, drag, activation and waits are not enabled while locked.
 Their SCREEN_LOCKED message identifies the indexed actions that remain available.
+Read-triggered CreateProcess launches are allowed without OpenCU activation; this
+restored launch-while-locked behavior **needs Windows acceptance**. The independent
+WTSClientProtocolType query rejects console, failed, truncated or unknown results
+before accepting the parent-session flag. The bridge still checks the child relationship.
 
 A dedicated MTA worker reuses the bounded delivery from the unmerged background
 branch, without that branch's general background mode, scroll or foreground
@@ -133,20 +152,28 @@ mutation boundary. Ordinary activity/held keys are ignored only on this locked
 path; a prior interrupted action still requires a read. The normal visible child
 indicator remains, though the parent lock screen hides the child from the person.
 
-The provider deadline is three seconds; an already entered call cannot be
-cancelled. Timeout returns the existing unknown-outcome notice, invalidates
-indexes and stops a batch, with no automatic read or replay. Only one worker can
-be outstanding; further writes (including after unlock) and read-triggered
-launches are blocked until it finishes. Explicit reads remain available. This
+The worker deadline is three seconds; an already entered call cannot be cancelled.
+A provider timeout may return around two seconds, with no client call left pending.
+Only calls still outstanding after the deadline block further writes and launches,
+including after unlock. A preparation timeout/lock change before dispatch says no
+pattern was sent. Once dispatch starts, every subsequent error or unlock during
+the fresh read returns unknown outcome with explicit dispatched wording. Target
+identity is not revalidated after a call that can legitimately close its window or
+exit the app. Escape also preserves unknown outcome and latches the connection.
+Cancellation and dispatch marking are synchronized to avoid false preflight claims.
+Explicit reads remain available, subject to the existing person-stop rules. This
 uses the documented [MTA sharing model](https://learn.microsoft.com/en-us/windows/win32/com/processes--threads--and-apartments)
 and accounts for [blocking Invoke providers](https://learn.microsoft.com/en-us/dotnet/api/system.windows.automation.invokepattern.invoke).
 
 After a completed call, the engine reads fresh state using the existing scope.
 Window summaries and accessibility element lines are compared, excluding capture
 and lock guidance. If nothing changed, the response includes that state plus an
-unknown-outcome notice and requires an explicit read. A change is an observation,
-not proof of the requested business effect; asynchronous/provider-internal effects
-can be missed. Failed follow-up reads also report unknown without replay.
+unknown-outcome notice and invalidates native indexes, requiring an explicit read.
+A changed observation also stops any remaining batch actions and returns the fresh
+state, because indexes may have shifted. MCP exposes the selected route in the
+short structured field `_meta["opencu/pattern"]`, including dispatched unknown
+outcomes. A change is an observation, not proof of the requested business effect;
+asynchronous/provider-internal effects can be missed. Failed follow-up reads also report unknown without replay.
 
 The old branch's zero-code Toggle failure is explained by the pinned windows-rs
 0.62.2 source: a successful null pattern pointer becomes `Error::empty()` with
@@ -156,8 +183,8 @@ only successful null or UIA_E_NOTSUPPORTED means absent. Actual failures propaga
 The offline regression exercises this distinction; the real checkbox still needs
 Windows verification.
 
-**New path: Windows acceptance required.** From an authorized idle VM's foreground
-terminal with child sessions already set up, run:
+To repeat the accepted case and record the selected patterns, use an authorized
+idle VM's foreground terminal with child sessions already set up:
 
 ```powershell
 node scripts/verify-agent-desktop-win.mjs --allow-desktop --locked-parent
@@ -167,13 +194,17 @@ At the prompt, manually lock the parent with Win+L and leave it locked. The suit
 waits for parentLocked=true, captures the child, clicks the fixture button once,
 sets its text through ValuePattern, and confirms type_text returns SCREEN_LOCKED
 with unchanged counter/text. It asks for manual unlock only after those checks,
-then checks the same session/host and no replay. It never collects credentials or
+then checks the same session/host and no replay. It also launches a second disposable fixture through get_app_state while locked,
+checks its child session and screenshot, and records both action pattern fields.
+This added launch check has not run on Windows. It never collects credentials or
 unlocks automatically. Evidence stays in ignored `.cache/agent-desktop-acceptance-*`.
 
 Also verify Toggle (including absent Invoke), SelectionItem, ExpandCollapse and
 MSAA-only controls, named secondary actions, disabled/read-only/missing patterns,
 a no-op provider, modal/late completion, pending-write refusal, lock/unlock during
-action, unknown lock state, and physical Escape. Keep the unlocked 40-check suite
+action, unknown lock state, and Escape during provider delivery. Recheck the
+review changes: selection before Invoke, batch truncation, post-dispatch unknown
+outcomes, and console-session flag refusal. Keep the unlocked 40-check suite
 and setup/update/watch-only/pointer isolation/close/EOF regressions. Disconnect and
 logoff must still end the child; unlocking must never revive a stopped connection.
 No Windows GUI test was run from the implementation Mac.
