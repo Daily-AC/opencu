@@ -6,7 +6,9 @@
 > connection-wide stop latch. Run `scripts/verify-agent-desktop-mac.mjs --owner-present`
 > for product acceptance; do not treat the old two-connection probe as product
 > consent or lifecycle verification. This history and its measured limitations
-> remain relevant. External monitors and the new product UI are not yet verified.
+> remain relevant. External monitors remain untested. The owner passed seven
+> product checks before rebase on 2026-10-21 with one built-in display and Stage
+> Manager on ([fixture evidence](../evidence/opencu-macos-agent-desktop-2026-10-21.json)).
 
 
 This is a feasibility experiment, not a claim that macOS offers an invisible or

@@ -1,0 +1,62 @@
+{
+  "test": "macos-agent-desktop",
+  "date": "2026-10-21",
+  "environment": {
+    "platform": "macOS",
+    "physicalDisplay": "single built-in display",
+    "stageManager": "on",
+    "source": "owner-reported setup; verifier requires one baseline display and Stage Manager"
+  },
+  "provenance": {
+    "phase": "before rebase onto released v0.4.0",
+    "branchHeadBeforeRebase": "66e3cde7cd468b3527f8fbc8d88ebe01a2f6aa26",
+    "sourceReportSHA256": "1488ddfc8f0dca0c7e5c9c25f2062247db268d89777a3e338cac2577946e0d68",
+    "verifier": "scripts/verify-agent-desktop-mac.mjs --owner-present",
+    "promptVariant": "local copy with Chinese owner prompts",
+    "returnStimulus": "fixture-only move-to-main-display command file; fixture moves its own window outside OpenCU, not a person dragging it"
+  },
+  "startedAt": "2026-10-21T02:52:35.780Z",
+  "finishedAt": "2026-10-21T02:55:49.975Z",
+  "checks": [
+    {
+      "name": "start: visible preview, one display, no admitted windows, foreground/pointer unchanged",
+      "result": "PASS"
+    },
+    {
+      "name": "consent: decline reduced; two exact windows require separate approvals",
+      "result": "PASS"
+    },
+    {
+      "name": "Stage Manager: indexed/coordinate/CJK/shortcut/menu effects; foreground/pointer unchanged",
+      "result": "PASS"
+    },
+    {
+      "name": "manual return: input revoked and cleanup leaves the window there",
+      "result": "PASS"
+    },
+    {
+      "name": "tool stop: exact restoration, apps open, fresh removal, idempotence",
+      "result": "PASS"
+    },
+    {
+      "name": "idle host close: later calls observe permanent person stop; cleanup confirmed",
+      "result": "PASS"
+    },
+    {
+      "name": "EOF: pending consent and idle leave no host, stream, display or worker",
+      "result": "PASS"
+    }
+  ],
+  "cleanupErrors": [],
+  "maxSampleGapMs": 101.84733299998334,
+  "ok": true,
+  "limits": [
+    "Owner-run acceptance before rebase; no post-rebase 0.4.1 GUI run is claimed.",
+    "Window return was simulated by the disposable fixture itself; it does not prove use of a real application Window menu.",
+    "Foreground/pointer sampling can miss transitions shorter than the measured sampling interval.",
+    "External monitors, other display layouts, other applications and macOS versions are not established by this run."
+  ],
+  "separateOwnerObservations": [
+    "In earlier runs, the first capture from a new build path showed the macOS capture reminder once; it named opencu. This is owner-reported and is not a check in this pass report."
+  ]
+}
