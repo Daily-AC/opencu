@@ -191,9 +191,10 @@ The measurements behind this section are in
   retain `BACKGROUND_INPUT_UNSUPPORTED`. App launch may appear on your display
   first. Creating the display can push an on-stage window into the Stage Manager
   strip. External monitors are untested; unsupported layouts are refused. The
-  owner passed all seven product checks before rebase on 2026-10-21 with one
-  built-in display and Stage Manager on ([evidence](evidence/opencu-macos-agent-desktop-2026-10-21.json)).
-  This does not establish other display layouts or a post-rebase GUI run.
+  owner passed all seven product checks on 2026-10-21 on macOS 26.6 with one
+  built-in display and Stage Manager on, before and after the 0.4.1 rebase and
+  localization ([evidence](evidence/opencu-macos-agent-desktop-2026-10-21.json)).
+  This does not establish other display layouts.
 - **Stage Manager.** A window in the Stage Manager strip cannot become the key
   window: many commands are disabled, Chromium stops rendering its pages, and a
   screenshot may show only the thumbnail. Reading and indexed actions still work.
