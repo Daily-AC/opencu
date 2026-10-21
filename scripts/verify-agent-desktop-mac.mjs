@@ -162,7 +162,10 @@ async function guarded(operation) {
   finally { activeGuard = undefined; }
 }
 async function consent(client, fixture, approve) {
-  console.log(`In the OpenCU consent card for Fixture ${fixture.app.split('Fixture ')[1]}, click ${approve ? 'Move once' : 'Keep here'} within 60 seconds. Do not click the preview. Keep hands off the mouse for 2 seconds after clicking Move once, then wait for the result.`);
+  const name = fixture.app.split('Fixture ')[1];
+  console.log(approve
+    ? `>>> In the OpenCU consent card for Fixture ${name}, click MOVE ONCE (the first button) within 60 seconds, then keep hands off the mouse for 2 seconds. Do not click the preview.`
+    : `>>> In the OpenCU consent card for Fixture ${name}, click KEEP HERE (the second button) within 60 seconds. Do not click Move once or the preview.`);
   const pending = client.call('get_app_state', { app: fixture.app, includeScreenshot: !approve, disableDiff: true });
   // Attach error handling immediately while polling the independent control lane.
   pending.catch(() => {});
