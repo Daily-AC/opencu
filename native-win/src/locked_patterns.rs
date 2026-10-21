@@ -1,10 +1,10 @@
 //! Platform-independent policy and bounded execution for UIA-only delivery.
 use crate::{Error, Result};
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::{
     sync::{
         atomic::{AtomicBool, Ordering::SeqCst},
-        mpsc, Arc,
+        mpsc, Arc, Mutex,
     },
     thread,
     time::{Duration, Instant},
@@ -55,22 +55,80 @@ pub fn observable(text: &str) -> String {
 pub fn select_click<T>(
     mut query: impl FnMut(&'static str) -> Result<Option<T>>,
 ) -> Result<(&'static str, T)> {
-    for name in ["Invoke", "Toggle", "Select", "ExpandCollapse", "DoDefaultAction"] {
+    for name in ["Select", "Invoke", "Toggle", "ExpandCollapse", "DoDefaultAction"] {
         if let Some(pattern) = query(name)? {
             return Ok((name, pattern));
         }
     }
     Err(required())
 }
+/// The bridge also verifies the child relationship; the native flag alone must
+/// not enable relaxed delivery in a console (or unverified) process session.
+pub fn remote_session(protocol: Option<u16>) -> Result<()> {
+    if protocol == Some(2) { return Ok(()); }
+    Err(Error::new("INVALID_ARGUMENT", "Agent-parent mode requires a WTS-verified RDP process session"))
+}
+pub fn require_observation<T>(snapshot: Option<T>) -> Result<T> {
+    snapshot.ok_or_else(|| Error::new("OBSERVATION_REQUIRED", "Read this application's state before input"))
+}
+pub fn unknown(result: &mut Value, reason: &str, stop: Option<&Error>) {
+    result["outcome"] = json!("unknown");
+    result["message"] = json!(format!("The pattern call was dispatched; its effect is unconfirmed ({reason}). Read fresh get_app_state before continuing; do not repeat the action automatically."));
+    if let Some(error) = stop.filter(|e| e.code == "USER_STOPPED") {
+        result["stop"] = error.json();
+    }
+}
+/// Cancellation and issue() share a lock: after a preflight refusal the worker
+/// cannot later mark a call issued. Once issued, every error is an unknown result.
+pub fn delivery_result(app: Value, issued: Option<&str>, completion: Result<Option<()>>) -> Result<Value> {
+    let Some(pattern) = issued else {
+        let error = match completion {
+            Err(e) => e,
+            _ => Error::new("UIA_TIMEOUT", "Pattern preparation did not complete"),
+        };
+        return Err(if error.message.contains("No pattern was sent.") { error }
+            else { Error::new(error.code, format!("{} No pattern was sent.", error.message)) });
+    };
+    let mut result = json!({"ok":true,"lockedPattern":true,"app":app,"pattern":pattern});
+    match completion {
+        Ok(Some(())) => (),
+        Ok(None) => unknown(&mut result, "provider deadline elapsed; the call may complete later", None),
+        Err(e) => unknown(&mut result, e.code, Some(&e)),
+    }
+    Ok(result)
+}
+/// Shared by native dispatch and host tests. Even an unlock/stop during the read
+/// preserves any fresh state, but invalidates indexes on every unknown outcome.
+pub fn finish_observation<T>(slot: &mut Option<T>, mut result: Value,
+    observed: Result<(Value, T)>, fence: Result<()>, changed: impl FnOnce(&T) -> bool) -> Value {
+    *slot = None;
+    let mut fresh = None;
+    match observed {
+        Ok((state, snapshot)) => {
+            result["state"] = state;
+            if changed(&snapshot) { fresh = Some(snapshot); }
+            else { unknown(&mut result, "no accessibility change was observed", None); }
+        }
+        Err(e) => unknown(&mut result, &format!("fresh observation failed: {}", e.code), Some(&e)),
+    }
+    if let Err(e) = fence { unknown(&mut result, e.code, Some(&e)); }
+    if result["outcome"] != "unknown" { *slot = fresh; }
+    result
+}
+#[derive(Default)]
+struct Delivery {
+    cancelled: bool,
+    issued: Option<&'static str>,
+}
 #[derive(Clone)]
 pub struct Permit {
-    cancelled: Arc<AtomicBool>,
+    delivery: Arc<Mutex<Delivery>>,
     deadline: Instant,
 }
 impl Permit {
     /// Call immediately before each mutation; a timed-out preparation cannot deliver later.
     pub fn check(&self) -> Result<()> {
-        if self.cancelled.load(SeqCst) || Instant::now() >= self.deadline {
+        if self.delivery.lock().unwrap().cancelled || Instant::now() >= self.deadline {
             Err(Error::new(
                 "UIA_TIMEOUT",
                 "Locked-parent operation expired; no further pattern was sent",
@@ -79,9 +137,17 @@ impl Permit {
             Ok(())
         }
     }
-    fn cancel(&self) {
-        self.cancelled.store(true, SeqCst);
+    pub fn issue(&self, pattern: &'static str) -> Result<()> {
+        let mut delivery = self.delivery.lock().unwrap();
+        if delivery.cancelled || Instant::now() >= self.deadline {
+            return Err(Error::new("UIA_TIMEOUT", "Pattern preparation expired"));
+        }
+        delivery.issued = Some(pattern);
+        Ok(())
     }
+    fn cancel(&self) { self.delivery.lock().unwrap().cancelled = true; }
+    fn issued(&self) -> Option<&'static str> { self.delivery.lock().unwrap().issued }
+
 }
 pub struct Pending<T> {
     rx: mpsc::Receiver<T>,
@@ -94,7 +160,7 @@ impl<T: Send + 'static> Pending<T> {
         work: impl FnOnce(Permit) -> T + Send + 'static,
     ) -> Result<Self> {
         let permit = Permit {
-            cancelled: Arc::new(AtomicBool::new(false)),
+            delivery: Arc::new(Mutex::new(Delivery::default())),
             deadline: Instant::now() + timeout,
         };
         let done = Arc::new(AtomicBool::new(false));
@@ -118,6 +184,7 @@ impl<T: Send + 'static> Pending<T> {
             })?;
         Ok(Self { rx, done, permit })
     }
+    pub fn issued(&self) -> Option<&'static str> { self.permit.issued() }
     pub fn finished(&self) -> bool {
         self.done.load(SeqCst)
     }
@@ -141,7 +208,10 @@ impl<T: Send + 'static> Pending<T> {
                 .recv_timeout(remaining.min(Duration::from_millis(10)))
             {
                 Ok(result) => {
-                    fence()?;
+                    if let Err(e) = fence() {
+                        self.permit.cancel();
+                        return Err(e);
+                    }
                     return Ok(Some(result));
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => (),
@@ -211,7 +281,7 @@ mod tests {
             "Toggle".into(),
             "Invoke".into(),
         ];
-        for expected in ["Invoke", "Toggle", "Select", "ExpandCollapse", "DoDefaultAction"] {
+        for expected in ["Select", "Invoke", "Toggle", "ExpandCollapse", "DoDefaultAction"] {
             assert_eq!(
                 select_click(|a| Ok(available.iter().any(|s| s == a).then_some(())))
                     .unwrap()
@@ -235,7 +305,7 @@ mod tests {
             Err(Error::new("UIA_TIMEOUT", "provider timed out"))
         });
         assert_eq!(result.unwrap_err().code, "UIA_TIMEOUT");
-        assert_eq!(calls, vec!["Invoke"]);
+        assert_eq!(calls, vec!["Select"]);
     }
     #[test]
     fn already_entered_provider_can_finish_after_unknown_without_replay() {
@@ -291,5 +361,85 @@ mod tests {
         assert!(!observed.recv_timeout(Duration::from_secs(1)).unwrap());
         let job = Pending::start(Duration::from_secs(1), |_| 42).unwrap();
         assert_eq!(job.wait(|| Ok(())).unwrap(), Some(42));
+    }
+}
+
+#[cfg(test)]
+mod review_tests {
+    use super::*;
+    #[test]
+    fn selection_wins_over_invoke_without_querying_it() {
+        let mut queries = vec![];
+        assert_eq!(select_click(|name| {
+            queries.push(name);
+            Ok(matches!(name, "Select" | "Invoke").then_some(()))
+        }).unwrap().0, "Select");
+        assert_eq!(queries, ["Select"]);
+    }
+    #[test]
+    fn console_unknown_and_non_rdp_sessions_cannot_enable_patterns() {
+        for protocol in [None, Some(0), Some(1), Some(3)] {
+            assert_eq!(remote_session(protocol).unwrap_err().code, "INVALID_ARGUMENT");
+        }
+        assert!(remote_session(Some(2)).is_ok());
+    }
+    #[test]
+    fn issued_errors_are_unknown_but_preflight_is_honest() {
+        for code in ["STALE_WINDOW", "ELEVATED_TARGET", "WINDOWS_API_ERROR", "UIA_TIMEOUT", "SCREEN_LOCKED", "USER_STOPPED"] {
+            let result = delivery_result(json!({}), Some("Invoke"), Err(Error::new(code, "fixture"))).unwrap();
+            assert_eq!(result["outcome"], "unknown");
+            assert_eq!(result["pattern"], "Invoke");
+            assert!(result["message"].as_str().unwrap().contains("was dispatched"));
+            assert_eq!(result["stop"]["code"].as_str(), (code == "USER_STOPPED").then_some(code));
+        }
+        let error = delivery_result(json!({}), None, Err(Error::new("SCREEN_LOCKED", "Parent state changed"))).unwrap_err();
+        assert!(error.message.contains("No pattern was sent."));
+        assert!(!error.message.contains("may have run"));
+        assert!(!delivery_result(json!({}), None, Ok(None)).unwrap_err().message.contains("was dispatched"));
+    }
+    #[test]
+    fn unknown_invalidates_native_indexes_until_explicit_observation() {
+        for failure in [Some("SCREEN_LOCKED"), Some("USER_STOPPED"), None] {
+            let mut snapshot = Some(42);
+            let result = delivery_result(json!({}), Some("Invoke"), Ok(Some(()))).unwrap();
+            let fence = failure.map_or(Ok(()), |code| Err(Error::new(code, "fixture")));
+            let result = finish_observation(&mut snapshot, result, Ok((json!({"text":"fresh"}), 43)), fence,
+                |_| failure.is_some()); // None exercises unchanged observation.
+            assert_eq!(result["outcome"], "unknown");
+            assert_eq!(result["state"]["text"], "fresh");
+            assert_eq!(require_observation(snapshot.as_ref()).unwrap_err().code, "OBSERVATION_REQUIRED");
+            snapshot = Some(44); // Explicit get_app_state installs the fresh snapshot.
+            assert_eq!(*require_observation(snapshot.as_ref()).unwrap(), 44);
+        }
+        let mut snapshot = Some(42);
+        let result = finish_observation(&mut snapshot, json!({}), Err(Error::new("STALE_WINDOW", "closed")), Ok(()), |_| true);
+        assert_eq!(result["outcome"], "unknown");
+        assert!(snapshot.is_none());
+    }
+    #[test]
+    fn cancellation_prevents_late_issue_and_issued_call_is_not_replayed() {
+        let (release, blocked) = mpsc::channel();
+        let (sent, observed) = mpsc::channel();
+        let pending = Pending::start(Duration::from_secs(1), move |permit| {
+            blocked.recv().unwrap();
+            sent.send(permit.issue("Toggle").is_ok()).unwrap();
+        }).unwrap();
+        assert!(pending.wait(|| Err(Error::new("SCREEN_LOCKED", "unlock"))).is_err());
+        assert_eq!(pending.issued(), None);
+        release.send(()).unwrap();
+        assert!(!observed.recv_timeout(Duration::from_secs(1)).unwrap());
+
+        let (entered, ready) = mpsc::channel();
+        let (release, blocked) = mpsc::channel();
+        let pending = Pending::start(Duration::from_secs(1), move |permit| {
+            permit.issue("Invoke").unwrap();
+            entered.send(()).unwrap();
+            blocked.recv().unwrap();
+        }).unwrap();
+        ready.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(pending.wait(|| Err(Error::new("SCREEN_LOCKED", "unlock"))).is_err());
+        assert_eq!(pending.issued(), Some("Invoke"));
+        assert!(!pending.finished());
+        release.send(()).unwrap();
     }
 }

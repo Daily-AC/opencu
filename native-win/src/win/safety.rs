@@ -41,6 +41,14 @@ pub unsafe fn configure_agent_parent(session: u32) -> Result<()> {
     if session == 0 || session == u32::MAX || session == own || own == 0 {
         return Err(Error::new("INVALID_ARGUMENT", "Agent parent must be a different interactive session"));
     }
+    let mut buffer = PWSTR::null();
+    let mut bytes = 0;
+    let queried = WTSQuerySessionInformationW(None, own, WTSClientProtocolType, &mut buffer, &mut bytes);
+    let protocol = if queried.is_ok() && !buffer.is_null() && bytes as usize >= std::mem::size_of::<u16>() {
+        Some(*(buffer.0 as *const u16))
+    } else { None };
+    if !buffer.is_null() { WTSFreeMemory(buffer.0 as _); }
+    opencu_engine::locked_patterns::remote_session(protocol)?;
     AGENT_PARENT_SESSION.set(session)
         .map_err(|_| Error::new("INVALID_ARGUMENT", "Agent parent session is already configured"))
 }
@@ -580,7 +588,7 @@ pub unsafe fn locked_pattern_request(method: &str, args: &serde_json::Value) -> 
 }
 unsafe fn require_locked_parent() -> Result<()> {
     if agent_parent_session().and_then(|id| super::session_locked(id)) != Some(true) {
-        return Err(Error::new("SCREEN_LOCKED", "The parent lock state changed or cannot be verified. Remaining pattern delivery stopped; an earlier call may have run. Read state; no action was replayed."));
+        return Err(Error::new("SCREEN_LOCKED", "The parent lock state changed or cannot be verified. No pattern was sent. Read fresh state before choosing another action."));
     }
     Ok(())
 }

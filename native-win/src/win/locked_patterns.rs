@@ -7,7 +7,7 @@ use opencu_engine::{
     locked_patterns::{self, Pending, Permit},
     string, Error, Result,
 };
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::time::Duration;
 use windows::{
     core::*,
@@ -56,18 +56,11 @@ impl Worker {
         self.pending = Some(Pending::start(Duration::from_secs(3), move |permit| {
             work.run(permit)
         })?);
-        let result = self.pending.as_ref().unwrap().wait(|| g.check())?;
-        g.finish()?;
-        match result {
-            Some(Ok(pattern)) => {
-                Ok(
-                    json!({"ok":true,"lockedPattern":true,"app":s.app.json(),"pattern":pattern}),
-                )
-            }
-            Some(Err(e)) if e.code != "UIA_TIMEOUT" => Err(e),
-            _ => Ok(json!({"ok":true,"lockedPattern":true,"app":s.app.json(),"outcome":"unknown",
-                "message":"The locked-parent UI Automation call did not confirm completion within its deadline. The app may have opened a dialog. Read state before continuing; do not repeat the action automatically. An already dispatched provider call cannot be cancelled."})),
-        }
+        let pending = self.pending.as_ref().unwrap();
+        let completion = pending.wait(|| g.check())
+            .and_then(|result| result.transpose())
+            .and_then(|result| g.finish().map(|_| result.map(|_| ())));
+        locked_patterns::delivery_result(s.app.json(), pending.issued(), completion)
     }
 }
 // Engine and worker both join the process MTA, which remains alive for the
@@ -168,9 +161,10 @@ impl MtaWork {
             _ => return Err(locked_patterns::required()),
         };
         self.checkpoint(permit)?;
-        let name = action.send()?;
-        self.checkpoint(permit)?;
-        Ok(name.into())
+        permit.issue(action.name())?;
+        // The provider may close this window or exit the app. Never revalidate
+        // its target after dispatch, and never turn a dispatched error into failure.
+        action.send().map(String::from)
     }
 }
 unsafe fn query<T: Interface>(e: &IUIAutomationElement, id: UIA_PATTERN_ID) -> Result<Option<T>> {
@@ -223,6 +217,19 @@ unsafe fn named(e: &IUIAutomationElement, name: &str) -> Result<Option<Action>> 
     })
 }
 impl Action {
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Invoke(_) => "Invoke",
+            Self::Toggle(_) => "Toggle",
+            Self::Select(_, action) => match action.as_str() {
+                "Select" => "Select", "AddToSelection" => "AddToSelection", _ => "RemoveFromSelection",
+            },
+            Self::Expand(_, true) => "Expand",
+            Self::Expand(_, false) => "Collapse",
+            Self::Legacy(_) => "DoDefaultAction",
+            Self::Value(_, _) => "Value.SetValue",
+        }
+    }
     unsafe fn send(self) -> Result<&'static str> {
         Ok(match self {
             Self::Invoke(p) => {
