@@ -20,8 +20,9 @@ private final class FirstMouseButton: NSButton {
 }
 
 /// Local watch-only presentation. No target event forwarding or activation.
-/// An ordinary window: closing or minimizing only hides it, and the menu bar shows
-/// it again. Only Stop, the menu-bar Stop and macOS Stop Sharing end the desktop.
+/// An ordinary window: closing tucks it into the Dock like minimizing, and its Dock
+/// tile or the menu bar shows it again. Only Stop, the menu-bar Stop and macOS Stop
+/// Sharing end the desktop.
 @MainActor
 final class AgentDesktopWindow: NSObject, NSWindowDelegate {
     private static let frameName = "OpenCU agent desktop"
@@ -40,7 +41,7 @@ final class AgentDesktopWindow: NSObject, NSWindowDelegate {
     private var accessory: NSTitlebarAccessoryViewController?
     private var top: (normal: NSLayoutConstraint, clean: NSLayoutConstraint)?
     private var hovering = false
-    private var hideAfterFullScreen = false
+    private var minimizeAfterFullScreen = false
     private var decision: ((Bool) -> Void)?
     var onStop: (() -> Void)?
     /// Reports the picture's on-screen size in pixels after each settled resize.
@@ -118,7 +119,7 @@ final class AgentDesktopWindow: NSObject, NSWindowDelegate {
     /// Shows a hidden or minimized window again without activating OpenCU.
     func reveal() {
         guard let window else { return }
-        hideAfterFullScreen = false
+        minimizeAfterFullScreen = false
         if window.isMiniaturized { window.deminiaturize(nil) }
         window.orderFrontRegardless()
     }
@@ -222,15 +223,16 @@ final class AgentDesktopWindow: NSObject, NSWindowDelegate {
     private func answer(_ value: Bool) { let callback = decision; clearConsent(); callback?(value) }
     @objc private func stop() { onStop?() }
     func windowShouldClose(_ sender: NSWindow) -> Bool {
-        // Closing only hides the preview; the desktop and its sharing continue.
-        if sender.styleMask.contains(.fullScreen) { hideAfterFullScreen = true; sender.toggleFullScreen(nil) }
-        else { sender.orderOut(nil) }
+        // Closing tucks the preview into the Dock, where its tile brings it back.
+        // A hidden window would be lost when menu-bar items overflow behind a notch.
+        if sender.styleMask.contains(.fullScreen) { minimizeAfterFullScreen = true; sender.toggleFullScreen(nil) }
+        else { sender.miniaturize(nil) }
         return false
     }
     func windowWillEnterFullScreen(_ notification: Notification) { pin.isEnabled = false; updateChrome() }
     func windowDidExitFullScreen(_ notification: Notification) {
         pin.isEnabled = true; applyKeepOnTop(); updateChrome()
-        if hideAfterFullScreen { hideAfterFullScreen = false; window?.orderOut(nil) }
+        if minimizeAfterFullScreen { minimizeAfterFullScreen = false; window?.miniaturize(nil) }
     }
     func close() {
         decision = nil
