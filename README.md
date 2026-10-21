@@ -416,7 +416,11 @@ showed the macOS reminder once and correctly named “opencu”.
 
 The same `agent_desktop({action: "start" | "stop" | "status"})` tool automatically
 opens a small **OpenCU agent desktop** window and a virtual monitor. The preview is
-always **watch-only**: clicking it never forwards input. Start moves no app window.
+always **watch-only**: clicking it never forwards input. The host, consent card,
+Stop controls and activity badges follow the first preferred system language:
+Simplified Chinese for zh-Hans/zh-CN/zh-SG, English otherwise. MCP text and error
+codes stay English; Windows host text stays English in this release.
+Start moves no app window.
 An explicit `get_app_state` on a window outside the monitor presents **Move once**
 and **Keep here** in that nonactivating window. The card expires after 60 seconds.
 Declined or expired windows stay text-only/read-only for that desktop's lifetime.

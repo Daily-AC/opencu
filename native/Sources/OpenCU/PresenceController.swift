@@ -14,7 +14,7 @@ final class PresenceController: NSObject, NSMenuDelegate {
     let setup = PermissionSetup()
     var desktopVisible = false {
         didSet {
-            if desktopVisible { called(target: nil, name: "agent desktop"); finishedCall() }
+            if desktopVisible { called(target: nil, name: PresenceStrings().text("agent desktop")); finishedCall() }
         }
     }
     var onStop: (() -> Void)?

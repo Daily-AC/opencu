@@ -9,11 +9,12 @@ private final class AgentDesktopPanel: NSPanel {
 /// Local watch-only presentation. No target event forwarding or activation.
 @MainActor
 final class AgentDesktopWindow: NSObject, NSWindowDelegate {
+    private let strings = PresenceStrings()
     private var panel: NSPanel?
     private let image = NSImageView()
-    private let message = NSTextField(wrappingLabelWithString: "Starting…")
-    private let allow = NSButton(title: "Move once", target: nil, action: nil)
-    private let decline = NSButton(title: "Keep here", target: nil, action: nil)
+    private lazy var message = NSTextField(wrappingLabelWithString: strings.text(AgentDesktopStatusText.starting.rawValue))
+    private lazy var allow = NSButton(title: strings.text("Move once"), target: nil, action: nil)
+    private lazy var decline = NSButton(title: strings.text("Keep here"), target: nil, action: nil)
     private var decision: ((Bool) -> Void)?
     var onStop: (() -> Void)?
     var visible: Bool { panel?.isVisible == true && panel?.isMiniaturized == false }
@@ -25,7 +26,7 @@ final class AgentDesktopWindow: NSObject, NSWindowDelegate {
         }
         let frame = NSRect(x: screen.visibleFrame.maxX - 496, y: screen.visibleFrame.maxY - 450, width: 480, height: 430)
         let panel = AgentDesktopPanel(contentRect: frame, styleMask: [.titled, .closable, .nonactivatingPanel], backing: .buffered, defer: false)
-        panel.title = "OpenCU agent desktop"
+        panel.title = strings.text("OpenCU agent desktop")
         panel.hidesOnDeactivate = false
         panel.isReleasedWhenClosed = false
         panel.level = .floating
@@ -35,13 +36,14 @@ final class AgentDesktopWindow: NSObject, NSWindowDelegate {
         image.setContentHuggingPriority(.defaultLow, for: .vertical)
         image.translatesAutoresizingMaskIntoConstraints = false
         image.heightAnchor.constraint(equalToConstant: 260).isActive = true
-        let title = NSTextField(labelWithString: "Watch only · Close this window to stop")
+        let title = NSTextField(labelWithString: strings.text("Watch only · Close this window to stop"))
         title.textColor = .secondaryLabelColor
         message.font = .systemFont(ofSize: 12)
-        message.maximumNumberOfLines = 4
+        message.maximumNumberOfLines = 0
+        message.preferredMaxLayoutWidth = 448
         allow.target = self; allow.action = #selector(approve)
         decline.target = self; decline.action = #selector(reject)
-        let stop = NSButton(title: "Stop", target: self, action: #selector(stop))
+        let stop = NSButton(title: strings.text("Stop"), target: self, action: #selector(stop))
         let buttons = NSStackView(views: [allow, decline, stop])
         buttons.orientation = .horizontal
         let stack = NSStackView(views: [title, image, message, buttons])
@@ -63,20 +65,33 @@ final class AgentDesktopWindow: NSObject, NSWindowDelegate {
     }
     func showFrame(_ frame: CGImage) { image.image = NSImage(cgImage: frame, size: .zero) }
     func clearFrame() { image.image = nil }
-    func status(_ text: String) { if decision == nil { message.stringValue = text } }
+    func status(_ status: AgentDesktopStatusText) { if decision == nil { setMessage(strings.text(status.rawValue)) } }
     func ask(_ proposal: AgentDisplay.Proposal, answer: @escaping (Bool) -> Void) {
         decision = answer
-        let title = String(proposal.title.replacingOccurrences(of: "\n", with: " ").prefix(80))
+        let title = proposal.title == "Untitled window" ? strings.text("Untitled window")
+            : String(proposal.title.replacingOccurrences(of: "\n", with: " ").prefix(80))
         let appName = String(proposal.app.name.prefix(48))
-        allow.title = proposal.requiresMove ? "Move once" : "Allow once"
-        message.stringValue = proposal.requiresMove
-            ? "Move ‘\(title)’ from \(appName) to the agent desktop? It will return when this desktop closes. The app stays open. Keep the mouse still for 2 seconds after clicking."
-            : "Allow this window for the agent? ‘\(title)’ from \(appName) is already on the agent display. OpenCU will not move or restore it."
+        allow.title = strings.text(proposal.requiresMove ? "Move once" : "Allow once")
+        let consentText = proposal.requiresMove
+            ? strings.format("Move ‘%@’ from %@ to the agent desktop? It will return when this desktop closes. The app stays open. Keep the mouse still for 2 seconds after clicking.", title, appName)
+            : strings.format("Allow this window for the agent? ‘%@’ from %@ is already on the agent display. OpenCU will not move or restore it.", title, appName)
         allow.isHidden = false; decline.isHidden = false
+        setMessage(consentText)
     }
     func clearConsent() {
         decision = nil; allow.isHidden = true; decline.isHidden = true
-        message.stringValue = "Waiting for the agent"
+        setMessage(strings.text(AgentDesktopStatusText.waiting.rawValue))
+    }
+    private func setMessage(_ text: String) {
+        message.stringValue = text
+        // Consent must not lose its return/ownership terms to a four-line cutoff
+        // when localized wording or an application/window name wraps.
+        guard let panel, let cell = message.cell else { return }
+        let textHeight = cell.cellSize(forBounds: NSRect(x: 0, y: 0, width: 448, height: CGFloat.greatestFiniteMagnitude)).height
+        let content = NSRect(x: 0, y: 0, width: 480, height: max(430, ceil(textHeight) + 370))
+        var frame = panel.frameRect(forContentRect: content)
+        frame.origin = NSPoint(x: panel.frame.minX, y: panel.frame.maxY - frame.height)
+        if panel.frame != frame { panel.setFrame(frame, display: true) }
     }
     @objc private func approve() { answer(true) }
     @objc private func reject() { answer(false) }

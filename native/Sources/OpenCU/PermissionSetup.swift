@@ -1,16 +1,6 @@
 import AppKit
 import ApplicationServices
 
-struct PresenceStrings {
-    let bundle: Bundle
-    init(language: String? = nil, resources: Bundle = .main) {
-        if let language, let path = resources.path(forResource: language, ofType: "lproj"), let localized = Bundle(path: path) {
-            bundle = localized
-        } else { bundle = resources }
-    }
-    func text(_ key: String) -> String { bundle.localizedString(forKey: key, value: key, table: "Presence") }
-}
-
 @MainActor
 final class SetupContentView: NSView {
     private let strings: PresenceStrings

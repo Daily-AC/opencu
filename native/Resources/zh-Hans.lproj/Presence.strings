@@ -34,3 +34,20 @@
 "Perform \"%@\"" = "执行「%@」";
 "Bring to front" = "切到前台";
 "Stopped by you" = "已被你停止";
+
+/* Agent desktop: person-facing window and consent controls. */
+"OpenCU agent desktop" = "OpenCU agent 桌面";
+"OpenCU Agent Display" = "OpenCU agent 显示器";
+"agent desktop" = "agent 桌面";
+"Starting…" = "正在启动…";
+"Move once" = "挪过来一次";
+"Allow once" = "允许一次";
+"Keep here" = "留在原处";
+"Watch only · Close this window to stop" = "仅供查看 · 关闭此窗口即停止";
+"Waiting for the agent" = "等待 agent 操作";
+"Watch only · Waiting for an app" = "仅供查看 · 等待应用";
+"Paused while this Mac is locked" = "Mac 已锁定，操作已暂停";
+"Input paused for a macOS confirmation" = "等待 macOS 确认，操作已暂停";
+"Untitled window" = "无标题窗口";
+"Move ‘%@’ from %@ to the agent desktop? It will return when this desktop closes. The app stays open. Keep the mouse still for 2 seconds after clicking." = "把「%@」（%@）挪到 agent 桌面？结束时会挪回原处，应用会继续开着。点击后请保持鼠标不动 2 秒。";
+"Allow this window for the agent? ‘%@’ from %@ is already on the agent display. OpenCU will not move or restore it." = "允许 agent 操作「%@」（%@）吗？它已在 agent 显示器上，OpenCU 不会挪动或还原它。";
