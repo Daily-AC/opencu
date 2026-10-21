@@ -324,3 +324,20 @@ test('RDP pointer suppression is required before connecting and is not toggled o
   assert.match(source, /serve --agent-parent-session /);
   assert.match(source, /parent-session guard was not configured/);
 });
+
+
+test('post-dispatch child stop returns unknown once and prevents every later app call', async t => {
+  const f = fixture(t);
+  await f.control('start');
+  await f.runtime.call('get_app_state', { app: 'Fixture' });
+  f.runtimes[1].call = async () => {
+    f.runtimes[1].config.onPersonStop(failure('USER_STOPPED'));
+    return { content: [{ type: 'text', text: 'Pattern was dispatched; outcome unknown.' }],
+      _meta: { 'opencu/actionOutcome': 'unknown', 'opencu/stop': 'USER_STOPPED', 'opencu/pattern': 'Invoke' } };
+  };
+  const result = await f.runtime.call('click', { app: 'Fixture', element_index: 1 });
+  assert.equal(result._meta['opencu/actionOutcome'], 'unknown');
+  await assert.rejects(f.runtime.call('get_app_state', { app: 'Fixture' }), { code: 'USER_STOPPED' });
+  await assert.rejects(f.control('start'), { code: 'USER_STOPPED' });
+  assert.equal(f.hosts.length, 1);
+});

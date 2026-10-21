@@ -33,7 +33,6 @@ export class OpenCURuntime {
   #retiring;
   #retiringChild;
   #needsObservation = false;
-  #unconfirmedPattern = false;
   #requestTimeoutMs;
   #coordinates = new CoordinateState();
   #lastText = new Map();
@@ -71,8 +70,9 @@ export class OpenCURuntime {
         const message = JSON.parse(line);
         if (child !== this.#child && child !== this.#retiringChild) return;
         // Even a late reply from the retiring engine must preserve a person's stop.
-        if (personStops.has(message.error?.code)) {
-          this.#personStop ??= Object.assign(new Error(message.error.message), { code: message.error.code });
+        const stop = message.error ?? message.result?.stop;
+        if (personStops.has(stop?.code)) {
+          this.#personStop ??= Object.assign(new Error(stop.message), { code: stop.code });
           this.#onPersonStop?.(this.#personStop);
         }
         const request = this.#pending.get(message.id);
@@ -146,7 +146,6 @@ export class OpenCURuntime {
         continue;
       }
       this.#needsObservation = false;
-      this.#unconfirmedPattern = false;
       const scopeGone = scope !== undefined && result.scopeRoot?.startsWith('gone:');
       if (!waitForText || !scopeGone && result.text.split('\n').some(line => /^\s*\[\d+\] /.test(line) && line.includes(waitForText))) return result;
       if (Date.now() >= deadline) {
@@ -188,9 +187,6 @@ export class OpenCURuntime {
       if (this.#needsObservation && (inputs.has(method) || ['activate_app', 'run_actions'].includes(method))) {
         throw Object.assign(new Error('The engine timed out and must restart. Read fresh app state before input; no operation was retried.'), { code: 'OBSERVATION_REQUIRED' });
       }
-      if (this.#unconfirmedPattern && method !== 'get_app_state') {
-        throw Object.assign(new Error('A control pattern has an unconfirmed outcome. Read get_app_state before continuing; do not replay it.'), { code: 'OBSERVATION_REQUIRED' });
-      }
       if (args.scope !== undefined) {
         if (this.#platform !== 'win32') throw Object.assign(new Error('scope is Windows-only for now.'), { code: 'INVALID_ARGUMENT' });
         if (!Number.isSafeInteger(args.scope) || args.scope < 1) throw Object.assign(new Error('scope must be a positive integer.'), { code: 'INVALID_ARGUMENT' });
@@ -199,6 +195,7 @@ export class OpenCURuntime {
       let options = args;
       let completed = 0;
       let patternState;
+      let patternDetails = {};
       if (inputs.has(method) || method === 'run_actions') {
         const { app, scope, ...parameters } = args;
         const actions = method === 'run_actions' ? args.actions : [{ method, ...parameters }];
@@ -214,21 +211,29 @@ export class OpenCURuntime {
             const result = await this.#request(action, { ...params, app }, signal);
             completed++;
             patternState = result.lockedPattern ? result.state : undefined;
+            patternDetails = result.lockedPattern && result.pattern ? { 'opencu/pattern': result.pattern } : {};
             if (result.outcome === 'unknown') {
               // An AX timeout can mean that the action replaced its own window.
               // Stop the batch; no automatic observation, retry or later input.
-              if (result.lockedPattern) this.#unconfirmedPattern = true;
               const observed = patternState ? this.#stateResult(patternState, { disableDiff: true }).content : [];
               this.#lastText.clear(); // The required explicit read must return complete indexes.
               return this.#coordinates.after(method, args, {
                 content: [{ type: 'text', text: result.message }, ...observed],
                 _meta: { 'opencu/app': result.app, 'opencu/engine': 'independent',
-                  'opencu/actionOutcome': 'unknown', 'opencu/actionsAttempted': completed },
+                  'opencu/actionOutcome': 'unknown', 'opencu/actionsAttempted': completed, ...patternDetails,
+                  ...(result.stop ? { 'opencu/stop': result.stop.code } : {}) },
               });
+            }
+            if (patternState && index + 1 < actions.length) {
+              const remaining = actions.length - index - 1;
+              const response = this.#stateResult(patternState, { disableDiff: true });
+              response.content.unshift({ type: 'text', text: `Indexes were refreshed by a locked pattern action; ${remaining} remaining actions were not sent. Choose any next actions from this state.` });
+              Object.assign(response._meta, patternDetails, { 'opencu/actionsAttempted': completed, 'opencu/actionsNotSent': remaining });
+              return this.#coordinates.after(method, args, response);
             }
           }
           catch (error) {
-            error.message = `Action ${index + 1} failed: ${error.message} Earlier actions may have run.${personStops.has(error.code) || error.code === 'PERSON_ACTIVE' ? '' : ' Read state before retrying.'}`;
+            error.message = `Action ${index + 1} failed: ${error.message}${index === 0 && error.message.includes('No pattern was sent.') ? '' : ' Earlier actions may have run.'}${personStops.has(error.code) || error.code === 'PERSON_ACTIVE' ? '' : ' Read state before retrying.'}`;
             throw error;
           }
         }
@@ -244,6 +249,16 @@ export class OpenCURuntime {
           response = this.#stateResult(await this.#observe(method === 'activate_app' ? method : 'get_app_state', options, signal), options);
         }
       } catch (error) {
+        if (patternState) {
+          const observed = this.#stateResult(error.lastState ?? patternState, { disableDiff: true });
+          this.#lastText.clear();
+          return this.#coordinates.after(method, args, {
+            ...observed,
+            content: [{ type: 'text', text: `The pattern call was dispatched, but the requested final observation failed (${error.code ?? 'RUNTIME_ERROR'}). Its effect is unconfirmed. Read fresh get_app_state; do not repeat the action automatically.` }, ...observed.content],
+            _meta: { ...observed._meta, ...patternDetails, 'opencu/actionOutcome': 'unknown',
+              'opencu/actionsAttempted': completed, ...(personStops.has(error.code) ? { 'opencu/stop': error.code } : {}) },
+          });
+        }
         if (completed) error.message = `All ${completed} actions returned, but their final observation failed. Do not repeat them; inspect state. ${error.message}`;
         response = toolError(error);
         if (error.lastState) {
@@ -252,6 +267,7 @@ export class OpenCURuntime {
             content: [...response.content, ...state.content] };
         }
       }
+      Object.assign(response._meta, patternDetails);
       return this.#coordinates.after(method, args, response);
     });
     this.#tail = run.catch(() => {});
