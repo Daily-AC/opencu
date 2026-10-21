@@ -711,7 +711,7 @@ query on that connection permits the following pattern calls:
 | Indexed `set_value` | Writable ValuePattern only; no RangeValue or text-input fallback |
 | Indexed `perform_secondary_action` | A listed Invoke, Toggle, Select/AddToSelection/RemoveFromSelection, Expand/Collapse, or DoDefaultAction; live pattern required |
 | Other supported input, activation and waits | SCREEN_LOCKED; reads/list/capture remain available |
-| Read-triggered launch | CreateProcess without OpenCU activation; restored behavior needs Windows acceptance |
+| Read-triggered launch | CreateProcess without OpenCU activation; accepted on the VM |
 
 ExpandCollapse expands collapsed/partially expanded controls, collapses expanded
 controls and skips leaf nodes. Selection uses live supported interfaces, never
@@ -831,10 +831,11 @@ passed. A locked indexed click on the text box returned UNSUPPORTED_ACTION in
 about two seconds. The run did not record which pattern/default action delivered
 the button click; Invoke versus MSAA must not be inferred.
 
-The accepted run predates the selection-priority, batch, post-dispatch and WTS
-review corrections. Those corrections have offline regression coverage; the next
-VM run should exercise the specific cases below. Restored launch while locked
-**needs Windows acceptance**.
+The final 2026-10-21 VM run used the build with the selection-priority, batch,
+post-dispatch and WTS corrections: the locked button click used Invoke, the text
+box Value.SetValue, typing returned SCREEN_LOCKED, and a launch while locked did
+not take the foreground. Batch stopping and post-dispatch reporting have offline
+regression coverage only.
 
 ### Remaining checks
 

@@ -50,7 +50,7 @@ input gate passed acceptance, but does not block RDP server cursor-position upda
 Require IgnoreServerGeneratedMouseMoves=true with readback before Connect. Because
 it is immutable once connected, it stays enabled even during interactive takeover.
 Failure to confirm it refuses startup; no cursor restoration or reconnect fallback
-is permitted. This additional protection needs Windows acceptance.
+is permitted. The 2026-10-21 VM run confirmed the parked parent pointer stays put.
 
 `& "$env:LOCALAPPDATA\OpenCU\bin\opencu.cmd" setup agent-desktop` in normal
 PowerShell uses standard UAC only to enable child sessions. Setup explains the

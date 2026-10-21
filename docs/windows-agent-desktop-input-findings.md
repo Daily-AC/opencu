@@ -139,8 +139,8 @@ Missing capability returns UNSUPPORTED_ACTION; read-only Value returns
 ATTRIBUTE_NOT_SETTABLE. RangeValue, scroll, coordinate/modified/multiple clicks,
 typing, keys, paste, drag, activation and waits are not enabled while locked.
 Their SCREEN_LOCKED message identifies the indexed actions that remain available.
-Read-triggered CreateProcess launches are allowed without OpenCU activation; this
-restored launch-while-locked behavior **needs Windows acceptance**. The independent
+Read-triggered CreateProcess launches are allowed without OpenCU activation; the
+2026-10-21 VM run launched a fixture while locked and it did not take the foreground. The independent
 WTSClientProtocolType query rejects console, failed, truncated or unknown results
 before accepting the parent-session flag. The bridge still checks the child relationship.
 

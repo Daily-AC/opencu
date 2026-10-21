@@ -4,10 +4,10 @@
   "environment": "Windows 11 Enterprise Evaluation 26H2 (zh-CN, Microsoft Pinyin), Hyper-V VM 4 vCPU / 8 GB / 1920x1080, Defender real-time protection on, restored from a clean checkpoint, real UAC consent, one re-sign-in by reboot with autologon",
   "package": {
     "file": "opencu-win-x64.zip",
-    "sha256": "e958e3a3799f5f6ec211a3b0213c0c781a5cf74b5c5b454ec6ac7780f2593427",
+    "sha256": "bc34f3271215685a1f20bd2c746cc19ea7ae8e8719006b96c71fd15d0b243963",
     "installedWith": "install.ps1 -LocalZip"
   },
-  "engine_sha256": "8fde8450d82f359fd58b6eaf77b75be6a1aa20ac5a76fc0fa33b71a68e62c36a",
+  "engine_sha256": "3de17860076a6d02b4b9cced49a89d0749397f4f15d90dce13ec6508b234bd78",
   "guiRuns": [
     {
       "ok": true,
@@ -81,24 +81,24 @@
       {
         "name": "watch-only-hover-does-not-interrupt",
         "stimulus": "parent SendInput mouse moves; no clicks or hardware input",
-        "moves": 35
+        "moves": 34
       },
       {
         "name": "watch-only-server-pointer-isolation",
         "stimulus": "one parent SendInput move, then no parent mouse input",
         "before": {
-          "x": 1543,
+          "x": 1542,
           "y": 875
         },
         "after": {
-          "x": 1543,
+          "x": 1542,
           "y": 875
         }
       },
       {
         "name": "concurrent-input-isolation",
         "parent": {
-          "pid": 4748,
+          "pid": 2560,
           "sessionId": 1,
           "text": "p00;p01;p02;p03;p04;p05;p06;p07;p08;p09;p10;p11;p12;p13;p14;p15;p16;p17;p18;p19;",
           "clicks": 0,
@@ -109,19 +109,19 @@
           "unexpectedCursor": 0,
           "foreground": true,
           "title": "OpenCU disposable OpenCU-Parent-Fixture",
-          "hoverMoves": 36,
+          "hoverMoves": 35,
           "cursor": {
             "x": 100,
             "y": 133
           },
           "parked": true,
           "parkedCursor": {
-            "x": 1543,
+            "x": 1542,
             "y": 875
           }
         },
         "child": {
-          "pid": 12396,
+          "pid": 11056,
           "sessionId": 2,
           "text": "agent-0;agent-1;agent-2;agent-3;agent-4;agent-5;",
           "clicks": 10,
@@ -145,6 +145,112 @@
         }
       },
       {
+        "name": "locked-parent-patterns-and-refused-typing",
+        "before": {
+          "pid": 11056,
+          "sessionId": 2,
+          "text": "agent-0;agent-1;agent-2;agent-3;agent-4;agent-5;",
+          "clicks": 10,
+          "chunks": 0,
+          "expected": "",
+          "foreignForeground": 0,
+          "injectedFailures": 0,
+          "unexpectedCursor": 0,
+          "foreground": true,
+          "title": "OpenCU disposable OpenCU-Child-Fixture",
+          "hoverMoves": 0,
+          "cursor": {
+            "x": 308,
+            "y": 131
+          },
+          "parked": false,
+          "parkedCursor": {
+            "x": 0,
+            "y": 0
+          }
+        },
+        "after": {
+          "pid": 11056,
+          "sessionId": 2,
+          "text": "locked pattern value",
+          "clicks": 11,
+          "chunks": 0,
+          "expected": "",
+          "foreignForeground": 0,
+          "injectedFailures": 0,
+          "unexpectedCursor": 0,
+          "foreground": false,
+          "title": "OpenCU disposable OpenCU-Child-Fixture",
+          "hoverMoves": 0,
+          "cursor": {
+            "x": 0,
+            "y": 0
+          },
+          "parked": false,
+          "parkedCursor": {
+            "x": 0,
+            "y": 0
+          }
+        },
+        "locked": {
+          "state": "running",
+          "sessionId": 2,
+          "hostPid": 5560,
+          "stoppedByPerson": false,
+          "parentLocked": true,
+          "availability": {
+            "available": true,
+            "childSessionsEnabled": true,
+            "existingChildSession": 2
+          }
+        },
+        "patterns": {
+          "click": "Invoke",
+          "setValue": "Value.SetValue"
+        }
+      },
+      {
+        "name": "locked-parent-launch-without-activation-request",
+        "fixture": {
+          "pid": 5016,
+          "sessionId": 2,
+          "text": "",
+          "clicks": 0,
+          "chunks": 0,
+          "expected": "",
+          "foreignForeground": 0,
+          "injectedFailures": 0,
+          "unexpectedCursor": 0,
+          "foreground": false,
+          "title": "OpenCU disposable OpenCU-Locked-Launch-Fixture",
+          "hoverMoves": 0,
+          "cursor": {
+            "x": 0,
+            "y": 0
+          },
+          "parked": false,
+          "parkedCursor": {
+            "x": 0,
+            "y": 0
+          }
+        }
+      },
+      {
+        "name": "manual-unlock-keeps-child-without-replay",
+        "unlocked": {
+          "state": "running",
+          "sessionId": 2,
+          "hostPid": 5560,
+          "stoppedByPerson": false,
+          "parentLocked": false,
+          "availability": {
+            "available": true,
+            "childSessionsEnabled": true,
+            "existingChildSession": 2
+          }
+        }
+      },
+      {
         "name": "tool-stop-logs-off"
       },
       {
@@ -156,7 +262,7 @@
     ],
     "parkedPointer": {
       "before": {
-        "pid": 4748,
+        "pid": 2560,
         "sessionId": 1,
         "text": "",
         "clicks": 0,
@@ -167,19 +273,19 @@
         "unexpectedCursor": 0,
         "foreground": true,
         "title": "OpenCU disposable OpenCU-Parent-Fixture",
-        "hoverMoves": 36,
+        "hoverMoves": 35,
         "cursor": {
-          "x": 1543,
+          "x": 1542,
           "y": 875
         },
         "parked": true,
         "parkedCursor": {
-          "x": 1543,
+          "x": 1542,
           "y": 875
         }
       },
       "after": {
-        "pid": 4748,
+        "pid": 2560,
         "sessionId": 1,
         "text": "",
         "clicks": 0,
@@ -190,14 +296,14 @@
         "unexpectedCursor": 0,
         "foreground": true,
         "title": "OpenCU disposable OpenCU-Parent-Fixture",
-        "hoverMoves": 36,
+        "hoverMoves": 35,
         "cursor": {
-          "x": 1543,
+          "x": 1542,
           "y": 875
         },
         "parked": true,
         "parkedCursor": {
-          "x": 1543,
+          "x": 1542,
           "y": 875
         }
       }
@@ -211,7 +317,7 @@
     "hover": "Hyper-V mouse hovering over the watch-only view did not interrupt agent rounds.",
     "escape": "Clicking into the view and pressing Escape on the Hyper-V keyboard made the next input and every later call return USER_STOPPED.",
     "close": "Clicking the window's close button logged the child off immediately; later calls returned USER_STOPPED; no reconnect within 20 s.",
-    "parentLocked": "While the parent was locked the child stayed running and status reported parentLocked true; input returned SCREEN_LOCKED within 30 ms with no fixture change, also after 30 s; window screenshots worked. After unlock parentLocked was false and the next round succeeded.",
-    "lockedInputProbe": "Inside the child while the parent was locked: no foreground window, SetForegroundWindow failed, SendInput keyboard and mouse events returned 0 with ERROR_ACCESS_DENIED. An MSAA default action on the fixture button took effect. The engine does not use that path in this release."
+    "parentLocked": "While the parent was locked (lock screen with password box confirmed by screenshot) the child stayed running and status reported parentLocked true. An indexed click on the fixture button (Invoke) and set_value on its text box (Value.SetValue) took effect; type_text returned SCREEN_LOCKED with no change; an indexed click on the text box returned UNSUPPORTED_ACTION; a launch while locked opened a fixture without taking the foreground; window screenshots worked. After unlock parentLocked was false, the same child and host remained, nothing was replayed, and the next round succeeded.",
+    "lockedInputProbe": "Inside the child while the parent was locked: no foreground window, SetForegroundWindow failed, SendInput keyboard and mouse events returned 0 with ERROR_ACCESS_DENIED, and an MSAA default action took effect. This is why only control patterns run while locked."
   }
 }
