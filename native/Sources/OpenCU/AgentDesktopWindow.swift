@@ -205,7 +205,7 @@ final class AgentDesktopWindow: NSObject, NSWindowDelegate {
         for kind in [NSWindow.ButtonType.closeButton, .miniaturizeButton, .zoomButton] {
             window.standardWindowButton(kind)?.isHidden = hidden
         }
-        accessory?.isHidden = hidden
+        accessory?.view.isHidden = hidden
     }
     @objc private func approve() { answer(true) }
     @objc private func reject() { answer(false) }
