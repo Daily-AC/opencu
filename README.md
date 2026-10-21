@@ -124,11 +124,14 @@ In ordinary macOS mode, the V appears while an agent is using OpenCU and hides
 screenshots with `STOPPED_BY_PERSON`; text-only reads remain available in that mode.
 
 In **macOS agent desktop** mode the menu-bar item stays for the desktop lifetime.
-Closing the host, its **Stop** button, menu-bar **Stop**, or a macOS Stop Sharing
-control for the preview permanently stops that MCP connection. All app calls,
-including text reads, then fail; only desktop status and cleanup remain available.
-Windows return to their recorded frames when eligible; apps and unsaved content
-stay open. A tool-requested stop alone permits a later explicit start.
+Closing or minimizing the preview only puts it in the Dock; click its Dock tile to
+watch again. The preview's **Stop** button, menu-bar **Stop**, or a macOS Stop
+Sharing control for the preview permanently stops that MCP connection. All app
+calls, including text reads, then fail; only desktop status and cleanup remain
+available. Windows return to their recorded frames when eligible; apps and unsaved
+content stay open. A tool-requested stop alone permits a later explicit start.
+Agents should stop the desktop when their task no longer needs it; a macOS desktop
+with no tool calls for 5 minutes stops itself the same way.
 
 Stop does not undo delivered input and applies to its connection. Agents must
 never reconnect around it without permission. It is a person-facing brake, not a
@@ -178,8 +181,8 @@ The measurements behind this section are in
   Value.SetValue). Other input returns `SCREEN_LOCKED`. A read-triggered launch
   while locked opens the app without activating it. Nobody at the machine
   can see the child while the lock screen is shown.
-  Status reports `parentLocked`. After unlocking, close the host window or click
-  the view and press Escape to stop; the caller can also end the MCP connection.
+  Status reports `parentLocked`. After unlocking, press the host's Stop button or
+  click the view and press Escape to stop; the caller can also end the MCP connection.
   Console/remote disconnect and logoff still end the child. One child session per
   machine; apps still share your account, profiles and files. Single-instance apps
   can refuse another instance. External minimize, covered/partly off-screen views,
@@ -248,8 +251,9 @@ The measurements behind this section are in
   automation running as the same user (including Accessibility automation).
 - OpenCU's signature identifies it to macOS; it does not restrict callers. Any
   local process that can run `bin/opencu` uses OpenCU's permissions.
-- macOS agent desktop also stops through its host close/Stop controls or a macOS
-  preview Stop Sharing control. See [Stopping it](#stopping-it).
+- macOS agent desktop also stops through its preview's Stop button or a macOS
+  preview Stop Sharing control; closing the preview does not stop it. See
+  [Stopping it](#stopping-it).
 - `paste` temporarily replaces the clipboard and restores it afterwards, unless
   another app changed it meanwhile.
 - The title-bar badge shows up to 16 characters of text being typed or pasted
@@ -393,10 +397,13 @@ The child window is hidden by the lock screen, so nobody at the machine can see 
 Unlocking does not restart anything: the same child and host window remain.
 The agent must issue a new call, under the normal input rules.
 The caller can stop it while locked by ending the MCP connection. After unlocking,
-close the host window or click into its view and press Escape.
+press its **Stop** button or click into its view and press Escape.
 
-Closing the window or physical Escape inside its focused view permanently stops
-that MCP connection. The agent must not reconnect or restart without your explicit
+The host is an ordinary window: it can be resized, minimized or maximized, kept on
+top, or switched to a clean view without its bar (both choices are also in the
+title-bar menu). Closing it only minimizes it to the taskbar; the child keeps
+working. Its **Stop** button or physical Escape inside its focused view permanently
+stops that MCP connection. The agent must not reconnect or restart without your explicit
 permission. A failed start or broken connection never falls back to your desktop.
 After a failed start, app tools remain blocked until `agent_desktop` with
 `{"action":"stop"}` finishes cleanup. This never clears a person's stop. The
@@ -416,13 +423,17 @@ macOS screen-capture reminder once, correctly naming “opencu”.
 
 The same `agent_desktop({action: "start" | "stop" | "status"})` tool automatically
 opens a small **OpenCU agent desktop** window and a virtual monitor. The preview is
-always **watch-only**: clicking it never forwards input. The host, consent card,
+always **watch-only**: clicking it never forwards input. It is an ordinary window:
+it can be resized, minimized, made full screen, kept on top with the pin button, or
+switched to a picture-only clean view; its title bar returns on hover. The picture
+follows the window's size up to the virtual monitor's own pixels; the agent's
+screenshots are captured separately and do not depend on it. The host, consent card,
 Stop controls and activity badges follow the first preferred system language:
 Simplified Chinese for zh-Hans/zh-CN/zh-SG, English otherwise. MCP text and error
 codes stay English; Windows host text stays English in this release.
 Start moves no app window.
 An explicit `get_app_state` on a window outside the monitor presents **Move once**
-and **Keep here** in that nonactivating window. The card expires after 60 seconds.
+and **Keep here** in the preview, bringing it back from the Dock if needed. The card expires after 60 seconds.
 Declined or expired windows stay text-only/read-only for that desktop's lifetime.
 Lock or request cancellation is not a decline; a later explicit read may ask again.
 Full-screen, minimized and other nonmovable windows remain readable as reduced
@@ -439,7 +450,7 @@ removed. Declined or previously returned windows cannot inherit admission.
 Move once permits that exact window's move and its disclosed return on stop,
 close or MCP EOF. Every new move asks again. All input is restricted to admitted
 windows still on the virtual monitor; `activate_app` is refused there. Return all
-moved windows with the host or menu-bar **Stop**. To return just one, use that app's
+moved windows with the preview's or menu-bar **Stop**. To return just one, use that app's
 own **Window > Move to** command for your display: activate the app first, or the
 menu belongs to whichever app is in front. The same menu offers the agent display
 for your own windows too; a window you move there yourself shows in the preview,
@@ -447,15 +458,18 @@ is not automatically available to the agent unless it inherits admission from th
 same process as described above. Another process still needs an Allow this window
 card. macOS relocates these unmoved windows when the agent display closes. The
 invisible monitor cannot be dragged through the watch-only preview. The preview
-floats above other windows without taking keyboard focus. If a window leaves the agent
+opens without taking keyboard focus. If a window leaves the agent
 display by any means, admission is revoked for this desktop lifetime and cleanup
 leaves it where it went. No input is replayed. Apps, accounts, clipboard and files are
 still shared with your session; this is not an isolation/security boundary.
 
 Tool stop restores eligible windows, leaves apps and unsaved content open, and
 confirms display removal from a fresh process. A later explicit start may ask
-again. Closing the host, its **Stop** button or menu-bar **Stop** permanently latches
-`STOPPED_BY_PERSON` for the MCP connection, including when no tool call is running.
+again. The preview's **Stop** button or menu-bar **Stop** permanently latches
+`STOPPED_BY_PERSON` for the MCP connection, including when no tool call is running;
+closing the preview does not. With no tool call for 5 minutes, and no pending
+consent or lock, the desktop stops itself like a tool stop; the next app call returns
+`AGENT_DESKTOP_IDLE_STOPPED` without sending input, until `agent_desktop` is called again.
 Only status/cleanup remain available; never reconnect to bypass a stop. EOF also
 cleans up. A crash relies on OS resource cleanup and cannot restore exact frames.
 
@@ -468,10 +482,9 @@ show macOS's screen-recording indicator for its lifetime. If the person stops
 preview sharing through macOS, `STOPPED_BY_PERSON` latches; other stream failures
 return `AGENT_DESKTOP_LOST` and clean up without restarting the stream.
 
-Start and moves retain the quiet-desktop guard. Keep the pointer/foreground still
-during start and for 2 seconds after **Move once**. A move waits one second after
-the consent click before taking its baseline. If activity interrupts it,
-`AGENT_DISPLAY_PERSON_ACTIVE` affects that move only: OpenCU restores that window,
+You can keep using the Mac while the desktop starts and windows move. A move stops
+only if you start using that window: its app comes forward, or a mouse button is
+held over it. Then `AGENT_DISPLAY_PERSON_ACTIVE` affects that move only: OpenCU restores that window,
 keeps the other approved windows and the desktop, and leaves the target reduced.
 A later explicit read may ask again; there is no automatic retry. If restoring that
 window fails, cleanup fails rather than losing its recovery record. An interrupted
@@ -485,7 +498,7 @@ node scripts/verify-agent-desktop-mac.mjs --owner-present
 ```
 
 The script needs Stage Manager already enabled and existing OpenCU permissions.
-It asks the person to answer consent cards and close the host; a fixture moves its
+It asks the person to answer consent cards and use the preview's window controls; a fixture moves its
 own window back to stand in for the person taking it back;
 it never targets personal applications. See [ADR 0003](docs/adr/0003-macos-agent-desktop-virtual-display.md).
 
