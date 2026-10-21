@@ -778,7 +778,8 @@ retries input, revives a stopped connection or bypasses an outstanding provider.
 The caller can end the MCP connection while locked; after unlock the person can
 close the window or click the interactive view and press Escape.
 
-Host close and a reported child USER_STOPPED permanently latch the MCP connection.
+The host's Stop button and a reported child USER_STOPPED permanently latch the MCP
+connection; closing the host only minimizes it to the taskbar.
 Status and cleanup remain available; switching or reconnecting cannot bypass them.
 Tool stop alone logs off child apps and permits ordinary operation only after
 confirmed cleanup. Switching requires a new app observation. Failed start or child
