@@ -95,11 +95,11 @@ class PackageTests(unittest.TestCase):
             for name in sources:
                 p = root / name; p.parent.mkdir(parents=True, exist_ok=True); p.write_text('fixture source')
                 os.utime(p, ns=(1_000_000_000, 1_000_000_000))
-            (root / 'package.json').write_text('{"version":"0.4.0"}')
+            (root / 'package.json').write_text('{"version":"0.4.1"}')
             engine = root / '.build/win/opencu-engine.exe'; engine.parent.mkdir(parents=True)
             engine.write_bytes(b'fixture'); os.utime(engine, ns=(2_000_000_000, 2_000_000_000))
             receipt = root / '.build/win/engine-manifest.json'
-            manifest = {'version': '0.4.0', 'executable_sha256': pack.sha256(engine),
+            manifest = {'version': '0.4.1', 'executable_sha256': pack.sha256(engine),
                         'source_files': {name: pack.sha256(root / name) for name in sources}}
             receipt.write_text(json.dumps(manifest)); self.assertEqual(pack.check_engine(root), manifest)
             os.utime(root / sources[0], ns=(3_000_000_000, 3_000_000_000))
