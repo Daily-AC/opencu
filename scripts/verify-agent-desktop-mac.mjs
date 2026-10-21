@@ -316,11 +316,13 @@ try {
     assert.deepEqual((await freshDisplays()).map(item => item.id).sort(), initialDisplays.map(item => item.id).sort());
   });
   await check(5, async () => {
-    await ask('After yes, keep moving the mouse around your own screen (without clicking) until the next question. The agent desktop starts meanwhile.');
+    await ask('After yes, start moving the mouse around your own screen (without clicking) and keep moving until the next question. The agent desktop starts once your movement is seen.');
+    const asked = performance.now();
+    await until(async () => pointerTravel(asked) > 40, 'pointer movement before start', 30_000);
     const since = performance.now();
     const status = await startDesktop(client);
     report.startTravel = pointerTravel(since);
-    assert.ok(report.startTravel > 40, 'Keep moving the mouse during start: this check needs pointer activity');
+    assert.ok(report.startTravel > 10, 'Keep moving the mouse during start: this check needs pointer activity');
     const id = status.preview.windowID, shown = async () => (await metadata(id)).onScreen === true;
     const running = async () => {
       await pause(1500);
