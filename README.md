@@ -406,14 +406,13 @@ measured VM results from the remaining provider and follow-up regression checks.
 ### macOS agent desktop
 
 On 2026-10-21, the owner passed all **7/7** product acceptance checks on a Mac
-with a **single built-in display and Stage Manager on**, before this branch was
-rebased onto released v0.4.0. The run used a local copy of the verifier with
-Chinese prompts; the fixture returned its own window via the
-`move-to-main-display` command file, standing in for a person/app moving it back.
-The [fixture-only evidence](evidence/opencu-macos-agent-desktop-2026-10-21.json)
-records the checks, pass/fail and scope. The rebased 0.4.1 build has not had another
-owner GUI run. In earlier owner runs, the first capture from a new build path
-showed the macOS reminder once and correctly named “opencu”.
+(macOS 26.6) with a **single built-in display and Stage Manager on**, both before
+and after the 0.4.1 rebase and localization; the second run showed the Chinese
+interface. The fixture returned its own window via a command file, standing in for
+a person or app moving it back. The
+[fixture-only evidence](evidence/opencu-macos-agent-desktop-2026-10-21.json)
+records the checks and scope. The first capture from a new build path showed the
+macOS screen-capture reminder once, correctly naming “opencu”.
 
 The same `agent_desktop({action: "start" | "stop" | "status"})` tool automatically
 opens a small **OpenCU agent desktop** window and a virtual monitor. The preview is
