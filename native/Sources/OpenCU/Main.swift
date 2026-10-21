@@ -62,6 +62,7 @@ final class Engine {
         desktopOwner = AgentDesktopController(display: agentDisplay)
         desktop.onInvalidate = { [weak self] in self?.snapshot = nil; self?.input.releaseFocus(); self?.focusGuard.cancel() }
         desktop.onPersonStop = { [weak self] in self?.presence.stop() }
+        presence.onShowDesktop = { [weak self] in self?.desktopOwner?.showWindow() }
         desktop.onFailure = { [weak self] in self?.scheduleDesktopCleanup(keepFailure: true) }
         desktop.onInputPause = { [weak self] in
             self?.activeInterruption = self?.desktopOwner?.inputPause

@@ -1,6 +1,8 @@
 import { OpenCURuntime } from './opencu-runtime.mjs';
 
 const failure = (code, message, details) => Object.assign(new Error(message), { code, details });
+// Agents should stop the desktop when done; this returns windows if they forget.
+const IDLE_MS = 5 * 60_000;
 const reply = value => ({ content: [{ type: 'text', text: JSON.stringify(value) }] });
 
 // One native owner, including observation/input/preview. No worker replacement in
@@ -20,8 +22,14 @@ export class MacAgentDesktopRuntime {
   #epoch = 0;
   #retiring;
   #fresh = false;
+  #idleMs;
+  #idleTimer;
+  #lastUse = 0;
+  #inFlight = 0;
+  #idleStopped = false;
   constructor(options = {}) {
     this.#options = options;
+    this.#idleMs = options.idleMs ?? IDLE_MS;
     this.#factory = options.runtimeFactory ?? (config => new OpenCURuntime(config));
     this.#normal = this.#runtime(false);
   }
@@ -41,6 +49,15 @@ export class MacAgentDesktopRuntime {
       ...(desktop ? { onDesktopEvent: this.#event } : {}) });
   }
   async call(method, args = {}, signal) {
+    this.#inFlight++;
+    try { return await this.#call(method, args, signal); }
+    finally { this.#inFlight--; this.#lastUse = Date.now(); }
+  }
+  async #call(method, args, signal) {
+    if (this.#idleStopped) {
+      if (method !== 'agent_desktop') throw failure('AGENT_DESKTOP_IDLE_STOPPED', `The agent desktop closed after ${Math.round(this.#idleMs / 60_000)} idle minutes; its windows were returned and its display removed. No input was sent. Call agent_desktop start to use it again, or agent_desktop stop to continue without it.`);
+      this.#idleStopped = false;
+    }
     if (method === 'agent_desktop') {
       if (Object.keys(args).some(key => key !== 'action') || !['start', 'stop', 'status'].includes(args.action)) {
         throw failure('INVALID_ARGUMENT', 'agent_desktop accepts only action: start, stop or status.');
@@ -86,6 +103,7 @@ export class MacAgentDesktopRuntime {
       if (this.#personStop) throw this.#personStop;
       if (this.#failure) throw this.#failure;
       this.#state = status.state;
+      this.#watchIdle();
       return reply(status);
     } catch (cause) {
       this.#latch(cause);
@@ -109,7 +127,22 @@ export class MacAgentDesktopRuntime {
     const status = await this.#normal.desktopControl('status');
     return reply({ ...status, state: this.#state, stoppedByPerson: !!this.#personStop });
   }
+  #watchIdle() {
+    clearInterval(this.#idleTimer);
+    this.#idleTimer = setInterval(() => this.#checkIdle().catch(() => {}), Math.min(15_000, this.#idleMs / 4));
+    this.#idleTimer.unref?.();
+  }
+  async #checkIdle() {
+    if (this.#state !== 'running') { clearInterval(this.#idleTimer); return; }
+    if (this.#inFlight || this.#stopping || this.#personStop || Date.now() - this.#lastUse < this.#idleMs) return;
+    // A pending consent or a locked Mac is not idleness; restoring windows waits for unlock.
+    const status = await this.#desktop.desktopControl('status');
+    if (status.consent || status.parentLocked !== false || this.#inFlight || Date.now() - this.#lastUse < this.#idleMs) return;
+    const result = JSON.parse((await this.#stop()).content[0].text);
+    if (result.state === 'inactive') this.#idleStopped = true;
+  }
   async #stop() {
+    clearInterval(this.#idleTimer);
     if (this.#stopping) return await this.#stopping;
     this.#epoch++;
     const operation = async () => {
@@ -140,6 +173,7 @@ export class MacAgentDesktopRuntime {
   async close() {
     if (this.#closing) return;
     this.#closing = true; this.#epoch++;
+    clearInterval(this.#idleTimer);
     // EOF is the ownership boundary and interrupts native consent independently
     // of the app-call queue. Native shutdown restores and confirms removal.
     await this.#desktop?.close();

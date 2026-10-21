@@ -67,7 +67,7 @@ final class AgentDisplay {
 
     func create() async throws -> Arguments {
         try requireAccessibility()
-        let checkDesktop = quietDesktopCheck()
+        let checkDesktop = personGuard()
         guard display == nil, ledger.displayID == nil, !ledger.restorePending else {
             throw OpenCUError("AGENT_DISPLAY_BUSY", "Restore and destroy the previous display first.")
         }
@@ -134,11 +134,11 @@ final class AgentDisplay {
     func moveWindow(_ proposal: Proposal) async throws -> Arguments {
         try requireAccessibility()
         let app = proposal.app
-        let checkDesktop = quietDesktopCheck()
         let started = ProcessInfo.processInfo.systemUptime
         var diagnostic: Arguments = ["pid": app.pid, "elapsedMs": 0]
         var writes: [Arguments] = [], observations: [Arguments] = []
         var selected: AXUIElement?
+        let checkDesktop = personGuard(pid: app.pid) { selected.flatMap { axRect($0) } }
         var resolvedID: CGWindowID?
         func observation() -> Arguments {
             var value = windowEvidence(pid: app.pid, window: selected, id: resolvedID)
@@ -509,15 +509,21 @@ final class AgentDisplay {
         }
         throw OpenCUError("AGENT_DISPLAY_TIMEOUT", "The requested display/window state did not settle within \(seconds) seconds.")
     }
-    private func quietDesktopCheck() -> () throws -> Void {
+    /// Cancellation, stop and lock always end a mutation. A move also stops once the
+    /// person starts using that window: its app comes forward, or a mouse button is
+    /// held over it. Other pointer movement and app switching are the person's own
+    /// work and never interrupt the agent.
+    private func personGuard(pid: pid_t? = nil, frame: @escaping () -> CGRect? = { nil }) -> () throws -> Void {
         let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
-        let pointer = CGEvent(source: nil)?.location
         return {
             try Task.checkCancellation()
             try self.beforeMutation?()
-            guard let pointer, CGEvent(source: nil)?.location == pointer,
-                  NSWorkspace.shared.frontmostApplication?.processIdentifier == front else {
-                throw OpenCUError("AGENT_DISPLAY_PERSON_ACTIVE", "Foreground or pointer changed; further display/window mutations stopped. Cleanup remains enabled.")
+            guard let pid else { return }
+            let activated = front != pid && NSWorkspace.shared.frontmostApplication?.processIdentifier == pid
+            let held = NSEvent.pressedMouseButtons != 0
+                && (CGEvent(source: nil)?.location).map { frame()?.contains($0) == true } == true
+            guard !activated && !held else {
+                throw OpenCUError("AGENT_DISPLAY_PERSON_ACTIVE", "The person started using this window (its app came forward or a mouse button was held over it); further display/window mutations stopped. Cleanup remains enabled.")
             }
         }
     }

@@ -139,7 +139,6 @@ final class AgentDesktopController {
             defer { self.monitorTask = nil }
             do {
                 try self.requireUnlocked()
-                if !self.window.visible { self.onPersonStop?(); return }
                 if !self.moving {
                     try self.display.validateLayout()
                     let generation = self.state.generation
@@ -167,6 +166,8 @@ final class AgentDesktopController {
         state.stopByPerson(); failure = AgentDesktopState.stopError
         cancelConsent(); observedGeneration = nil; onInvalidate?(); event()
     }
+    /// Closing or minimizing only hides the preview; the menu bar shows it again.
+    func showWindow() { window.reveal() }
     func cancelConsent() {
         consent.cancel(); consentAnswer = false; window.clearConsent()
     }
@@ -231,9 +232,6 @@ final class AgentDesktopController {
             }
             try Task.checkCancellation(); try requireUnlocked(); try state.requireRunning()
             guard consentAnswer == true else { observationConsent = consent.reduced[proposal.key] ?? "cancelled"; return false }
-            // Let the consent click/trackpad settle, then sample the quiet-desktop baseline.
-            if proposal.requiresMove { try await Task.sleep(nanoseconds: 1_000_000_000) }
-            try Task.checkCancellation(); try requireUnlocked(); try state.requireRunning()
             try display.validateProposal(proposal)
             moving = true
             defer { moving = false }

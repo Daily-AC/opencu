@@ -15,9 +15,11 @@ final class PresenceController: NSObject, NSMenuDelegate {
     var desktopVisible = false {
         didSet {
             if desktopVisible { called(target: nil, name: PresenceStrings().text("agent desktop")); finishedCall() }
+            else if !trackingMenu { statusItem?.menu = makeMenu() }
         }
     }
     var onStop: (() -> Void)?
+    var onShowDesktop: (() -> Void)?
     var onPersonInteraction: (() -> Void)?
     private var statusItem: NSStatusItem?
     private var timer: Timer?
@@ -69,11 +71,15 @@ final class PresenceController: NSObject, NSMenuDelegate {
         targetBounds = snapshot.bounds
     }
     static func menu(strings: PresenceStrings, name: String, stopped: Bool, target: AnyObject? = nil,
-                     stop: Selector? = nil, permissions: Selector? = nil) -> NSMenu {
+                     stop: Selector? = nil, permissions: Selector? = nil, showDesktop: Selector? = nil) -> NSMenu {
         let menu = NSMenu()
         let status = stopped ? strings.text("OpenCU is stopped") : String(format: strings.text("OpenCU is using %@"), name)
         let heading = NSMenuItem(title: status, action: nil, keyEquivalent: "")
         heading.isEnabled = false; menu.addItem(heading)
+        if let showDesktop, !stopped {
+            let show = NSMenuItem(title: strings.text("Show agent desktop"), action: showDesktop, keyEquivalent: "")
+            show.target = target; menu.addItem(show)
+        }
         let stopItem = NSMenuItem(title: strings.text("Stop"), action: stop, keyEquivalent: "")
         stopItem.target = target; stopItem.isEnabled = !stopped
         menu.addItem(stopItem); menu.addItem(.separator())
@@ -84,7 +90,8 @@ final class PresenceController: NSObject, NSMenuDelegate {
     }
     private func makeMenu() -> NSMenu {
         let menu = Self.menu(strings: PresenceStrings(), name: targetName, stopped: state.stopped,
-                             target: self, stop: #selector(stop), permissions: #selector(permissions))
+                             target: self, stop: #selector(stop), permissions: #selector(permissions),
+                             showDesktop: desktopVisible ? #selector(showDesktop) : nil)
         menu.delegate = self
         return menu
     }
@@ -103,6 +110,7 @@ final class PresenceController: NSObject, NSMenuDelegate {
         }
     }
     @objc private func permissions() { setup.show(activate: true) }
+    @objc private func showDesktop() { onShowDesktop?() }
 
     func permissionFailure(_ error: OpenCUError) -> OpenCUError {
         guard state.connected else { return error }
