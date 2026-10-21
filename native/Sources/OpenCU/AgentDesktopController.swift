@@ -33,6 +33,7 @@ final class AgentDesktopController {
         self.display = display
         window.onStop = { [weak self] in self?.onPersonStop?() }
         capture.onFrame = { [weak self] image in self?.window.showFrame(image) }
+        window.onPictureSize = { [weak self] pixels in self?.capture.fit(pixels) }
         capture.mayDisplayFrame = { [weak self] in
             guard let self else { return false }
             return [.starting, .running].contains(self.state.phase) && !self.state.stoppedByPerson && !desktopLocked()

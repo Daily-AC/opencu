@@ -16,6 +16,10 @@ final class AgentDesktopCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         var failure: String?
     }
     private var policy = AgentDesktopCapturePolicy()
+    private var configuration: SCStreamConfiguration?
+    private var nativeSize = (width: 0, height: 0)
+    /// The preview's on-screen pixel size; the stream follows it (full screen gets full resolution).
+    private(set) var fitSize = CGSize(width: 960, height: CGFloat.greatestFiniteMagnitude)
 
     /// SCK callbacks may outlive cancellation. Waiting is bounded and never keeps
     /// the native control lane hostage to a shareable-content/start callback.
@@ -58,7 +62,9 @@ final class AgentDesktopCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         }
         let filter = SCContentFilter(display: display, excludingWindows: [])
         let configuration = SCStreamConfiguration()
-        let size = AgentDesktopCapturePolicy.previewSize(width: display.width, height: display.height)
+        let scale = NSScreen.screens.first { ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? UInt32) == displayID }?.backingScaleFactor ?? 1
+        nativeSize = (Int(Double(display.width) * scale), Int(Double(display.height) * scale))
+        let size = AgentDesktopCapturePolicy.previewSize(width: nativeSize.width, height: nativeSize.height, fit: fitSize)
         configuration.width = size.width
         configuration.height = size.height
         configuration.pixelFormat = kCVPixelFormatType_32BGRA
@@ -66,6 +72,7 @@ final class AgentDesktopCapture: NSObject, SCStreamOutput, SCStreamDelegate {
         configuration.queueDepth = 3
         configuration.capturesAudio = false
         configuration.showsCursor = false
+        self.configuration = configuration
         let stream = SCStream(filter: filter, configuration: configuration, delegate: self)
         try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: queue)
         self.stream = stream
@@ -94,6 +101,16 @@ final class AgentDesktopCapture: NSObject, SCStreamOutput, SCStreamDelegate {
             }
             try await Task.sleep(nanoseconds: 50_000_000)
         }
+    }
+    func fit(_ pixels: CGSize) {
+        guard pixels.width >= 1, pixels.height >= 1 else { return }
+        fitSize = pixels
+        guard running, let stream, let configuration, nativeSize.width > 0 else { return }
+        let size = AgentDesktopCapturePolicy.previewSize(width: nativeSize.width, height: nativeSize.height, fit: pixels)
+        // Ignore small changes; each reconfiguration reallocates the stream's buffers.
+        guard abs(size.width - configuration.width) * 10 > configuration.width else { return }
+        configuration.width = size.width; configuration.height = size.height
+        stream.updateConfiguration(configuration) { _ in }
     }
     func stop() async -> String? {
         generation += 1; running = false; stopping = true
