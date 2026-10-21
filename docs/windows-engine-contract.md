@@ -11,9 +11,9 @@ three consecutive 30-check fixture runs on a fresh Windows 11 VM, with the
 10-second rule and physical Escape checked through host-injected input
 ([evidence](../evidence/opencu-windows-gui-2026-10-19.json)).
 
-The locked-parent indexed-pattern path on `feat/win-locked-patterns` is new and
-**needs Windows acceptance**. Version stays 0.4.0; this branch is not a release.
-Earlier acceptance below applies to the baseline, not this new path.
+Locked-parent indexed button click/value setting and refused typing were accepted
+on a Windows 11 VM on 2026-10-21. See the measured scope and review corrections in
+the agent-desktop section below. Version remains 0.4.0.
 
 ## Standalone transport and embedding
 
@@ -47,9 +47,9 @@ A provider timeout returns unknown without automatic observation. The MCP server
 and `run_actions` batching. Native `wait` accepts integer `ms` from 1 to 15000,
 sends no input, consumes screenshot coordinates and honours the activity/stop guard. A non-Node host must implement those conveniences itself.
 `doctor` (or `--doctor`) reports version, platform, executable path, desktop accessibility,
-whether the current mode requires foreground, and no account/proprietary-runtime
-requirement. `foregroundOnly` is false only for a guarded child with a positively
-locked parent; the limited action set below still applies.
+the legacy `foregroundOnly:true` flag, and no account/proprietary-runtime
+requirement. The flag is unchanged; the limited locked-parent exception is
+described below and is not selected from doctor metadata.
 
 ## Observations and targeting
 
@@ -581,7 +581,7 @@ package on clean `base`, with commits through `987d042` plus acceptance-tool fix
 Those pointer-suppression and lock-error fixes subsequently passed the owner's
 2026-10-21 0.4.0 acceptance at `1cf23f8`
 ([evidence](../evidence/opencu-windows-agent-desktop-2026-10-21-v0.4.0.json)).
-The new locked-parent pattern implementation has not run on Windows. See [ADR 0002](adr/0002-windows-agent-desktop-child-session.md)
+The later locked-pattern VM run is recorded below. See [ADR 0002](adr/0002-windows-agent-desktop-child-session.md)
 and the [input investigation](windows-agent-desktop-input-findings.md).
 
 ### Historical measured results (2026-10-20)
@@ -695,19 +695,23 @@ lock state from an inaccessible desktop or a UAC screen. Native doctor exposes
 MCP status call returns an explicit error instead of inventing false. This status
 query cannot stop/restart an engine or clear a person-stop latch.
 
-### Locked-parent control patterns (branch implementation; acceptance pending)
+### Locked-parent control patterns
 
 While locked, the child keeps reading and taking WGC screenshots. The authenticated
 bridge starts its engine with `serve --agent-parent-session <id>` and requires
-doctor to confirm `agentParentSession` and a Boolean `agentParentLocked`. Only a
-positive parent-lock query on that connection permits the following pattern calls:
+doctor to confirm `agentParentSession` and a Boolean `agentParentLocked`. Native
+configuration additionally requires WTSClientProtocolType=2 for the engine's own
+process session; console/unknown/query-failed sessions refuse the flag. The
+bridge still verifies the parent-child relationship. Only a positive parent-lock
+query on that connection permits the following pattern calls:
 
 | Request | Delivery while parent is locked |
 | --- | --- |
-| Indexed single-left `click`, no modifier/duration | First supported Invoke, Toggle, SelectionItem.Select, ExpandCollapse, then nonempty Legacy MSAA default action |
+| Indexed single-left `click`, no modifier/duration | First supported SelectionItem.Select, Invoke, Toggle, ExpandCollapse, then nonempty Legacy MSAA default action |
 | Indexed `set_value` | Writable ValuePattern only; no RangeValue or text-input fallback |
 | Indexed `perform_secondary_action` | A listed Invoke, Toggle, Select/AddToSelection/RemoveFromSelection, Expand/Collapse, or DoDefaultAction; live pattern required |
-| All other input, activation, waits and launches | SCREEN_LOCKED; reads/list/capture of existing apps remain available |
+| Other supported input, activation and waits | SCREEN_LOCKED; reads/list/capture remain available |
+| Read-triggered launch | CreateProcess without OpenCU activation; restored behavior needs Windows acceptance |
 
 ExpandCollapse expands collapsed/partially expanded controls, collapses expanded
 controls and skips leaf nodes. Selection uses live supported interfaces, never
@@ -716,10 +720,14 @@ UNSUPPORTED_ACTION; disabled/read-only controls retain ELEMENT_DISABLED or
 ATTRIBUTE_NOT_SETTABLE. Once a provider call starts, no other pattern or synthetic
 input is attempted as fallback. The query treats successful null interface output
 as absence, fixing the old background branch's zero-HRESULT error before Toggle.
-Real HRESULT failures are propagated.
+Pre-dispatch HRESULT failures are propagated; errors after dispatch return unknown outcome.
+SelectionItem precedes Invoke because Invoke on a list item can open/activate it.
+`select_text` retains UNSUPPORTED_ON_WINDOWS even while locked.
 
 The locked path uses its own guard and MTA worker. It neither requires nor changes
-foreground, calls SetFocus, nor synthesizes mouse/keyboard/WM_CHAR/clipboard input.
+foreground or calls SetFocus. OpenCU sends no synthetic mouse/keyboard/WM_CHAR/
+clipboard input on this path; a provider may implement its action differently.
+A provider that returns success without an observed effect produces unknown outcome.
 An application provider may activate a window in the child; this is acceptable
 within that agent-owned session. Ordinary device activity/held keys, including
 RDP lock-transition events, do not block this path. Escape, monitor liveness,
@@ -728,19 +736,31 @@ identity and live element attachment remain checked. A prior interrupted action
 still needs a fresh read. Parent lock is rechecked immediately before mutation;
 a change/unknown state stops the operation without switching delivery modes.
 
-Preparation and mutation have a three-second worker deadline. Timeout returns
-unknown outcome and invalidates indexes; a provider already entered may finish
-later and cannot be cancelled. Only one call can be outstanding. While it remains,
-further writes/activation/waits return PATTERN_ACTION_PENDING, including after
-unlock; read-triggered launches are disabled. Explicit reads and doctor remain
-available. USER_STOPPED takes precedence. No automatic reconnect or input replay
-is introduced.
+Preparation and mutation have a three-second worker deadline. A pre-dispatch
+refusal says no pattern was sent, including a lock change during preflight. After
+dispatch, provider errors, deadline expiry, window destruction, process exit, or
+unlock during the follow-up read return unknown outcome explicitly saying the
+call was dispatched. No post-call target revalidation can mislabel a closed
+window as a failed action. Escape is carried as `stop:{code:"USER_STOPPED",...}`
+alongside unknown outcome, so the host preserves the result and permanently
+latches subsequent calls. Native indexes are invalidated on unknown outcomes.
+
+A provider timeout may return at about two seconds without an outstanding client
+call. PATTERN_ACTION_PENDING applies only while a client call actually outlives
+the deadline: further writes/activation/waits and read-triggered launches are
+blocked, even after unlock. That call may complete later and cannot be cancelled.
+Reads and doctor remain available subject to existing stop rules. No automatic
+reconnect or input replay is introduced.
 
 Every confirmed pattern return is followed by a fresh observation using the
 existing scope. Compare window summaries and indexed accessibility state, ignoring
-capture/lock guidance. A change returns normal state/diff; no observable change
-returns that state with unknown outcome. A failed follow-up read also returns
-unknown. This is not a claim that every UIA success had the intended effect;
+capture/lock guidance. A change returns normal state/diff; if a batch has remaining
+actions, stop and return the complete fresh state with their unsent count. Never
+resolve the old batch indexes in the new tree. No observable change returns that
+state with unknown outcome. A failed follow-up read or unlock during that read
+also returns unknown, retaining any fresh state. The selected pattern/default
+action is exposed in MCP `_meta["opencu/pattern"]` for both success and dispatched
+unknown outcomes. This is not a claim that every UIA success had the intended effect;
 asynchronous, off-scope or provider-internal effects may be invisible. Unknown
 outcome stops run_actions, clears native indexes and requires explicit
 get_app_state before further input. MCP reuses the returned state rather than
@@ -796,10 +816,27 @@ remain unmeasured.
 | `AGENT_DESKTOP_LOST` | Host, child or pipe ended; no reconnect/fallback. |
 | `AGENT_DESKTOP_CLEANUP_FAILED` | Child logoff was not confirmed. |
 | `USER_STOPPED` | Person stop, including host close; cannot be cleared by desktop switching. |
-| `SCREEN_LOCKED` | Ordinary child input/launch refused while parent is locked/unverifiable, or parent lock changed during a pattern. Reads/screenshots remain available. Disconnect/logoff still ends the host. |
+| `SCREEN_LOCKED` | Ordinary child input refused while parent is locked/unverifiable, or parent lock changed during a pattern. Reads/screenshots remain available. Disconnect/logoff still ends the host. |
 | `PATTERN_ACTION_PENDING` | An earlier timed-out provider still occupies the only write slot; read state and let the person resolve it, never reconnect to bypass the fence. |
 
-### Remaining acceptance
+### Measured locked-pattern result and remaining checks
+
+On 2026-10-21, from a clean Windows 11 26H2 VM checkpoint, the owner passed
+verify-gui-win three times (40/40 each), the package verifier, and the agent-desktop
+suite with `--locked-parent` behind the real lock screen. The indexed Increment
+click changed 10 to 11, `set_value` produced "locked pattern value", `type_text`
+returned SCREEN_LOCKED, and unlock retained the same child with no replay.
+Hardware concurrency, parked-pointer, hover, Escape and close regressions also
+passed. A locked indexed click on the text box returned UNSUPPORTED_ACTION in
+about two seconds. The run did not record which pattern/default action delivered
+the button click; Invoke versus MSAA must not be inferred.
+
+The accepted run predates the selection-priority, batch, post-dispatch and WTS
+review corrections. Those corrections have offline regression coverage; the next
+VM run should exercise the specific cases below. Restored launch while locked
+**needs Windows acceptance**.
+
+### Remaining checks
 
 External minimize, covered or partly off-screen viewports, GPU/video/protected
 content, smart-card sign-in and unsupported Windows editions are **unmeasured**.
@@ -833,7 +870,7 @@ The offline package verifier additionally exercises non-elevating preparation,
 repeated setup, the extended helper self-test and rebuilding after directory
 replacement when the machine is already enabled. Otherwise it checks refusal
 without UAC. It removes only its temporary install's demand task.
-The new optional locked-parent case was not run on Windows during this job.
+The owner passed the optional locked-parent case; repeat it to record the new pattern metadata and regress the review fixes.
 On the already enabled VM, run:
 
 ```powershell
@@ -845,12 +882,18 @@ manual Win+L. It waits up to three minutes for parentLocked=true, verifies child
 capture, one indexed button click, ValuePattern text replacement and a refused
 type_text with unchanged counter/text. Keep the parent locked until prompted to
 unlock. It then verifies the same child/host and no replay before normal cleanup.
-No password is collected and no automatic lock/unlock is attempted.
+The updated case also launches a second disposable fixture through get_app_state
+while locked, checks its child session and screenshot, and records action pattern
+fields. This added launch check has not run on Windows. No password is collected
+and no automatic lock/unlock is attempted.
 
 Additional owner checks: Toggle with absent Invoke, SelectionItem, ExpandCollapse,
 MSAA-only controls, listed secondary actions, no-op/disabled/read-only/missing
 patterns, a blocking/modal provider, late completion and pending-write refusal,
-lock/unlock mid-action, unknown parent state and physical Escape. Run the normal
+lock/unlock mid-action, unknown parent state and Escape during provider delivery.
+Also check selection before Invoke, batch truncation with shifted indexes,
+console-process flag refusal and a fresh child app launch while locked without
+OpenCU activation. Run the normal
 Windows GUI suite to guard unlocked behavior. Disconnect/logoff must end the child;
 unlock must not revive a stopped connection. See the
 [input findings](windows-agent-desktop-input-findings.md) for measured facts and
