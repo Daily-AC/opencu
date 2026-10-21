@@ -54,14 +54,17 @@ namespace OpenCUAgentDesktop {
         [DllImport("advapi32.dll", SetLastError=true)] internal static extern bool GetTokenInformation(IntPtr token, int kind, out int value, int size, out int returned);
         [DllImport("kernel32.dll")] internal static extern bool CloseHandle(IntPtr handle);
         [DllImport("user32.dll")] internal static extern IntPtr GetForegroundWindow();
+        [DllImport("user32.dll")] internal static extern IntPtr GetSystemMenu(IntPtr window, bool revert);
+        [DllImport("user32.dll", CharSet=CharSet.Unicode)] internal static extern bool AppendMenu(IntPtr menu, uint flags, IntPtr id, string text);
+        [DllImport("user32.dll")] internal static extern uint CheckMenuItem(IntPtr menu, uint id, uint check);
         [DllImport("user32.dll", EntryPoint="GetWindowLongPtrW", SetLastError=true)] static extern IntPtr GetWindowLongPtr(IntPtr window, int index);
         [DllImport("user32.dll", EntryPoint="SetWindowLongPtrW", SetLastError=true)] static extern IntPtr SetWindowLongPtr(IntPtr window, int index, IntPtr value);
         [DllImport("user32.dll", SetLastError=true)] static extern bool SetWindowPos(IntPtr window, IntPtr after, int x, int y, int width, int height, uint flags);
-        internal static void AllowDeliberateActivation(IntPtr window) {
+        internal static void AllowDeliberateActivation(IntPtr window, bool topmost) {
             long style = GetWindowLongPtr(window, -20).ToInt64();
             Check(SetWindowLongPtr(window, -20, new IntPtr(style & ~0x08000000L)) != IntPtr.Zero);
-            // Topmost, no activation, movement, resize or owner reordering.
-            Check(SetWindowPos(window, new IntPtr(-1), 0, 0, 0, 0, 0x1|0x2|0x10|0x20|0x200));
+            // Keep-on-top choice, no activation, movement, resize or owner reordering.
+            Check(SetWindowPos(window, new IntPtr(topmost ? -1 : -2), 0, 0, 0, 0, 0x1|0x2|0x10|0x20|0x200));
         }
         [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] internal static extern SafePipeHandle CreateNamedPipe(string name, uint access, uint mode, uint instances, uint output, uint input, uint timeout, ref SecurityAttributes attributes);
         [StructLayout(LayoutKind.Sequential)] internal struct SecurityAttributes { internal int length; internal IntPtr descriptor; internal bool inherit; }
@@ -250,7 +253,14 @@ namespace OpenCUAgentDesktop {
         // Disable the native ancestor of every ActiveX child HWND, rather than
         // filtering managed MouseMove events that do not see native RDP input.
         readonly Panel inputSurface = new Panel { Dock=DockStyle.Fill, Enabled=false };
-        readonly Label mode = new Label { Text="Starting agent desktop. Close to stop.", Dock=DockStyle.Top, Height=44, Padding=new Padding(10) };
+        readonly Panel bar = new Panel { Dock=DockStyle.Top, Height=36 };
+        readonly Label mode = new Label { Text="Starting agent desktop.", Dock=DockStyle.Fill, TextAlign=ContentAlignment.MiddleLeft, Padding=new Padding(10, 0, 0, 0) };
+        readonly CheckBox pin = new CheckBox { Text="Keep on top", AutoSize=true, Margin=new Padding(6, 6, 6, 0) };
+        readonly Button clean = new Button { Text="Clean view", AutoSize=true };
+        readonly Button stop = new Button { Text="Stop", AutoSize=true };
+        readonly string viewSettings = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "OpenCU", "agent-desktop-view.txt");
+        const int MenuPin = 0x1A10, MenuClean = 0x1A20;
+        bool pinned, cleanView;
         readonly Process parent;
         readonly Process guardian;
         readonly Mutex ownership;
@@ -277,11 +287,20 @@ namespace OpenCUAgentDesktop {
             });
             guardian.StandardInput.NewLine = "\n";
             Text = "OpenCU agent desktop"; ClientSize = new Size(720, 500);
-            TopMost = true;
-            MinimizeBox = false; MaximizeBox = false; StartPosition = FormStartPosition.Manual;
+            // An ordinary window: minimize/maximize, optional keep-on-top and clean view.
+            // Closing minimizes it to the taskbar; Stop or physical Escape ends the desktop.
+            StartPosition = FormStartPosition.Manual;
             Location = new Point(Screen.PrimaryScreen.WorkingArea.Right - Width - 24, Screen.PrimaryScreen.WorkingArea.Bottom - Height - 24);
             inputSurface.Controls.Add(control); control.Dock = DockStyle.Fill;
-            view.Controls.Add(inputSurface); Controls.Add(view); Controls.Add(mode);
+            var tools = new FlowLayoutPanel { Dock=DockStyle.Right, AutoSize=true, WrapContents=false, Padding=new Padding(0, 4, 8, 0) };
+            tools.Controls.AddRange(new Control[] { pin, clean, stop });
+            bar.Controls.Add(mode); bar.Controls.Add(tools);
+            view.Controls.Add(inputSurface); Controls.Add(view); Controls.Add(bar);
+            try { var saved = File.ReadAllText(viewSettings).Split(' '); pinned = saved[0] == "1"; cleanView = saved.Length > 1 && saved[1] == "1"; } catch { }
+            TopMost = pinned; pin.Checked = pinned; ApplyClean();
+            pin.CheckedChanged += delegate { SetPinned(pin.Checked); };
+            clean.Click += delegate { SetClean(true); };
+            stop.Click += delegate { PersonStop(); };
             view.MouseDown += delegate(object sender, MouseEventArgs e) {
                 if (!ready || closing || e.Button != MouseButtons.Left) return;
                 interactionClick = true; view.Capture = true;
@@ -315,8 +334,22 @@ namespace OpenCUAgentDesktop {
             inputSurface.Enabled = interactive;
             mode.Text = interactive
                 ? "Interactive - mouse and keyboard go to the agent desktop. Escape stops the agent."
-                : "Watch only - click the view to interact. Close this window to stop the agent.";
+                : "Watch only - click the view to interact. Closing only minimizes this window.";
         }
+        void SetPinned(bool value) {
+            pinned = value; TopMost = value; pin.Checked = value; SyncSystemMenu(); SaveView();
+        }
+        void SetClean(bool value) { cleanView = value; ApplyClean(); SaveView(); }
+        void ApplyClean() { bar.Visible = !cleanView; SyncSystemMenu(); }
+        void SaveView() { try { File.WriteAllText(viewSettings, (pinned ? "1" : "0") + " " + (cleanView ? "1" : "0")); } catch { } }
+        // The title-bar menu (right-click or Alt+Space) keeps both choices reachable in clean view.
+        void SyncSystemMenu() {
+            if (!IsHandleCreated) return;
+            IntPtr menu = Native.GetSystemMenu(Handle, false);
+            Native.CheckMenuItem(menu, MenuPin, pinned ? 8u : 0u);
+            Native.CheckMenuItem(menu, MenuClean, cleanView ? 8u : 0u);
+        }
+        void PersonStop() { Fail("USER_STOPPED", "The person stopped the agent desktop. Do not reconnect without explicit permission."); }
         protected override void OnDeactivate(EventArgs e) {
             interactionClick = false; view.Capture = false;
             SetInteractive(false);
@@ -324,8 +357,18 @@ namespace OpenCUAgentDesktop {
         }
         protected override void OnHandleCreated(EventArgs e) {
             base.OnHandleCreated(e); Native.Check(Native.WTSRegisterSessionNotification(Handle, 0));
+            IntPtr menu = Native.GetSystemMenu(Handle, false);
+            Native.AppendMenu(menu, 0x800, IntPtr.Zero, null);
+            Native.AppendMenu(menu, 0, new IntPtr(MenuPin), "Keep on top");
+            Native.AppendMenu(menu, 0, new IntPtr(MenuClean), "Clean view");
+            SyncSystemMenu();
         }
         protected override void WndProc(ref Message message) {
+            if (message.Msg == 0x112) { // WM_SYSCOMMAND from the title-bar menu
+                int command = message.WParam.ToInt32() & 0xFFF0;
+                if (command == MenuPin) { SetPinned(!pinned); return; }
+                if (command == MenuClean) { SetClean(!cleanView); return; }
+            }
             if (!closing && message.Msg == 0x2B1 && message.LParam.ToInt32() == parent.SessionId &&
                 ParentSessionPolicy.EndsDesktop(message.WParam.ToInt32()))
                 Fail("SCREEN_LOCKED", "The parent session disconnected or logged off. Agent desktop ended; it will not resume automatically.");
@@ -379,7 +422,6 @@ namespace OpenCUAgentDesktop {
             if (closing) return;
             try {
                 if (parent.HasExited) { CloseOwned(); return; }
-                if (WindowState == FormWindowState.Minimized) { Fail("USER_STOPPED", "The agent desktop was minimized; input stopped. Do not reconnect automatically."); return; }
                 if (!ready && DateTime.UtcNow > deadline) { Fail("AGENT_DESKTOP_UNAVAILABLE", "Child startup timed out without an authenticated engine. No input was sent."); return; }
                 if (child == UInt32.MaxValue && rdp != null) {
                     uint id = Native.Child();
@@ -430,7 +472,7 @@ namespace OpenCUAgentDesktop {
                     pipeWriter = writer;
                     Invoke((Action)delegate {
                         if (closing) throw new IOException("Host closed during startup.");
-                        Native.AllowDeliberateActivation(Handle);
+                        Native.AllowDeliberateActivation(Handle, pinned);
                         opening = false; ready = true; SetInteractive(false);
                     });
                     Protocol.Output(new { @event="ready", sessionId=connection.childSession, hostPid=own.Id });
@@ -462,7 +504,12 @@ namespace OpenCUAgentDesktop {
             closing = true; Close();
         }
         protected override void OnFormClosing(FormClosingEventArgs e) {
-            if (!closing) Protocol.Output(new { @event="failure", code="USER_STOPPED", message="The person closed the agent desktop. Do not reconnect without explicit permission." });
+            if (!closing && e.CloseReason == CloseReason.UserClosing) {
+                // Closing minimizes the view to the taskbar; the child session keeps running.
+                e.Cancel = true; WindowState = FormWindowState.Minimized;
+                return;
+            }
+            if (!closing) Protocol.Output(new { @event="failure", code="USER_STOPPED", message="Windows closed the agent desktop. Do not reconnect without explicit permission." });
             closing = true; timer.Stop();
             if (pipe != null) pipe.Dispose();
             // Only log off a session this connection created, and recheck the
