@@ -43,11 +43,13 @@
 "Move once" = "Move once";
 "Allow once" = "Allow once";
 "Keep here" = "Keep here";
-"Watch only · Close this window to stop" = "Watch only · Close this window to stop";
+"Show agent desktop" = "Show agent desktop";
+"Keep on top" = "Keep on top";
+"Clean view" = "Clean view";
 "Waiting for the agent" = "Waiting for the agent";
 "Watch only · Waiting for an app" = "Watch only · Waiting for an app";
 "Paused while this Mac is locked" = "Paused while this Mac is locked";
 "Input paused for a macOS confirmation" = "Input paused for a macOS confirmation";
 "Untitled window" = "Untitled window";
-"Move ‘%@’ from %@ to the agent desktop? It will return when this desktop closes. The app stays open. Keep the mouse still for 2 seconds after clicking." = "Move ‘%@’ from %@ to the agent desktop? It will return when this desktop closes. The app stays open. Keep the mouse still for 2 seconds after clicking.";
+"Move ‘%@’ from %@ to the agent desktop? It will return when this desktop closes. The app stays open." = "Move ‘%@’ from %@ to the agent desktop? It will return when this desktop closes. The app stays open.";
 "Allow this window for the agent? ‘%@’ from %@ is already on the agent display. OpenCU will not move or restore it." = "Allow this window for the agent? ‘%@’ from %@ is already on the agent display. OpenCU will not move or restore it.";

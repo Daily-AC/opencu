@@ -51,9 +51,9 @@ struct PresenceLocalizationChecks {
             expect(english[status.rawValue] != nil && chinese[status.rawValue] != nil, "Every host status/pause has both translations")
             expect(zh.text(status.rawValue) != en.text(status.rawValue), "Host status must not remain English")
         }
-        let move = "Move ‘%@’ from %@ to the agent desktop? It will return when this desktop closes. The app stays open. Keep the mouse still for 2 seconds after clicking."
+        let move = "Move ‘%@’ from %@ to the agent desktop? It will return when this desktop closes. The app stays open."
         let allow = "Allow this window for the agent? ‘%@’ from %@ is already on the agent display. OpenCU will not move or restore it."
-        expect(zh.format(move, "草稿 100% %@", "测试应用") == "把「草稿 100% %@」（测试应用）挪到 agent 桌面？结束时会挪回原处，应用会继续开着。点击后请保持鼠标不动 2 秒。", "Consent preserves names, percent signs and promised return")
+        expect(zh.format(move, "草稿 100% %@", "测试应用") == "把「草稿 100% %@」（测试应用）挪到 agent 桌面？结束时会挪回原处，应用会继续开着。", "Consent preserves names, percent signs and promised return")
         expect(zh.format(allow, "草稿", "测试应用") == "允许 agent 操作「草稿」（测试应用）吗？它已在 agent 显示器上，OpenCU 不会挪动或还原它。", "Already-present window uses permission wording, not a move promise")
         expect(en.format(move, "Draft", "Fixture").contains("Move ‘Draft’ from Fixture"), "English format arguments stay in order")
         expect(zh.format("OpenCU is using %@", zh.text("agent desktop")) == "OpenCU 正在使用 agent 桌面", "Menu heading localizes the desktop target as well as its sentence")

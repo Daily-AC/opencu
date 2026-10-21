@@ -8,7 +8,7 @@ const deferred = () => { let resolve, reject; const promise = new Promise((a, b)
 function fixture(t, options = {}) {
   const workers = [], calls = [];
   let waiting;
-  const runtime = new AgentDesktopRuntime({ platform: 'darwin', root: '/fixture', runtimeFactory: config => {
+  const runtime = new AgentDesktopRuntime({ platform: 'darwin', root: '/fixture', idleMs: options.idleMs, runtimeFactory: config => {
     let phase = 'inactive', stopped = false;
     const worker = { config, closed: false,
       async desktopControl(action) {
@@ -22,7 +22,7 @@ function fixture(t, options = {}) {
           phase = stopped ? 'stopped' : 'inactive';
           if (options.stopWait) await options.stopWait.promise;
         }
-        return { state: phase, stoppedByPerson: stopped, parentLocked: false,
+        return { state: phase, stoppedByPerson: stopped, parentLocked: !!options.locked,
           cleanup: { ok: !options.cleanupError }, preview: { running: phase === 'running' } };
       },
       async call(method, args) {
@@ -71,7 +71,7 @@ test('status and stop bypass a pending macOS consent call without replay', async
   assert.equal(f.calls.filter(call => call[1] === 'get_app_state').length, 1);
 });
 
-test('idle native close event permanently latches the whole MCP connection', async t => {
+test('idle native person-stop event permanently latches the whole MCP connection', async t => {
   const f = fixture(t);
   await f.control('start');
   f.workers[1].stopByPerson();
@@ -82,6 +82,36 @@ test('idle native close event permanently latches the whole MCP connection', asy
   assert.equal(json(await f.control('stop')).state, 'stopped');
   await assert.rejects(f.control('start'), { code: 'STOPPED_BY_PERSON' });
   assert.equal(f.workers.length, 2);
+});
+
+const settle = ms => new Promise(resolve => setTimeout(resolve, ms));
+test('an unused macOS desktop stops itself and tells the agent before any further app call', async t => {
+  const f = fixture(t, { idleMs: 40 });
+  await f.control('start');
+  await f.runtime.call('get_app_state', { app: 'Fixture' });
+  await settle(150);
+  assert.ok(f.calls.some(call => call[0] && call[1] === 'stop'));
+  assert.equal(f.workers[1].closed, true);
+  const reached = f.calls.length;
+  for (const method of ['get_app_state', 'click']) {
+    await assert.rejects(f.runtime.call(method, { app: 'Fixture' }), { code: 'AGENT_DESKTOP_IDLE_STOPPED' });
+  }
+  assert.equal(f.calls.length, reached, 'No app call may reach any worker after an idle stop');
+  assert.equal(json(await f.control('status')).state, 'inactive');
+  await f.runtime.call('get_app_state', { app: 'Fixture' });
+  assert.equal(f.calls.at(-1)[0], false);
+});
+
+test('idle stop waits for in-flight calls, pending consent and an unlocked Mac', async t => {
+  for (const options of [{ wait: true }, { locked: true }]) {
+    const f = fixture(t, { idleMs: 40, ...options });
+    await f.control('start');
+    const pending = options.wait && f.runtime.call('get_app_state', { app: 'Fixture' }).catch(() => {});
+    await settle(150);
+    assert.equal(f.calls.filter(call => call[1] === 'stop').length, 0, JSON.stringify(options));
+    assert.equal(json(await f.control('stop')).state, 'inactive');
+    await pending;
+  }
 });
 
 test('failed macOS startup and cleanup cannot fall back to normal app input', async t => {
