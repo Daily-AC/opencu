@@ -19,7 +19,7 @@ OpenCU is installed when this per-user manifest exists:
 ```json
 {
   "name": "opencu",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "platform": "win32",
   "mcp": {
     "command": "C:\\Users\\me\\AppData\\Local\\OpenCU\\node\\node.exe",
@@ -52,7 +52,7 @@ The package is not code-signed.
   operate its parent-desktop engine from session 0, a locked or disconnected
   session, or another user's session; it reports `SCREEN_LOCKED` there. An already
   running agent-desktop child remains readable/capturable when the parent locks;
-  its input is refused as described below.
+  only its supported indexed control patterns can act, as described below.
 - Connect stdin and stdout as the MCP stream and read stderr as diagnostics.
   Create no console window.
 - OpenCU opens no network port. It exits when stdin closes.
@@ -122,7 +122,7 @@ described below. `annotations.readOnlyHint` marks tools that send no input, but
 `get_app_state` can launch the requested app. A useful approval summary is the
 tool name plus its `app` argument.
 
-## Agent desktop (0.4.0)
+## Windows agent desktop (0.4.0)
 
 Relay the new `agent_desktop` lifecycle tool dynamically like other tools. It
 accepts only `action: start | stop | status`; no credentials or session selector.
@@ -148,14 +148,29 @@ fall back to the parent's desktop. Parent-engine timeout recovery above is uncha
 Status/cleanup are available after failure; errors explain that `agent_desktop`
 with `{"action":"stop"}` is required before app tools can resume. This is not a
 person-stop reset. While the parent screen is locked, the child stays alive for
-reads/screenshots, but input returns `SCREEN_LOCKED`. Five VM trials could not
-activate a child window while locked; the earlier success report is unreliable.
+reads/screenshots and the supported indexed control patterns introduced below;
+other input returns `SCREEN_LOCKED`. Five VM trials could not activate a child
+window while locked; the earlier unrestricted-input success report is unreliable.
 Nobody at the machine can see the child then. `status.parentLocked` (inside the
 tool's JSON text) reports the measured lock state. The native child guard checks
 that parent before input; it preserves USER_STOPPED precedence and reports partial
 input honestly if locking occurs during a call. SCREEN_LOCKED from an input is not
 a terminal host failure: reads remain allowed, and unlock permits subsequent
 explicit input under the normal rules, with no replay/reconnect.
+
+Only in the locked-parent Windows child, a single left indexed `click` with no
+modifiers/duration, `set_value` via ValuePattern (not RangeValue), and listed
+`perform_secondary_action` use supported control patterns without foreground or
+synthetic input. Click selects SelectionItem.Select, Invoke, Toggle,
+ExpandCollapse, then a nonempty MSAA default action, using capabilities rather
+than control names. Missing patterns return `UNSUPPORTED_ACTION`. Coordinate or
+modified/multiple clicks, typing, keys, scroll, drag, paste, activation and batch
+waits remain `SCREEN_LOCKED`. `get_app_state` may launch a child app without an
+activation request. A fresh pattern observation stops remaining batch steps;
+unknown outcomes require an explicit read, never replay. The 2026-10-21 Windows
+11 VM release acceptance measured Invoke/Value.SetValue, refused typing and
+nonactivating locked launch; other providers are not implied by that evidence.
+See the [unchanged v0.4.0 fixture evidence](../evidence/opencu-windows-agent-desktop-2026-10-21-v0.4.0.json).
 
 Console/remote disconnect and logoff still end the child. A caller can stop it
 while locked by ending MCP stdin; after unlocking the person can close the host
@@ -170,7 +185,7 @@ probe reports `existingChildSession: null` when none exists, not a DWORD sentine
 See the [Windows contract](windows-engine-contract.md#agent-desktop-040) and
 [focus/cursor investigation](windows-agent-desktop-input-findings.md).
 
-## macOS agent desktop
+## macOS agent desktop (0.4.1)
 
 Keep the same strict action-only schema and existing tool annotations. macOS
 start automatically creates a nonactivating watch-only preview and a virtual
