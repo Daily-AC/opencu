@@ -230,6 +230,10 @@ export class AgentDesktopRuntime {
       try {
         const result = await (this.#childRuntime ?? this.#parent).call(method, args, signal);
         this.#latch({ code: result._meta?.['opencu/error'], message: result.content?.[0]?.text });
+        // A stop detected after pattern dispatch must retain its unknown outcome.
+        // The callback already latched this connection; all later calls still stop.
+        if (this.#personStop && result._meta?.['opencu/actionOutcome'] === 'unknown'
+            && result._meta?.['opencu/stop'] === this.#personStop.code) return result;
         if (this.#state !== 'inactive' && this.#personStop) throw this.#personStop;
         if (this.#failure) throw this.#failure;
         if (method === 'get_app_state' && !result.isError) this.#fresh = false;

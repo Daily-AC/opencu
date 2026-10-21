@@ -458,6 +458,7 @@ test('locked patterns return their fresh state and ordinary Windows actions reta
   await f.call('get_app_state', { app: 'Fixture' });
   const result = await f.call('set_value', { app: 'Fixture', element_index: 2, value: 'locked value' });
   assert.equal(result.content[0].text, changed.text);
+  assert.equal(result._meta['opencu/pattern'], 'Invoke');
   assert.deepEqual((await f.calls()).map(x => x.method), ['get_app_state', 'set_value']);
   await f.call('click', { app: 'Fixture', element_index: 1 });
   assert.deepEqual((await f.calls()).map(x => x.method), ['get_app_state', 'set_value', 'click', 'get_app_state']);
@@ -465,8 +466,9 @@ test('locked patterns return their fresh state and ordinary Windows actions reta
 
 test('a locked pattern with no observed change returns state, stops its batch and requires a read', async t => {
   const unknown = { ...lockedResult(state), outcome: 'unknown', message: 'Pattern returned success, but no accessibility change was observed.' };
-  const f = await fixture(t, [{ result: state }, { result: unknown }, { result: state },
-    { result: lockedResult(state) }], 'win32');
+  const f = await fixture(t, [{ result: state }, { result: unknown },
+    { error: { code: 'OBSERVATION_REQUIRED', message: 'Read state before input' } },
+    { result: state }, { result: lockedResult(state) }], 'win32');
   await f.call('get_app_state', { app: 'Fixture' });
   const result = await f.call('run_actions', { app: 'Fixture', actions: [
     { method: 'perform_secondary_action', element_index: 1, action: 'Invoke' },
@@ -477,11 +479,11 @@ test('a locked pattern with no observed change returns state, stops its batch an
   assert.deepEqual(result.content.map(c => c.text), [unknown.message, state.text]);
   const refused = await f.call('click', { app: 'Fixture', element_index: 1 });
   assert.equal(refused._meta['opencu/error'], 'OBSERVATION_REQUIRED');
-  assert.deepEqual((await f.calls()).map(x => x.method), ['get_app_state', 'perform_secondary_action']);
+  assert.deepEqual((await f.calls()).map(x => x.method), ['get_app_state', 'perform_secondary_action', 'click']);
   const refreshed = await f.call('get_app_state', { app: 'Fixture' });
   assert.equal(refreshed.content[0].text, state.text, 'Required read returns full indexes');
   await f.call('click', { app: 'Fixture', element_index: 1 });
-  assert.deepEqual((await f.calls()).map(x => x.method), ['get_app_state', 'perform_secondary_action', 'get_app_state', 'click']);
+  assert.deepEqual((await f.calls()).map(x => x.method), ['get_app_state', 'perform_secondary_action', 'click', 'get_app_state', 'click']);
 });
 
 test('locked provider timeout neither observes automatically nor replays; pending fence survives a read', async t => {
@@ -505,4 +507,54 @@ test('a locked pattern batch can request a final screenshot without repeating a 
   const calls = await f.calls();
   assert.deepEqual(calls.map(x => x.method), ['click', 'get_app_state']);
   assert.equal(calls[1].params.includeScreenshot, true);
+});
+
+
+test('a changed locked pattern stops before remaining batch indexes can be rebound', async t => {
+  const shifted = { ...state, text: '[1] Button Add row\n[9] Button Delete new row\n[10] Button Save' };
+  const f = await fixture(t, [{ result: lockedResult(shifted) }], 'win32');
+  const result = await f.call('run_actions', { app: 'Fixture', includeScreenshot: true, actions: [
+    { method: 'click', element_index: 1 }, { method: 'click', element_index: 9 },
+    { method: 'set_value', element_index: 2, value: 'must not run' },
+  ] });
+  assert.equal(result.isError, undefined);
+  assert.match(result.content[0].text, /2 remaining actions were not sent/);
+  assert.equal(result.content[1].text, shifted.text);
+  assert.equal(result._meta['opencu/actionsAttempted'], 1);
+  assert.equal(result._meta['opencu/actionsNotSent'], 2);
+  assert.equal(result._meta['opencu/pattern'], 'Invoke');
+  assert.deepEqual((await f.calls()).map(x => x.method), ['click']);
+});
+
+test('post-dispatch stop retains unknown result and pattern metadata while latching later input', async t => {
+  const result = { ...unknownAction, lockedPattern: true, pattern: 'DoDefaultAction',
+    stop: { code: 'USER_STOPPED', message: 'Escape stopped this connection' } };
+  const f = await fixture(t, [{ result }], 'win32');
+  const response = await f.call('click', { app: 'Fixture', element_index: 1 });
+  assert.equal(response._meta['opencu/actionOutcome'], 'unknown');
+  assert.equal(response._meta['opencu/pattern'], 'DoDefaultAction');
+  assert.equal(response._meta['opencu/stop'], 'USER_STOPPED');
+  assert.equal((await f.call('click', { app: 'Fixture', element_index: 1 }))._meta['opencu/error'], 'USER_STOPPED');
+  assert.deepEqual((await f.calls()).map(x => x.method), ['click']);
+});
+
+test('pattern preflight lock change never claims an earlier call in a single-action request', async t => {
+  const f = await fixture(t, [{ error: { code: 'SCREEN_LOCKED', message: 'Parent state changed. No pattern was sent.' } }], 'win32');
+  const result = await f.call('click', { app: 'Fixture', element_index: 1 });
+  assert.match(result.content[0].text, /No pattern was sent/);
+  assert.doesNotMatch(result.content[0].text, /may have run/);
+});
+
+
+test('failure of an extra requested pattern observation remains unknown with the available state', async t => {
+  const f = await fixture(t, [{ result: lockedResult(state) },
+    { error: { code: 'SCREEN_LOCKED', message: 'Desktop unavailable' } }], 'win32');
+  const result = await f.call('run_actions', { app: 'Fixture', includeScreenshot: true,
+    actions: [{ method: 'click', element_index: 1 }] });
+  assert.equal(result.isError, undefined);
+  assert.equal(result._meta['opencu/actionOutcome'], 'unknown');
+  assert.equal(result._meta['opencu/pattern'], 'Invoke');
+  assert.match(result.content[0].text, /was dispatched/);
+  assert.equal(result.content[1].text, state.text);
+  assert.deepEqual((await f.calls()).map(x => x.method), ['click', 'get_app_state']);
 });
