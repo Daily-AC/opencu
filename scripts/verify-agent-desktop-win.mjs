@@ -25,6 +25,7 @@ const area = await mkdtemp(path.join(root, '.cache/agent-desktop-acceptance-'));
 const temporary = path.join(area, 'temporary'); await mkdir(temporary);
 const parentExe = path.join(temporary, 'OpenCU-Parent-Fixture.exe');
 const childExe = path.join(temporary, 'OpenCU-Child-Fixture.exe');
+const lockedLaunchExe = path.join(temporary, 'OpenCU-Locked-Launch-Fixture.exe');
 const report = { test: 'windows-agent-desktop', ok: false, checks: [],
   parentStimulus: 'SendInput in parent session; not hardware input',
   manualFollowups: ['deliberate click enables interaction; deactivation returns to watch-only; physical Escape still stops',
@@ -78,6 +79,7 @@ try {
     '/reference:System.Windows.Forms.dll', '/reference:System.Drawing.dll', '/reference:System.Web.Extensions.dll',
     path.join(root, 'tests/fixtures/AgentDesktopFixture.cs')], { windowsHide: true, stdio: 'pipe' });
   await cp(parentExe, childExe);
+  if (lockedParent) await cp(parentExe, lockedLaunchExe);
   parent = spawn(parentExe, ['parent'], { windowsHide: false, stdio: 'ignore' });
   const baseline = await waitFor(async () => { const s = await state(parentExe); return s?.foreground && s; }, 'parent foreground; launch this script FROM A FOREGROUND TERMINAL, not a headless shell');
   await command(parentExe, 'monitor');
@@ -158,6 +160,7 @@ try {
     assert.ok(current.content.some(c => c.type === 'image'), 'Locked child screenshot is required');
     const clicked = await call('click', { app: childExe, element_index: index(current, 'Increment fixture') });
     assert.notEqual(clicked._meta?.['opencu/actionOutcome'], 'unknown', text(clicked));
+    assert.equal(typeof clicked._meta?.['opencu/pattern'], 'string');
     assert.match(text(clicked), new RegExp(`Clicks: ${before.clicks + 1}`));
     await waitFor(async () => (await state(childExe))?.clicks === before.clicks + 1, 'exactly one locked pattern click');
     assert.equal((await control('status')).parentLocked, true, 'Parent unlocked during click');
@@ -165,6 +168,7 @@ try {
     const value = 'locked pattern value';
     const valued = await call('set_value', { app: childExe, element_index: index(current, 'Fixture text'), value });
     assert.notEqual(valued._meta?.['opencu/actionOutcome'], 'unknown', text(valued));
+    assert.equal(valued._meta?.['opencu/pattern'], 'Value.SetValue');
     assert.ok(text(valued).includes(value), 'Fresh state must show the new value');
     await waitFor(async () => (await state(childExe))?.text === value, 'locked ValuePattern text');
     assert.equal((await control('status')).parentLocked, true, 'Parent unlocked during set_value');
@@ -176,7 +180,17 @@ try {
     assert.equal(after.text, value);
     assert.equal(after.sessionId, started.sessionId);
     assert.equal((await control('status')).parentLocked, true, 'Parent unlocked before refusal check finished');
-    check('locked-parent-patterns-and-refused-typing', { before, after, locked });
+    check('locked-parent-patterns-and-refused-typing', { before, after, locked,
+      patterns: { click: clicked._meta?.['opencu/pattern'], setValue: valued._meta?.['opencu/pattern'] } });
+    // Fresh executable identity: this must launch through get_app_state while
+    // locked, never through activate_app. Session logoff cleans it up as usual.
+    const launched = await call('get_app_state', { app: lockedLaunchExe, includeScreenshot: true, disableDiff: true });
+    const launchState = await waitFor(() => state(lockedLaunchExe), 'locked child launch');
+    assert.equal(launchState.sessionId, started.sessionId);
+    assert.equal(launchState.clicks, 0); assert.equal(launchState.text, '');
+    assert.ok(launched.content.some(c => c.type === 'image'), 'Locked launched fixture screenshot is required');
+    assert.equal((await control('status')).parentLocked, true, 'Parent unlocked during launch check');
+    check('locked-parent-launch-without-activation-request', { fixture: launchState });
     console.log('MANUAL: locked checks passed. Unlock the parent now (up to three minutes). No input will be replayed.');
     const unlocked = await waitForParentLock(false);
     assert.equal(unlocked.sessionId, started.sessionId);
