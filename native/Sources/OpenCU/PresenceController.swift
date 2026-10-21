@@ -9,7 +9,7 @@ private final class CursorWindow: NSPanel {
 /// Owns only OpenCU UI. Input delivery is reported through one small callback;
 /// this class never sends events, changes the real cursor or activates a target.
 @MainActor
-final class PresenceController: NSObject, NSMenuDelegate {
+final class PresenceController: NSObject, NSMenuDelegate, NSApplicationDelegate {
     private(set) var state = PresenceState()
     let setup = PermissionSetup()
     var desktopVisible = false {
@@ -42,6 +42,7 @@ final class PresenceController: NSObject, NSMenuDelegate {
 
     override init() {
         super.init()
+        NSApp.delegate = self
         setup.willShow = { [weak self] in self?.onPersonInteraction?() }
     }
     func beginCall(query: String) {
@@ -111,6 +112,13 @@ final class PresenceController: NSObject, NSMenuDelegate {
     }
     @objc private func permissions() { setup.show(activate: true) }
     @objc private func showDesktop() { onShowDesktop?() }
+    // Bringing OpenCU forward (for example from the macOS screen-sharing indicator's
+    // OpenCU row) shows a closed or minimized preview.
+    func applicationDidBecomeActive(_ notification: Notification) { if desktopVisible { onShowDesktop?() } }
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if desktopVisible { onShowDesktop?() }
+        return false
+    }
 
     func permissionFailure(_ error: OpenCUError) -> OpenCUError {
         guard state.connected else { return error }

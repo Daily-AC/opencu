@@ -171,6 +171,10 @@ final class AgentDesktopWindow: NSObject, NSWindowDelegate {
     private func symbolButton(_ tip: String, _ action: Selector) -> NSButton {
         let button = FirstMouseButton(image: NSImage(), target: self, action: action)
         button.isBordered = false
+        // Fixed size: the title-bar accessory is measured before the symbols are set.
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.widthAnchor.constraint(equalToConstant: 28).isActive = true
+        button.heightAnchor.constraint(equalToConstant: 24).isActive = true
         button.toolTip = tip
         button.setAccessibilityLabel(tip)
         return button
