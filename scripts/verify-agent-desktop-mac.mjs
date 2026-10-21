@@ -68,7 +68,10 @@ function pointerTravel(since) {
   return points.length < 2 ? 0 : Math.max(...points.map(point => Math.hypot(point.x - points[0].x, point.y - points[0].y)));
 }
 function sameFrame(a, b) { return ['x', 'y', 'width', 'height'].every(key => Math.abs(a[key] - b[key]) <= 1); }
+// --only 6,7,8 reruns selected checks against the same build; the rest are reported as SKIPPED.
+const only = process.argv.includes('--only') ? new Set(process.argv[process.argv.indexOf('--only') + 1].split(',').map(Number)) : null;
 async function check(index, operation) {
+  if (only && !only.has(index + 1)) { report.checks[labels[index]] = 'SKIPPED'; return; }
   try { await operation(); report.checks[labels[index]] = 'PASS'; console.log(`PASS ${index + 1}. ${labels[index]}`); }
   catch (error) { report.checks[labels[index]] = `FAIL: ${error.message}`; console.error(`FAIL ${index + 1}. ${labels[index]}: ${error.message}`); throw error; }
 }
@@ -325,7 +328,9 @@ try {
       assert.equal(current.state, 'running'); assert.equal(current.stoppedByPerson, false);
     };
     await ask('Click the red close button at the top left of the OpenCU agent desktop / OpenCU agent 桌面 window (not the Stop / 停止 button), then type yes here.');
-    await until(async () => !(await shown()), 'preview hidden by close'); await running();
+    await until(async () => !(await shown()), 'preview hidden by close');
+    assert.equal((await metadata(id)).present, true, 'The preview window was destroyed, not hidden (that is the Stop path)');
+    await running();
     await ask('Click the purple OpenCU icon in the menu bar and choose Show agent desktop / 显示 agent 桌面, then type yes here.');
     await until(shown, 'preview shown from the menu bar');
     await ask('Click the yellow minimize button of the preview window, then type yes here.');
@@ -408,7 +413,7 @@ finally {
   terminal.close();
   report.error = failure?.message; report.finishedAt = new Date().toISOString();
   report.maxSampleGapMs = Math.max(0, ...report.samples.slice(1).map((value, index) => value.at - report.samples[index].at));
-  report.ok = !failure && !report.cleanupErrors.length && Object.values(report.checks).every(result => result === 'PASS');
+  report.ok = !failure && !report.cleanupErrors.length && Object.values(report.checks).every(result => result === 'PASS' || (only && result === 'SKIPPED'));
   // Preserve fixture evidence, remove disposable executable bundles.
   for (const fixture of fixtures) {
     try { await copyFile(fixture.statePath, path.join(run, `${fixture.bundleID}.json`)); } catch {}
