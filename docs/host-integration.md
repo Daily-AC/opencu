@@ -173,8 +173,8 @@ nonactivating locked launch; other providers are not implied by that evidence.
 See the [unchanged v0.4.0 fixture evidence](../evidence/opencu-windows-agent-desktop-2026-10-21-v0.4.0.json).
 
 Console/remote disconnect and logoff still end the child. A caller can stop it
-while locked by ending MCP stdin; after unlocking the person can close the host
-window or click the view and press Escape. Lock/error validation remains manual
+while locked by ending MCP stdin; after unlocking the person can press the host's
+Stop button or click the view and press Escape. Closing the host only minimizes it. Lock/error validation remains manual
 without collecting an unlock password. The feature is not a file/account sandbox;
 macOS uses the virtual-display lifecycle below.
 
@@ -226,9 +226,9 @@ unsaved documents open, and confirms virtual-display removal in a fresh process.
 Windows leaving the agent display by any means lose admission for that desktop
 lifetime and are left there. The person returns all windows with host/menu-bar
 Stop, or one through the app's own Window > Move to display command; the invisible
-monitor cannot be dragged through the preview. Host close,
-its Stop button and menu-bar Stop send a native event and permanently latch
-`STOPPED_BY_PERSON` even while idle. All app tools/start are then refused; only
+monitor cannot be dragged through the preview. Closing or minimizing the preview
+only puts it in the Dock. Its Stop button and menu-bar Stop send a native event and
+permanently latch `STOPPED_BY_PERSON` even while idle. All app tools/start are then refused; only
 status/cleanup remain available. A macOS preview Stop Sharing action (SCK's
 `userStopped` error) uses this same latch. Other stream deaths use
 `AGENT_DESKTOP_LOST` and cleanup, never stream restart. Tool stop cannot clear that latch. MCP EOF cleans
@@ -236,9 +236,13 @@ up without another tool call. Failed cleanup retains diagnostics and blocks norm
 routing. No worker replacement, stream restart, display recreation or action replay
 is allowed in desktop mode. Normal macOS mode's existing recovery is unchanged.
 
-Start and relocation keep the quiet-desktop guard. After Move once, wait one
-second before sampling a new baseline; ask the person to keep hands off the mouse
-for 2 seconds. A move interrupted by `AGENT_DISPLAY_PERSON_ACTIVE` rolls back only
+Hosts should stop the desktop when the task no longer needs it. A macOS desktop
+with no tool call for 5 minutes (no pending consent, not locked) stops itself like
+a tool stop; the next app call returns `AGENT_DESKTOP_IDLE_STOPPED` with no input
+sent, until `agent_desktop` is called again. The person may keep using the Mac
+during start and relocation; a move stops only if the person starts using that
+window (its app comes forward or a mouse button is held over it). A move
+interrupted by `AGENT_DISPLAY_PERSON_ACTIVE` rolls back only
 that window, keeps the desktop/other admissions and permits another consent on a
 later explicit read. Never replay it automatically. Failed restoration remains a
 cleanup error; an interrupted start removes its resources and fails cleanly.
