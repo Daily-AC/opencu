@@ -349,15 +349,15 @@ a provider timeout may return earlier without leaving a pending client call.
 OpenCU sends no synthetic input on this path; provider implementations can differ.
 The ordinary and unlocked paths are unchanged.
 
-On 2026-10-21, from a clean Windows 11 26H2 VM checkpoint, the owner passed
-verify-gui-win three times (40/40 each), the package verifier, and the agent-desktop
-suite with `--locked-parent` behind the real lock screen. The indexed Increment
-click changed 10 to 11, `set_value` produced "locked pattern value", `type_text`
-returned SCREEN_LOCKED, and unlock retained the same child with no replay.
+On 2026-10-21, from a clean Windows 11 26H2 VM checkpoint, the release package
+passed verify-gui-win three times (40/40 each), the package verifier, and the
+agent-desktop suite with `--locked-parent` behind the real lock screen. The locked
+indexed Increment click (Invoke) changed 10 to 11, `set_value` (Value.SetValue)
+produced "locked pattern value", `type_text` returned SCREEN_LOCKED, a launch while
+locked did not take the foreground, and unlock kept the same child with no replay.
 Hardware concurrency, parked-pointer, hover, Escape and close regressions also
 passed. A locked indexed click on the text box returned UNSUPPORTED_ACTION in
-about two seconds. The run did not record which pattern/default action delivered
-the button click; Invoke versus MSAA must not be inferred.
+about two seconds ([evidence](evidence/opencu-windows-agent-desktop-2026-10-21-v0.4.0.json)).
 
 The child window is hidden by the lock screen, so nobody at the machine can see it. `status` reports `parentLocked: true` or `false`.
 Unlocking does not restart anything: the same child and host window remain.
