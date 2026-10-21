@@ -214,27 +214,33 @@ try {
   const host = script => execFileSync(powershell, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
     { windowsHide: true, encoding: 'utf8', stdio: 'pipe' }).trim();
   const exact = `$p=Get-Process -Id ${restarted.hostPid}; if($p.MainWindowTitle -ne 'OpenCU agent desktop'){throw 'Unexpected host'}; ` +
-    `Add-Type -Namespace V -Name W -MemberDefinition '[DllImport("user32.dll")] public static extern bool IsIconic(System.IntPtr h); [DllImport("user32.dll")] public static extern bool ShowWindow(System.IntPtr h, int n);'; `;
-  host(exact + `if(!$p.CloseMainWindow()){throw 'Cannot close host'}`);
+    `Add-Type -Namespace V -Name W -MemberDefinition '[DllImport("user32.dll")] public static extern bool IsIconic(System.IntPtr h); [DllImport("user32.dll")] public static extern bool ShowWindow(System.IntPtr h, int n); [DllImport("user32.dll")] public static extern bool PostMessage(System.IntPtr h, int m, System.IntPtr w, System.IntPtr l);'; `;
+  // The title-bar X and Alt+F4 send SC_CLOSE. A bare WM_CLOSE (CloseMainWindow, Task
+  // Manager's End task) is reported as TaskManagerClosing and still stops the desktop.
+  host(exact + `if(![V.W]::PostMessage($p.MainWindowHandle, 0x112, [IntPtr]0xF060, [IntPtr]0)){throw 'Cannot close host'}`);
   // Closing minimizes the host to the taskbar; the child keeps working behind it.
   await waitFor(async () => host(exact + '[V.W]::IsIconic($p.MainWindowHandle)') === 'True', 'host minimized by close');
   await pause(1500);
   const minimized = await control('status');
   assert.equal(minimized.state, 'running'); assert.equal(minimized.stoppedByPerson, false);
-  const clicksBefore = (await state(childExe)).clicks;
   const behind = await call('get_app_state', { app: childExe, includeScreenshot: true, disableDiff: true });
+  const clicksBefore = (await waitFor(async () => { const s = await state(childExe); return s?.sessionId === restarted.sessionId && s; }, 'child fixture in the restarted session')).clicks;
   const shot = behind.content.find(c => c.type === 'image'), visibleShot = first.content.find(c => c.type === 'image');
   assert.ok(shot && shot.data.length > visibleShot.data.length / 2, 'Child screenshot is missing or blank while the host is minimized');
   await call('click', { app: childExe, element_index: index(behind, 'Increment fixture') });
   await waitFor(async () => (await state(childExe)).clicks === clicksBefore + 1, 'child click while the host is minimized');
-  check('window-close-minimizes-and-child-keeps-working', { screenshotBytes: shot.data.length, visibleScreenshotBytes: visibleShot.data.length });
+  const suppress = host(`(Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Terminal Server Client').RemoteDesktop_SuppressWhenMinimized`);
+  assert.equal(suppress, '2', 'The host must keep a minimized client rendering');
+  check('window-close-minimizes-and-child-keeps-working', { screenshotBytes: shot.data.length, visibleScreenshotBytes: visibleShot.data.length, suppressWhenMinimized: suppress });
   // Only Stop (or physical Escape) is a person stop. Restore without activation,
   // then press Stop through UI Automation on this exact host window.
   host(exact + '[void][V.W]::ShowWindow($p.MainWindowHandle, 4)');
   await pause(500);
+  // WinForms buttons surface as panes to UI Automation, so click the exact Stop
+  // control's own window with BM_CLICK, the same path as a person's click.
   host(exact + `Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes; $w=[Windows.Automation.AutomationElement]::FromHandle($p.MainWindowHandle); ` +
     `$b=$w.FindFirst([Windows.Automation.TreeScope]::Descendants, (New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::NameProperty, 'Stop'))); ` +
-    `if(!$b){throw 'No Stop button'}; $b.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern).Invoke()`);
+    `if(!$b -or !$b.Current.NativeWindowHandle){throw 'No Stop button'}; [void][V.W]::PostMessage([IntPtr]$b.Current.NativeWindowHandle, 0xF5, [IntPtr]0, [IntPtr]0)`);
   await waitFor(async () => (await control('status')).stoppedByPerson, 'Stop button latch');
   for (const [name, args] of [['agent_desktop', { action: 'start' }], ['list_apps', {}], ['get_app_state', { app: childExe }]]) {
     await call(name, args, 'USER_STOPPED');
