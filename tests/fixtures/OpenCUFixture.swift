@@ -522,6 +522,7 @@ if arguments.count == 2, arguments[0] == "--window-metadata", let id = UInt32(ar
         result["pid"] = row[kCGWindowOwnerPID as String]
         result["frame"] = row[kCGWindowBounds as String]
         result["onScreen"] = row[kCGWindowIsOnscreen as String]
+        result["layer"] = row[kCGWindowLayer as String]
     }
     print(String(decoding: try JSONSerialization.data(withJSONObject: result), as: UTF8.self))
     exit(0)

@@ -27,8 +27,9 @@ const labels = [
   'Stage Manager: indexed/coordinate/CJK/shortcut/menu effects; foreground/pointer unchanged',
   'manual return: input revoked and cleanup leaves the window there',
   'tool stop: exact restoration, apps open, fresh removal, idempotence',
-  'idle host close: later calls observe permanent person stop; cleanup confirmed',
+  'preview window: start amid pointer activity; close/minimize hide, menu shows, keep on top, clean view, full screen; Stop latches',
   'EOF: pending consent and idle leave no host, stream, display or worker',
+  'idle: an unused desktop returns its window and stops itself; the next app call is told',
 ];
 const report = { checks: Object.fromEntries(labels.map(label => [label, 'NOT RUN'])), startedAt: new Date().toISOString(), calls: [], samples: [], cleanupErrors: [] };
 await mkdir(path.join(root, '.cache/agent-desktop-mac'), { recursive: true });
@@ -60,6 +61,11 @@ async function until(check, label, timeout = 10_000, cleanup = false) {
     await pause(100);
   }
   throw new Error(`Timed out: ${label}`);
+}
+// The person keeps using the pointer elsewhere; OpenCU must not treat that as interference.
+function pointerTravel(since) {
+  const points = report.samples.filter(value => value.at >= since && value.pointer).map(value => value.pointer);
+  return points.length < 2 ? 0 : Math.max(...points.map(point => Math.hypot(point.x - points[0].x, point.y - points[0].y)));
 }
 function sameFrame(a, b) { return ['x', 'y', 'width', 'height'].every(key => Math.abs(a[key] - b[key]) <= 1); }
 async function check(index, operation) {
@@ -163,8 +169,9 @@ async function guarded(operation) {
 }
 async function consent(client, fixture, approve) {
   const name = fixture.app.split('Fixture ')[1];
+  const since = performance.now();
   console.log(approve
-    ? `>>> In the OpenCU consent card for Fixture ${name}, click the first button (Move once / 挪过来一次) within 60 seconds, then keep hands off the mouse for 2 seconds. Do not click the preview.`
+    ? `>>> In the OpenCU consent card for Fixture ${name}, click the first button (Move once / 挪过来一次) within 60 seconds, then immediately keep moving the mouse around your own screen for about 5 seconds without clicking.`
     : `>>> In the OpenCU consent card for Fixture ${name}, click the second button (Keep here / 留在原处) within 60 seconds. Do not click the first button (Move once / 挪过来一次) or the preview.`);
   const pending = client.call('get_app_state', { app: fixture.app, includeScreenshot: !approve, disableDiff: true });
   // Attach error handling immediately while polling the independent control lane.
@@ -172,6 +179,11 @@ async function consent(client, fixture, approve) {
   await until(async () => (await client.desktop('status')).consent != null, 'visible pending consent');
   const reply = await pending;
   assert.equal(reply._meta?.['opencu/agentDesktop']?.windowState, approve ? 'admitted' : 'reduced');
+  if (approve) {
+    await pause(3000);
+    report.moveTravel ??= []; report.moveTravel.push(pointerTravel(since));
+    assert.ok(report.moveTravel.at(-1) > 40, 'Move the mouse after Move once: this check needs pointer activity during the move');
+  }
   console.log(`Consent result: ${approve ? 'moved' : 'reduced'}.`);
   return reply;
 }
@@ -227,7 +239,8 @@ try {
     const displays = await freshDisplays(); assert.equal(displays.length, initialDisplays.length + 1);
     assert.ok(displays.some(display => display.id === started.displayID));
     for (const fixture of fixtures) assert.ok(sameFrame((await fixtureState(fixture)).windowFrame, fixture.original.windowFrame), 'OpenCU must not relocate before consent');
-    await ask('Verify the small OpenCU preview visibly shows the agent display (it floats above other windows by design). Confirm keyboard focus stayed in this terminal: typing here still works.');
+    assert.equal((await metadata(started.preview.windowID)).layer, 0, 'The preview must open as an ordinary window, not kept on top');
+    await ask('Verify the OpenCU preview window visibly shows the agent display. Confirm keyboard focus stayed in this terminal: typing here still works.');
   });
   await check(1, async () => {
     const declined = await consent(client, a, false);
@@ -300,9 +313,42 @@ try {
     assert.deepEqual((await freshDisplays()).map(item => item.id).sort(), initialDisplays.map(item => item.id).sort());
   });
   await check(5, async () => {
+    await ask('After yes, keep moving the mouse around your own screen (without clicking) until the next question. The agent desktop starts meanwhile.');
+    const since = performance.now();
     const status = await startDesktop(client);
-    await ask('No tool call is in flight. Close the OpenCU agent desktop / OpenCU agent 桌面 window using its title-bar close button (not the Stop / 停止 button), then type yes here.');
-    await until(async () => (await client.desktop('status')).stoppedByPerson === true, 'idle person-stop event');
+    report.startTravel = pointerTravel(since);
+    assert.ok(report.startTravel > 40, 'Keep moving the mouse during start: this check needs pointer activity');
+    const id = status.preview.windowID, shown = async () => (await metadata(id)).onScreen === true;
+    const running = async () => {
+      await pause(1500);
+      const current = await client.desktop('status');
+      assert.equal(current.state, 'running'); assert.equal(current.stoppedByPerson, false);
+    };
+    await ask('Click the red close button at the top left of the OpenCU agent desktop / OpenCU agent 桌面 window (not the Stop / 停止 button), then type yes here.');
+    await until(async () => !(await shown()), 'preview hidden by close'); await running();
+    await ask('Click the purple OpenCU icon in the menu bar and choose Show agent desktop / 显示 agent 桌面, then type yes here.');
+    await until(shown, 'preview shown from the menu bar');
+    await ask('Click the yellow minimize button of the preview window, then type yes here.');
+    await until(async () => !(await shown()), 'preview minimized'); await running();
+    await ask('Show it again from the menu bar (Show agent desktop / 显示 agent 桌面), then type yes here.');
+    await until(shown, 'preview shown again from the menu bar');
+    await ask('Click the pin button (Keep on top / 置顶) at the right end of the preview title bar, then type yes here.');
+    await until(async () => (await metadata(id)).layer > 0, 'preview kept on top');
+    await ask('Click the pin button (Keep on top / 置顶) again to turn it off, then type yes here.');
+    await until(async () => (await metadata(id)).layer === 0, 'preview ordinary again');
+    await ask('Click the Clean view / 纯净模式 button next to the pin. Check that only the picture remains and that the title bar disappears when the pointer leaves the window and returns on hover. Then hover and click Clean view / 纯净模式 again to turn it off. Type yes if both looked right.');
+    const screen = (await freshDisplays()).find(display => display.main).frame;
+    let full = false;
+    const watcher = setInterval(() => metadata(id).then(value => {
+      if (value.onScreen && value.frame?.Width >= screen.width - 1 && value.frame?.Height >= screen.height - 1) full = true;
+    }).catch(() => {}), 300);
+    try {
+      await ask('Click the green button of the preview to make it full screen and check that it shows the agent desktop picture. Then leave full screen: move the pointer to the top edge and click the green button again. Come back here and type yes.');
+    } finally { clearInterval(watcher); }
+    assert.ok(full, 'The preview never filled the screen');
+    await until(async () => (await metadata(id)).frame?.Width < screen.width - 1, 'preview left full screen'); await running();
+    await ask('Click the Stop / 停止 button at the bottom of the preview, then type yes here.');
+    await until(async () => (await client.desktop('status')).stoppedByPerson === true, 'person stop from the preview');
     for (const [name, args] of [['get_app_state', { app: a.app }], ['agent_desktop', { action: 'start' }]]) {
       assert.equal((await client.call(name, args, true))._meta['opencu/error'], 'STOPPED_BY_PERSON');
     }
@@ -321,6 +367,26 @@ try {
       }
       await fresh.eof(); await pending; await assertGone(status, true);
     }
+  });
+  await check(7, async () => {
+    await ask('Last check: one NEW disposable connection starts the agent desktop, moves Fixture restored once, then makes no calls. About 5 minutes later the desktop should close itself and return that window. You may use the Mac normally while waiting, but do not lock it.');
+    const fresh = new MCP(); await fresh.initialize(); const status = await startDesktop(fresh);
+    await consent(fresh, c, true);
+    await until(async () => (await fixtureState(c)).screenID === status.displayID, 'fixture moved before idling');
+    const idleFrom = performance.now();
+    console.log('Waiting for the idle stop (about 5 minutes; no tool calls are made)...');
+    while ((await freshDisplays()).some(display => display.id === status.displayID)) {
+      active();
+      assert.ok(performance.now() - idleFrom < 7 * 60_000, 'The idle desktop did not stop within 7 minutes');
+      await pause(5000);
+    }
+    report.idleStopSeconds = Math.round((performance.now() - idleFrom) / 1000);
+    assert.ok(report.idleStopSeconds >= 290, `Stopped after only ${report.idleStopSeconds} s`);
+    await until(async () => (await fixtureState(c)).screenID !== status.displayID, 'window returned by the idle stop');
+    assert.ok(sameFrame((await fixtureState(c)).windowFrame, c.original.windowFrame), 'Idle stop did not restore the original frame');
+    assert.equal((await fresh.call('get_app_state', { app: c.app }, true))._meta['opencu/error'], 'AGENT_DESKTOP_IDLE_STOPPED');
+    assert.equal((await fresh.desktop('status')).state, 'inactive');
+    await assertGone(status); await fresh.eof();
   });
 } catch (error) { abort(error); }
 finally {
