@@ -358,7 +358,8 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegat
         NSApp.mainMenu = menu
     }
 
-    // Person-operated fixture command; acceptance never invokes it through OpenCU.
+    // The fixture moving its own window stands in for the person taking it back;
+    // acceptance never invokes it through OpenCU.
     @objc private func moveToPhysicalDisplay() {
         guard let screen = NSScreen.screens.first(where: {
             ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? UInt32) == CGMainDisplayID()
@@ -468,6 +469,7 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate, NSTextFieldDelegat
             try? FileManager.default.removeItem(at: commandURL)
             if command == "dismiss-panel" { savePanel?.cancel(nil) }
             if command == "other-window" { otherWindow() }
+            if command == "move-to-main-display" { moveToPhysicalDisplay() }
         }
         if let editor = textField.currentEditor() as? NSTextView { lastTextSelection = editor.selectedRange() }
         sliderValue.stringValue = String(format: "%.1f", slider.doubleValue)
