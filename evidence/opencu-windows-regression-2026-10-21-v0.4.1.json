@@ -1,0 +1,65 @@
+{
+  "test": "windows-regression",
+  "date": "2026-10-21",
+  "version": "0.4.1",
+  "purpose": "Windows regression for the 0.4.1 package; native Windows code is unchanged from 0.4.0, shared MCP files and the version changed.",
+  "environment": "Same as opencu-windows-agent-desktop-2026-10-21-v0.4.0.json: clean Windows 11 26H2 VM checkpoint, real UAC, one re-sign-in by reboot",
+  "package": {
+    "file": "opencu-win-x64.zip",
+    "sha256": "3f02386977fa8da5a998a7fd3a09feea54dd0a8123d36370eb98b955f7641c51"
+  },
+  "guiRuns": [
+    {
+      "ok": true,
+      "checks": 40
+    },
+    {
+      "ok": true,
+      "checks": 40
+    },
+    {
+      "ok": true,
+      "checks": 40
+    }
+  ],
+  "packageVerifier": {
+    "test": "windows-package-offline",
+    "ok": true,
+    "networkUsed": false,
+    "inputCalls": 0,
+    "installedFromLocalZip": true,
+    "agentDesktopPreparation": "Child sessions disabled: automatic preparation refused without elevation.",
+    "hashMismatchPreservesInstall": true,
+    "version": "0.4.1",
+    "toolCount": 14,
+    "listAppsSucceeded": true,
+    "serverVersionMatches": true,
+    "inUseUpdatePreservesInstall": true,
+    "closedSessionUpdateSucceeded": true,
+    "agentDesktopUpdatePreparationChecked": true
+  },
+  "agentDesktopVerifier": {
+    "ok": true,
+    "checks": [
+      "setup-check",
+      "real-pipe-authentication",
+      "start-child-session",
+      "nonactivating-open-from-foreground-launcher",
+      "child-launch-capture-and-inventory",
+      "watch-only-hover-does-not-interrupt",
+      "watch-only-server-pointer-isolation",
+      "concurrent-input-isolation",
+      "locked-parent-patterns-and-refused-typing",
+      "locked-parent-launch-without-activation-request",
+      "manual-unlock-keeps-child-without-replay",
+      "tool-stop-logs-off",
+      "second-explicit-start",
+      "window-close-latches-entire-connection"
+    ],
+    "lockedPatterns": {
+      "click": "Invoke",
+      "setValue": "Value.SetValue"
+    }
+  },
+  "manualChecks": "Hardware-input concurrency (parent 20/20 chunks, child 6 rounds, foreground unchanged), parked pointer unchanged, hover, Escape, close and locked-parent rounds behaved as in 0.4.0."
+}
