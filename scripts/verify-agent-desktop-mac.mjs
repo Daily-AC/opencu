@@ -323,37 +323,37 @@ try {
     const status = await startDesktop(client);
     report.startTravel = pointerTravel(since);
     assert.ok(report.startTravel > 10, 'Keep moving the mouse during start: this check needs pointer activity');
-    const id = status.preview.windowID, shown = async () => (await metadata(id)).onScreen === true;
+    // A hidden window leaves the window list; follow the preview's current window number.
+    const current = async () => metadata((await client.desktop('status')).preview.windowID);
+    const shown = async () => (await current()).onScreen === true;
     const running = async () => {
       await pause(1500);
       const current = await client.desktop('status');
       assert.equal(current.state, 'running'); assert.equal(current.stoppedByPerson, false);
     };
-    await ask('Bring the OpenCU agent desktop / OpenCU agent 桌面 window forward (if it is hidden, use Show agent desktop / 显示 agent 桌面 from OpenCU's black-and-white V-shaped arrow icon in the menu bar, not the purple macOS screen-sharing indicator). Then click the red close button among the three buttons at the top left of that window itself (not the Stop / 停止 button), then type yes here.');
-    await until(async () => !(await shown()), 'preview hidden by close');
-    assert.equal((await metadata(id)).present, true, 'The preview window was destroyed, not hidden (that is the Stop path)');
-    await running();
-    await ask('Click OpenCU's black-and-white V-shaped arrow icon in the menu bar (not the purple macOS screen-sharing indicator) and choose Show agent desktop / 显示 agent 桌面, then type yes here.');
+    await ask('Bring the OpenCU agent desktop / OpenCU agent 桌面 window forward (if it is hidden, use Show agent desktop / 显示 agent 桌面 from the black-and-white V-shaped OpenCU arrow icon in the menu bar, not the purple macOS screen-sharing indicator). Then click the red close button among the three buttons at the top left of that window itself (not the Stop / 停止 button), then type yes here.');
+    await until(async () => !(await shown()), 'preview hidden by close'); await running();
+    await ask('Click the black-and-white V-shaped OpenCU arrow icon in the menu bar (not the purple macOS screen-sharing indicator) and choose Show agent desktop / 显示 agent 桌面, then type yes here.');
     await until(shown, 'preview shown from the menu bar');
     await ask('Click the yellow minimize button of the preview window, then type yes here.');
     await until(async () => !(await shown()), 'preview minimized'); await running();
     await ask('Show it again from the menu bar (Show agent desktop / 显示 agent 桌面), then type yes here.');
     await until(shown, 'preview shown again from the menu bar');
     await ask('Click the pin button (Keep on top / 置顶) at the right end of the preview title bar, then type yes here.');
-    await until(async () => (await metadata(id)).layer > 0, 'preview kept on top');
+    await until(async () => (await current()).layer > 0, 'preview kept on top');
     await ask('Click the pin button (Keep on top / 置顶) again to turn it off, then type yes here.');
-    await until(async () => (await metadata(id)).layer === 0, 'preview ordinary again');
+    await until(async () => (await current()).layer === 0, 'preview ordinary again');
     await ask('Click the Clean view / 纯净模式 button next to the pin. Check that only the picture remains and that the title bar disappears when the pointer leaves the window and returns on hover. Then hover and click Clean view / 纯净模式 again to turn it off. Type yes if both looked right.');
     const screen = (await freshDisplays()).find(display => display.main).frame;
     let full = false;
-    const watcher = setInterval(() => metadata(id).then(value => {
+    const watcher = setInterval(() => current().then(value => {
       if (value.onScreen && value.frame?.Width >= screen.width - 1 && value.frame?.Height >= screen.height - 1) full = true;
     }).catch(() => {}), 300);
     try {
       await ask('Click the green button of the preview to make it full screen and check that it shows a sharp agent desktop picture. Then leave full screen: move the pointer to the top edge and click the green button again. Come back here and type yes.');
     } finally { clearInterval(watcher); }
     assert.ok(full, 'The preview never filled the screen');
-    await until(async () => (await metadata(id)).frame?.Width < screen.width - 1, 'preview left full screen'); await running();
+    await until(async () => (await current()).frame?.Width < screen.width - 1, 'preview left full screen'); await running();
     await ask('Click the Stop / 停止 button at the bottom of the preview, then type yes here.');
     await until(async () => (await client.desktop('status')).stoppedByPerson === true, 'person stop from the preview');
     for (const [name, args] of [['get_app_state', { app: a.app }], ['agent_desktop', { action: 'start' }]]) {
