@@ -160,9 +160,9 @@ The measurements behind this section are in
   smart-card-only sign-in is unsupported and unmeasured. While the parent screen
   is locked, the child stays alive for reads, screenshots and supported indexed
   control patterns. Locked button click/value setting and refused typing were
-  accepted on a Windows 11 VM; the button's selected pattern was not recorded.
-  Other input returns `SCREEN_LOCKED`. Read-triggered launch without OpenCU
-  activation is restored and **needs Windows acceptance**. Nobody at the machine
+  accepted on a Windows 11 VM (the button used Invoke, the text box
+  Value.SetValue). Other input returns `SCREEN_LOCKED`. A read-triggered launch
+  while locked opens the app without activating it. Nobody at the machine
   can see the child while the lock screen is shown.
   Status reports `parentLocked`. After unlocking, close the host window or click
   the view and press Escape to stop; the caller can also end the MCP connection.
@@ -337,8 +337,8 @@ nonempty MSAA default action. Selection uses capabilities, never control names.
 It calls one action, with no synthetic-input fallback or replay. Missing patterns
 return `UNSUPPORTED_ACTION`. Coordinate or modified/multiple clicks, typing, keys,
 scroll, drag, paste, activation and batch waits still return `SCREEN_LOCKED`.
-`get_app_state` may launch a child app without OpenCU activating it; this restored
-launch-while-locked path **needs Windows acceptance**.
+`get_app_state` may launch a child app without OpenCU activating it; this was
+accepted on the VM.
 
 Each completed pattern call returns fresh state/diff. A changed observation stops
 any remaining batch actions because indexes were refreshed. No change or an error
