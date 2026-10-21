@@ -674,8 +674,9 @@ failure never routes calls back to the parent automatically. Child request timeo
 are terminal for that desktop; the parent timeout-replacement rules above still
 apply to ordinary operation. Tool stop logs off child apps and can lose unsaved work.
 
-Host close and child physical Escape permanently latch `USER_STOPPED` across the
-MCP connection, including late replies during teardown. Status and cleanup can
+The host's Stop button and child physical Escape permanently latch `USER_STOPPED`
+across the MCP connection, including late replies during teardown; closing the host
+only minimizes it to the taskbar. Status and cleanup can
 still run; switching or reconnecting cannot clear a person's stop. Parent locking
 keeps the child alive for reads/screenshots, with input refused as SCREEN_LOCKED;
 unlock does not restart or replace it. Console/remote

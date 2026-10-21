@@ -100,3 +100,13 @@ The old experimental native methods, single-record compatibility fields and
 probe entry point were removed. The person consent UI is not a security barrier
 against local automation with the same user's permissions. No hardware-only
 approval filter was added.
+
+## Later changes (2026-10-21, after 0.4.1)
+
+At the owner's request the preview became an ordinary window: closing or minimizing
+puts it in the Dock rather than stopping the desktop (a hidden window was unreachable
+when menu-bar items overflowed behind a notch); only Stop, menu-bar Stop or macOS
+Stop Sharing are person stops. The quiet-desktop guard was narrowed so pointer and
+foreground activity elsewhere no longer interrupt start or moves; a move stops only
+when the person starts using that window. An unused desktop stops itself after five
+idle minutes. The README describes the current behavior.
