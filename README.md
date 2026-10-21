@@ -424,8 +424,12 @@ Move once permits that exact window's move and its disclosed return on stop,
 close or MCP EOF. Every new move asks again. All input is restricted to admitted
 windows still on the virtual monitor; `activate_app` is refused there. Return all
 moved windows with the host or menu-bar **Stop**. To return just one, use that app's
-own **Window > Move to display** command when available. The invisible monitor
-cannot be dragged through the watch-only preview. If a window leaves the agent
+own **Window > Move to** command for your display: activate the app first, or the
+menu belongs to whichever app is in front. The same menu offers the agent display
+for your own windows too; a window you move there yourself shows in the preview,
+is not available to the agent and comes back when the agent display closes. The
+invisible monitor cannot be dragged through the watch-only preview. The preview
+floats above other windows without taking keyboard focus. If a window leaves the agent
 display by any means, admission is revoked for this desktop lifetime and cleanup
 leaves it where it went. No input is replayed. Apps, accounts, clipboard and files are
 still shared with your session; this is not an isolation/security boundary.
@@ -463,8 +467,8 @@ node scripts/verify-agent-desktop-mac.mjs --owner-present
 ```
 
 The script needs Stage Manager already enabled and existing OpenCU permissions.
-It asks the person to answer consent cards, use a fixture's Window > Move to display
-command and close the host;
+It asks the person to answer consent cards and close the host; a fixture moves its
+own window back to stand in for the person taking it back;
 it never targets personal applications. See [ADR 0003](docs/adr/0003-macos-agent-desktop-virtual-display.md).
 
 ## Development

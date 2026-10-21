@@ -227,7 +227,7 @@ try {
     const displays = await freshDisplays(); assert.equal(displays.length, initialDisplays.length + 1);
     assert.ok(displays.some(display => display.id === started.displayID));
     for (const fixture of fixtures) assert.ok(sameFrame((await fixtureState(fixture)).windowFrame, fixture.original.windowFrame), 'OpenCU must not relocate before consent');
-    await ask('Verify the small OpenCU preview visibly shows the agent display. Confirm it appeared without taking foreground.');
+    await ask('Verify the small OpenCU preview visibly shows the agent display (it floats above other windows by design). Confirm keyboard focus stayed in this terminal: typing here still works.');
   });
   await check(1, async () => {
     const declined = await consent(client, a, false);
@@ -279,7 +279,10 @@ try {
     });
   });
   await check(3, async () => {
-    await ask('Select Fixture returned yourself (for example from the Dock), then use its Window > Move to display > Main display command. The invisible display cannot be dragged through the watch-only preview. Do not move Fixture restored. The host/menu-bar Stop returns all windows, but this check needs only the fixture app command.');
+    // The fixture moves its own window back, outside OpenCU, as the person would
+    // with the app's Window menu. Asking the person to find that menu proved error-prone.
+    await writeFile(b.statePath + '.command', 'move-to-main-display');
+    await until(async () => (await fixtureState(b)).screenID !== started.displayID, 'fixture returned to the main display');
     returnedFrame = (await fixtureState(b)).windowFrame;
     assert.notEqual((await fixtureState(b)).screenID, started.displayID);
     await client.call('get_app_state', { app: b.app });
