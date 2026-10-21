@@ -43,6 +43,8 @@ final class AgentDesktopWindow: NSObject, NSWindowDelegate {
     private var hideAfterFullScreen = false
     private var decision: ((Bool) -> Void)?
     var onStop: (() -> Void)?
+    /// Reports the picture's on-screen size in pixels after each settled resize.
+    var onPictureSize: ((CGSize) -> Void)?
     var windowID: Int? { window?.windowNumber }
 
     private var keepOnTop: Bool { defaults.bool(forKey: Self.keepOnTopKey) }
@@ -111,6 +113,7 @@ final class AgentDesktopWindow: NSObject, NSWindowDelegate {
         self.window = window
         applyKeepOnTop(); clearConsent()
         window.orderFrontRegardless() // Shown without activating OpenCU or taking focus.
+        window.layoutIfNeeded(); reportPictureSize()
     }
     /// Shows a hidden or minimized window again without activating OpenCU.
     func reveal() {
@@ -156,6 +159,13 @@ final class AgentDesktopWindow: NSObject, NSWindowDelegate {
     func windowDidResize(_ notification: Notification) {
         guard let window else { return }
         message.preferredMaxLayoutWidth = window.contentLayoutRect.width - 32
+        if !window.inLiveResize { reportPictureSize() } // Includes zoom and full-screen transitions.
+    }
+    func windowDidEndLiveResize(_ notification: Notification) { reportPictureSize() }
+    private func reportPictureSize() {
+        guard let window else { return }
+        let size = image.bounds.size, scale = window.backingScaleFactor
+        onPictureSize?(CGSize(width: size.width * scale, height: size.height * scale))
     }
     private func symbolButton(_ tip: String, _ action: Selector) -> NSButton {
         let button = FirstMouseButton(image: NSImage(), target: self, action: action)

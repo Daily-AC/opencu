@@ -26,6 +26,9 @@ struct CapturePolicyChecks {
         let previewSize = AgentDesktopCapturePolicy.previewSize(width: 3456, height: 2234)
         expect(previewSize.width == 960 && previewSize.height == 620, "Preview capture is bounded before delivery, preserving aspect ratio")
         expect(AgentDesktopCapturePolicy.previewSize(width: 640, height: 480).width == 640, "Small previews are not upscaled")
+        let full = AgentDesktopCapturePolicy.previewSize(width: 3456, height: 2234, fit: CGSize(width: 3456, height: 2160))
+        expect(full.height == 2160 && full.width == 3341, "A full-screen preview follows the visible pixels, preserving aspect ratio")
+        expect(AgentDesktopCapturePolicy.previewSize(width: 3456, height: 2234, fit: CGSize(width: 7000, height: 5000)).width == 3456, "The preview never exceeds the display's own pixels")
         print("\(checks) preview lifecycle/error/size checks passed; no capture or GUI access")
     }
 }

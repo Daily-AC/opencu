@@ -26,8 +26,11 @@ struct AgentDesktopCapturePolicy {
         let value = error as NSError
         return value.domain == SCStreamErrorDomain && value.code == SCStreamError.attemptToStopStreamState.rawValue
     }
-    static func previewSize(width: Int, height: Int) -> (width: Int, height: Int) {
-        let ratio = min(1, 960 / Double(max(1, width)))
+    /// Fits the stream to the pixels the person is looking at, keeping the aspect
+    /// ratio. Never above the display's own pixels; a small window stays cheap.
+    static func previewSize(width: Int, height: Int,
+                            fit: CGSize = CGSize(width: 960, height: CGFloat.greatestFiniteMagnitude)) -> (width: Int, height: Int) {
+        let ratio = min(1, Double(fit.width) / Double(max(1, width)), Double(fit.height) / Double(max(1, height)))
         return (max(1, Int(Double(width) * ratio)), max(1, Int(Double(height) * ratio)))
     }
 }
