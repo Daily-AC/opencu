@@ -30,7 +30,7 @@ const report = { test: 'windows-agent-desktop', ok: false, checks: [],
   parentStimulus: 'SendInput in parent session; not hardware input',
   manualFollowups: ['deliberate click enables interaction; deactivation returns to watch-only; physical Escape still stops',
     'locked parent: --locked-parent checks patterns and refused typing; separately verify lock mid-action, physical Escape and disconnect/logoff', 'smart-card sign-in', 'host crash during startup',
-    'external minimize, covered or partly off-screen viewport, GPU/video', 'unsupported Windows editions/policies'] };
+    'covered or partly off-screen viewport, GPU/video', 'unsupported Windows editions/policies'] };
 let client, parent;
 const check = (name, data = {}) => { report.checks.push({ name, ...data }); console.log(name); };
 async function waitFor(fn, description, ms = 20000) {
@@ -210,17 +210,39 @@ try {
   check('second-explicit-start');
   // Send the normal WM_CLOSE path only to the exact host PID returned by this
   // connection, after checking its fixed title. No app-name-wide termination.
-  const script = `$p=Get-Process -Id ${restarted.hostPid}; if($p.MainWindowTitle -ne 'OpenCU agent desktop'){throw 'Unexpected host'}; if(!$p.CloseMainWindow()){throw 'Cannot close host'}`;
-  execFileSync(path.join(process.env.WINDIR, 'System32/WindowsPowerShell/v1.0/powershell.exe'),
-    ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { windowsHide: true, stdio: 'pipe' });
-  await waitFor(async () => (await control('status')).stoppedByPerson, 'host-close latch');
+  const powershell = path.join(process.env.WINDIR, 'System32/WindowsPowerShell/v1.0/powershell.exe');
+  const host = script => execFileSync(powershell, ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
+    { windowsHide: true, encoding: 'utf8', stdio: 'pipe' }).trim();
+  const exact = `$p=Get-Process -Id ${restarted.hostPid}; if($p.MainWindowTitle -ne 'OpenCU agent desktop'){throw 'Unexpected host'}; ` +
+    `Add-Type -Namespace V -Name W -MemberDefinition '[DllImport("user32.dll")] public static extern bool IsIconic(System.IntPtr h); [DllImport("user32.dll")] public static extern bool ShowWindow(System.IntPtr h, int n);'; `;
+  host(exact + `if(!$p.CloseMainWindow()){throw 'Cannot close host'}`);
+  // Closing minimizes the host to the taskbar; the child keeps working behind it.
+  await waitFor(async () => host(exact + '[V.W]::IsIconic($p.MainWindowHandle)') === 'True', 'host minimized by close');
+  await pause(1500);
+  const minimized = await control('status');
+  assert.equal(minimized.state, 'running'); assert.equal(minimized.stoppedByPerson, false);
+  const clicksBefore = (await state(childExe)).clicks;
+  const behind = await call('get_app_state', { app: childExe, includeScreenshot: true, disableDiff: true });
+  const shot = behind.content.find(c => c.type === 'image'), visibleShot = first.content.find(c => c.type === 'image');
+  assert.ok(shot && shot.data.length > visibleShot.data.length / 2, 'Child screenshot is missing or blank while the host is minimized');
+  await call('click', { app: childExe, element_index: index(behind, 'Increment fixture') });
+  await waitFor(async () => (await state(childExe)).clicks === clicksBefore + 1, 'child click while the host is minimized');
+  check('window-close-minimizes-and-child-keeps-working', { screenshotBytes: shot.data.length, visibleScreenshotBytes: visibleShot.data.length });
+  // Only Stop (or physical Escape) is a person stop. Restore without activation,
+  // then press Stop through UI Automation on this exact host window.
+  host(exact + '[void][V.W]::ShowWindow($p.MainWindowHandle, 4)');
+  await pause(500);
+  host(exact + `Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes; $w=[Windows.Automation.AutomationElement]::FromHandle($p.MainWindowHandle); ` +
+    `$b=$w.FindFirst([Windows.Automation.TreeScope]::Descendants, (New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::NameProperty, 'Stop'))); ` +
+    `if(!$b){throw 'No Stop button'}; $b.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern).Invoke()`);
+  await waitFor(async () => (await control('status')).stoppedByPerson, 'Stop button latch');
   for (const [name, args] of [['agent_desktop', { action: 'start' }], ['list_apps', {}], ['get_app_state', { app: childExe }]]) {
     await call(name, args, 'USER_STOPPED');
   }
   await control('stop');
-  assert.equal((await agentDesktopAvailability(root)).existingChildSession, null, 'Window close left a child session');
+  assert.equal((await agentDesktopAvailability(root)).existingChildSession, null, 'Stop left a child session');
   await call('agent_desktop', { action: 'start' }, 'USER_STOPPED');
-  check('window-close-latches-entire-connection');
+  check('stop-button-latches-entire-connection');
   assert.equal((await state(parentExe)).foreignForeground, 0);
   await command(parentExe, 'end');
   report.ok = true;
