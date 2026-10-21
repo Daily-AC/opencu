@@ -398,6 +398,13 @@ namespace OpenCUAgentDesktop {
             rdp.AdvancedSettings9.SmartSizing = true;
             rdp.SecuredSettings2.KeyboardHookMode = 0;
             rdp.Server = "localhost"; rdp.DesktopWidth = 1280; rdp.DesktopHeight = 900;
+            // A minimized RDP client normally suppresses the session's output, and the child
+            // then refuses foreground changes and input. This documented per-user client
+            // setting keeps it rendering, so closing/minimizing the view never stalls the agent.
+            using (var client = Microsoft.Win32.Registry.CurrentUser.CreateSubKey(@"Software\Microsoft\Terminal Server Client")) {
+                object suppress = client.GetValue("RemoteDesktop_SuppressWhenMinimized");
+                if (!(suppress is int) || (int)suppress != 2) client.SetValue("RemoteDesktop_SuppressWhenMinimized", 2, Microsoft.Win32.RegistryValueKind.DWord);
+            }
             Guid events = new Guid("336d5562-efa8-482e-8cb3-c5c0fc7a7db6");
             loginComplete = new Action(delegate { loggedOn = true; });
             disconnected = new Action<int>(delegate(int reason) {

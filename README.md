@@ -402,7 +402,10 @@ press its **Stop** button or click into its view and press Escape.
 The host is an ordinary window: it can be resized, minimized or maximized, kept on
 top, or switched to a clean view without its bar (both choices are also in the
 title-bar menu). Closing it only minimizes it to the taskbar; the child keeps
-working. Its **Stop** button or physical Escape inside its focused view permanently
+working. To keep a minimized view from pausing the child, the host sets the
+per-user Remote Desktop client value `RemoteDesktop_SuppressWhenMinimized` to 2
+(`HKCU\Software\Microsoft\Terminal Server Client`); your own minimized Remote
+Desktop windows then keep updating too. Its **Stop** button or physical Escape inside its focused view permanently
 stops that MCP connection. The agent must not reconnect or restart without your explicit
 permission. A failed start or broken connection never falls back to your desktop.
 After a failed start, app tools remain blocked until `agent_desktop` with
