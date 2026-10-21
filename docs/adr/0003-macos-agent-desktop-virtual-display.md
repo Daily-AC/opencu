@@ -1,6 +1,7 @@
 # 0003: macOS agent desktop uses a consented virtual display
 
-Date: 2026-10-20. Status: implemented architecture; owner-run GUI acceptance pending.
+Date: 2026-10-20. Status: accepted; seven owner-run checks passed before rebase on 2026-10-21
+(single built-in display, Stage Manager on). See [fixture evidence](../../evidence/opencu-macos-agent-desktop-2026-10-21.json).
 
 ## Decision and evidence
 

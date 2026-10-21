@@ -7,7 +7,7 @@ one in front. It needs no account, model credentials or proprietary runtime: any
 MCP client can start it, and the calling agent supplies the model and decides
 what to do.
 
-**Status (v0.4.0):** macOS source builds and an unsigned Windows x64 package.
+**Status (v0.4.1):** macOS source builds and an unsigned Windows x64 package.
 On the development Mac, 9 of the last 10 runs of its 18-check background GUI
 suite passed, and it has completed a handful of real tasks. It has not been
 benchmarked at scale. Read [Limitations](#limitations) before relying on it.
@@ -123,7 +123,7 @@ In ordinary macOS mode, the V appears while an agent is using OpenCU and hides
 15 seconds after its last call. Menu-bar **Stop** refuses input, activation and
 screenshots with `STOPPED_BY_PERSON`; text-only reads remain available in that mode.
 
-In **agent desktop** mode the menu-bar item stays for the desktop lifetime.
+In **macOS agent desktop** mode the menu-bar item stays for the desktop lifetime.
 Closing the host, its **Stop** button, menu-bar **Stop**, or a macOS Stop Sharing
 control for the preview permanently stops that MCP connection. All app calls,
 including text reads, then fail; only desktop status and cleanup remain available.
@@ -191,7 +191,9 @@ The measurements behind this section are in
   retain `BACKGROUND_INPUT_UNSUPPORTED`. App launch may appear on your display
   first. Creating the display can push an on-stage window into the Stage Manager
   strip. External monitors are untested; unsupported layouts are refused. The
-  product path needs owner-run GUI acceptance; probe results do not verify its UI.
+  owner passed all seven product checks before rebase on 2026-10-21 with one
+  built-in display and Stage Manager on ([evidence](evidence/opencu-macos-agent-desktop-2026-10-21.json)).
+  This does not establish other display layouts or a post-rebase GUI run.
 - **Stage Manager.** A window in the Stage Manager strip cannot become the key
   window: many commands are disabled, Chromium stops rendering its pages, and a
   screenshot may show only the thumbnail. Reading and indexed actions still work.
@@ -402,6 +404,16 @@ measured VM results from the remaining provider and follow-up regression checks.
 
 ### macOS agent desktop
 
+On 2026-10-21, the owner passed all **7/7** product acceptance checks on a Mac
+with a **single built-in display and Stage Manager on**, before this branch was
+rebased onto released v0.4.0. The run used a local copy of the verifier with
+Chinese prompts; the fixture returned its own window via the
+`move-to-main-display` command file, standing in for a person/app moving it back.
+The [fixture-only evidence](evidence/opencu-macos-agent-desktop-2026-10-21.json)
+records the checks, pass/fail and scope. The rebased 0.4.1 build has not had another
+owner GUI run. In earlier owner runs, the first capture from a new build path
+showed the macOS reminder once and correctly named “opencu”.
+
 The same `agent_desktop({action: "start" | "stop" | "status"})` tool automatically
 opens a small **OpenCU agent desktop** window and a virtual monitor. The preview is
 always **watch-only**: clicking it never forwards input. Start moves no app window.
@@ -427,7 +439,9 @@ moved windows with the host or menu-bar **Stop**. To return just one, use that a
 own **Window > Move to** command for your display: activate the app first, or the
 menu belongs to whichever app is in front. The same menu offers the agent display
 for your own windows too; a window you move there yourself shows in the preview,
-is not available to the agent and comes back when the agent display closes. The
+is not automatically available to the agent unless it inherits admission from the
+same process as described above. Another process still needs an Allow this window
+card. macOS relocates these unmoved windows when the agent display closes. The
 invisible monitor cannot be dragged through the watch-only preview. The preview
 floats above other windows without taking keyboard focus. If a window leaves the agent
 display by any means, admission is revoked for this desktop lifetime and cleanup
