@@ -1,0 +1,126 @@
+{
+  "test": "windows-regression",
+  "date": "2026-10-22",
+  "version": "0.5.0",
+  "purpose": "Windows regression for 0.5.0: the agent desktop host became an ordinary window (not kept on top by default, minimizable, close minimizes to the taskbar, Keep on top / Clean view / Stop), and the host sets RemoteDesktop_SuppressWhenMinimized=2 so a minimized view keeps the child rendering.",
+  "environment": "Clean Windows 11 26H2 VM checkpoint, 1920x1080 at 100% scale, real UAC, one re-sign-in by reboot; parent input from the Hyper-V synthetic keyboard and mouse where noted",
+  "package": {
+    "file": "opencu-win-x64.zip",
+    "sha256": "ade59a41e317769432971d5ad36375a3accb172897dbf63221b38e6b780ab0f4"
+  },
+  "guiRuns": [
+    {
+      "ok": true,
+      "checks": 40
+    },
+    {
+      "ok": true,
+      "checks": 40
+    },
+    {
+      "ok": true,
+      "checks": 40
+    }
+  ],
+  "packageVerifier": {
+    "test": "windows-package-offline",
+    "ok": true,
+    "networkUsed": false,
+    "inputCalls": 0,
+    "installedFromLocalZip": true,
+    "agentDesktopPreparation": "Child sessions disabled: automatic preparation refused without elevation.",
+    "hashMismatchPreservesInstall": true,
+    "version": "0.5.0",
+    "toolCount": 14,
+    "listAppsSucceeded": true,
+    "serverVersionMatches": true,
+    "inUseUpdatePreservesInstall": true,
+    "closedSessionUpdateSucceeded": true,
+    "agentDesktopUpdatePreparationChecked": true
+  },
+  "agentDesktopVerifier": {
+    "ok": true,
+    "checks": [
+      "setup-check",
+      "real-pipe-authentication",
+      "start-child-session",
+      "nonactivating-open-from-foreground-launcher",
+      "child-launch-capture-and-inventory",
+      "watch-only-hover-does-not-interrupt",
+      "watch-only-server-pointer-isolation",
+      "concurrent-input-isolation",
+      "tool-stop-logs-off",
+      "second-explicit-start",
+      "window-close-minimizes-and-child-keeps-working",
+      "stop-button-latches-entire-connection"
+    ]
+  },
+  "agentDesktopVerifierLockedParent": {
+    "ok": true,
+    "checks": [
+      "setup-check",
+      "real-pipe-authentication",
+      "start-child-session",
+      "nonactivating-open-from-foreground-launcher",
+      "child-launch-capture-and-inventory",
+      "watch-only-hover-does-not-interrupt",
+      "watch-only-server-pointer-isolation",
+      "concurrent-input-isolation",
+      "locked-parent-patterns-and-refused-typing",
+      "locked-parent-launch-without-activation-request",
+      "manual-unlock-keeps-child-without-replay",
+      "tool-stop-logs-off",
+      "second-explicit-start",
+      "window-close-minimizes-and-child-keeps-working",
+      "stop-button-latches-entire-connection"
+    ],
+    "lockedPatterns": {
+      "click": "Invoke",
+      "setValue": "Value.SetValue"
+    },
+    "lockedCounter": {
+      "before": 10,
+      "after": 11
+    },
+    "lockedValue": "locked pattern value",
+    "closeMinimizes": {
+      "suppressWhenMinimized": "2",
+      "minimizedScreenshotBytes": 6284
+    }
+  },
+  "darkTests": {
+    "1-parent-typing": "Hyper-V keyboard typed 20/20 chunks into a parent fixture while the agent completed 6/6 child rounds; parent foreground unchanged, no cross-talk.",
+    "warp": "Pointer parked over the view: 3/3 child rounds; moved away: 2/2; parent cursor log shows only the two positions the test set.",
+    "H-hover": "Hovering over the view without clicking and moving outside: all child rounds succeeded; parent foreground unchanged.",
+    "A-escape": "Real click into the view, then physical Escape: every later call USER_STOPPED, child session logged off after tool stop, no reconnect.",
+    "L-locked": "Parent locked: child stayed, status parentLocked true, indexed text-box click UNSUPPORTED_ACTION in about 0.17 s (0.4.1: 2.2 s), screenshot 4480 bytes; after a real unlock the same child continued with no replay.",
+    "B-close-then-stop": "Real Hyper-V click on the title-bar close button (located by WM_NCHITTEST = HTCLOSE): host minimized, child session kept running, 2/2 child rounds and a child screenshot succeeded while minimized; a real click on the taskbar button restored it; a real click on Stop logged the child off at once, every later call returned USER_STOPPED and nothing reconnected within 20 s."
+  },
+  "notTested": [
+    "covered or partly off-screen view",
+    "GPU/video apps",
+    "smart-card sign-in",
+    "saved choices applied on the next start"
+  ],
+  "windowControls": {
+    "method": "Real Hyper-V synthetic mouse clicks on the host's own controls (positions from UIA, caption buttons from WM_NCHITTEST); leaving clean view through the title-bar menu with a real right-click, Up and Enter.",
+    "results": {
+      "opens-not-on-top": true,
+      "keep-on-top-on": true,
+      "keep-on-top-off": true,
+      "maximize": true,
+      "child-works-maximized": "2/2 rounds",
+      "restore-from-maximize": true,
+      "clean-view-hides-bar": true,
+      "child-works-in-clean-view": "1/1 round",
+      "title-bar-menu-leaves-clean-view": true
+    },
+    "savedChoices": [
+      "1 0 after keep on top",
+      "0 0 after turning it off",
+      "0 1 in clean view",
+      "0 0 after leaving it"
+    ],
+    "note": "A first run of this script reported child-works-maximized as failed because of a PowerShell expression error in the script; its raw data showed 2/2 rounds succeeding. The rerun with the fixed expression passed every item."
+  }
+}
