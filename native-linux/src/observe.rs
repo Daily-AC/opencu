@@ -12,7 +12,6 @@ pub struct Element {
     pub obj: ObjRef,
     pub role: String,
     pub name: String,
-    pub bounds: Option<Rect>,
     /// Offset from the reported extents to root coordinates for this frame.
     pub offset: (i32, i32),
     pub actions: Vec<String>,
@@ -188,20 +187,34 @@ impl Observer<'_> {
 
     #[allow(clippy::too_many_arguments)]
     fn tree(&self, a11y: &A11y, app: &App, windows: &[WindowInfo], text: &mut String, elements: &mut Vec<Element>, omitted: &mut usize, notes: &mut Vec<String>) {
-        let roots = match a11y.applications(app.pid) {
-            Ok(roots) if !roots.is_empty() => roots,
-            Ok(_) => { notes.push("Accessibility tree unavailable: the app is not registered on the accessibility bus. Use a screenshot and coordinates.".into()); return; }
-            Err(e) => { notes.push(format!("Accessibility tree unavailable: {}: {}", e.code, e.message)); return; }
-        };
-        let mut frames = vec![];
-        for root in &roots {
-            for child in a11y.children(root).unwrap_or_default() {
-                if let Some((role, name, states, extents)) = a11y.frame(&child) {
-                    if role == "tool tip" { continue; }
-                    frames.push(Frame { obj: child, name, states, extents });
+        let deadline = Instant::now() + Duration::from_secs(8);
+        // Apps register, and add their windows, shortly after this connection
+        // turns accessibility on; wait for that instead of reporting no tree.
+        let settle = Instant::now() + if a11y.recently_enabled() { Duration::from_secs(4) } else { Duration::ZERO };
+        let frames = loop {
+            let roots = match a11y.applications(app.pid) {
+                Ok(roots) => roots,
+                Err(e) => { notes.push(format!("Accessibility tree unavailable: {}: {}", e.code, e.message)); return; }
+            };
+            let mut frames = vec![];
+            'roots: for root in &roots {
+                for child in a11y.children(root).unwrap_or_default() {
+                    if Instant::now() >= deadline { break 'roots; }
+                    if let Some((role, name, states, extents)) = a11y.frame(&child) {
+                        if role == "tool tip" { continue; }
+                        frames.push(Frame { obj: child, name, states, extents });
+                    }
                 }
             }
-        }
+            if match_frame(&windows[0], &frames, &[]).is_some() || Instant::now() >= settle.min(deadline) {
+                if roots.is_empty() {
+                    notes.push("Accessibility tree unavailable: the app is not registered on the accessibility bus. Use a screenshot and coordinates.".into());
+                    return;
+                }
+                break frames;
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        };
         let mut used = vec![];
         let mut pairs = vec![];
         for w in windows {
@@ -214,14 +227,14 @@ impl Observer<'_> {
                 None => {}
             }
         }
-        let budget = Budget { nodes: 8000, depth: 120, deadline: Instant::now() + Duration::from_secs(8) };
+        let budget = Budget { nodes: 8000, depth: 120, deadline };
         let objs: Vec<ObjRef> = pairs.iter().map(|(_, i)| frames[*i].obj.clone()).collect();
         let tree = a11y.tree(&objs, &budget);
         let mut listed_count = 0usize;
         let mut bytes = text.len();
         let mut capped = false;
         for (root_pos, root) in tree.roots.iter().enumerate() {
-            let (window, frame) = &pairs[root_pos.min(pairs.len() - 1)];
+            let (window, frame) = &pairs[tree.sources[root_pos]];
             // Some toolkits report frame-relative "screen" extents; shift them
             // by the difference to the X client window when the sizes agree.
             let offset = frames[*frame].extents.filter(|e| (e.width - window.client.width).abs() < 8 && (e.height - window.client.height).abs() < 8)
@@ -240,7 +253,7 @@ impl Observer<'_> {
                     text.push('\n');
                     elements.push(Element {
                         obj: node.obj.clone().unwrap(), role: node.role.clone(), name: node.name.clone(),
-                        bounds: node.bounds, offset, actions: node.actions.clone(), editable: node.editable && node.has(state::EDITABLE),
+                        offset, actions: node.actions.clone(), editable: node.editable && node.has(state::EDITABLE),
                         value: node.range.is_some(), text: node.text, window: window.id,
                     });
                 }

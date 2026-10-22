@@ -6,6 +6,7 @@ mod clipboard;
 mod display;
 mod input;
 mod keys;
+mod lock;
 mod monitor;
 mod observe;
 mod session;
@@ -13,6 +14,7 @@ mod session;
 use opencu_engine::{string, Error, Result, Screenshot};
 use serde_json::{json, Value};
 use std::io::{self, BufRead, Write};
+use std::sync::mpsc;
 use std::time::Duration;
 
 const METHODS: &[&str] = &["wait", "get_app_state", "activate_app", "click", "drag", "paste", "press_key", "type_text",
@@ -28,24 +30,36 @@ struct Engine {
     launcher: apps::Launcher,
     snapshot: Option<observe::Snapshot>,
     clipboard: Option<clipboard::Owner>,
+    lock: lock::LockProbe,
+}
+
+fn open_a11y(display: &display::Display, env: &session::SessionEnv, a11y: &mut Option<a11y::A11y>, error: &mut Option<Error>) {
+    if a11y.is_some() { return; }
+    let property = display.text_property(display.root, display.atoms.AT_SPI_BUS);
+    match a11y::A11y::open(env, property) {
+        Ok(a) => { *a11y = Some(a); *error = None; }
+        Err(e) => *error = Some(e),
+    }
+}
+
+/// One JSON line on stdout. The monitor thread also writes, so lock per line.
+fn emit(value: &Value) -> bool {
+    let mut out = io::stdout().lock();
+    writeln!(out, "{value}").and_then(|_| out.flush()).is_ok()
 }
 
 impl Engine {
     fn new() -> Result<Self> {
         let display = display::Display::connect()?;
-        let monitor = monitor::Monitor::new()?;
+        // Tell the host at once: a call in progress may never return.
+        let monitor = monitor::Monitor::new(Box::new(|| { emit(&json!({"event": "stop", "error": monitor::user_stopped().json()})); }))?;
         let keymap = keys::Keymap::load(&display.conn)?;
         Ok(Self { display, monitor, env: session::SessionEnv::discover(), a11y: None, a11y_error: None, keymap,
-            launcher: apps::Launcher::new(), snapshot: None, clipboard: None })
+            launcher: apps::Launcher::new(), snapshot: None, clipboard: None, lock: Default::default() })
     }
 
     fn connect_a11y(&mut self) {
-        if self.a11y.is_some() { return; }
-        let property = self.display.text_property(self.display.root, self.display.atoms.AT_SPI_BUS);
-        match a11y::A11y::connect(&self.env, property) {
-            Ok(a) => { self.a11y = Some(a); self.a11y_error = None; }
-            Err(e) => self.a11y_error = Some(e),
-        }
+        open_a11y(&self.display, &self.env, &mut self.a11y, &mut self.a11y_error);
     }
 
     fn doctor(&mut self) -> Value {
@@ -90,31 +104,41 @@ impl Engine {
         if observing { self.snapshot = None; }
         let query = string(args, "app")?;
         if query.trim().is_empty() { return Err(Error::new("INVALID_ARGUMENT", "app must not be empty")); }
-        let Engine { display, monitor, env, a11y, a11y_error, keymap, launcher, snapshot, clipboard } = self;
+        let Engine { display, monitor, env, a11y, a11y_error, keymap, launcher, snapshot, clipboard, lock } = self;
         let guard = if method != "get_app_state" { Some(monitor.begin()?) } else { None };
-        let stopped = monitor.stopped();
-        let app = launcher.resolve(display, query, observing && !stopped, env, guard.as_ref())?;
-        if observing {
-            if a11y.is_none() {
-                let property = display.text_property(display.root, display.atoms.AT_SPI_BUS);
-                match a11y::A11y::connect(env, property) {
-                    Ok(a) => { *a11y = Some(a); *a11y_error = None; }
-                    Err(e) => *a11y_error = Some(e),
-                }
+        if guard.is_some() {
+            if let Some(reason) = lock.locked(env) {
+                return Err(Error::new("SCREEN_LOCKED", format!("The screen is locked: {reason}. No input was sent.")));
             }
+            if let Some(held) = display.held_input() {
+                return Err(Error::new("PERSON_ACTIVE", format!("Someone is holding input down ({held}). No input was sent. Ask the person, or try again after it is released.")));
+            }
+            // Follow layout changes and other clients' key bindings since the last call.
+            keymap.reload(&display.conn)?;
+        }
+        let stopped = monitor.stopped();
+        // A new window usually takes the focus, so launching follows the ten-second rule.
+        let idle = || if monitor.recently_active() {
+            Err(Error::new("PERSON_ACTIVE", "Someone used this desktop within the last 10 seconds, and launching the app would bring a new window to the front. Nothing was launched. Ask the person, or try again after they stop."))
+        } else { Ok(()) };
+        let app = launcher.resolve(display, query, observing && !stopped, env, guard.as_ref(), &idle)?;
+        if observing {
+            open_a11y(display, env, a11y, a11y_error);
             if method == "activate_app" {
                 let g = guard.as_ref().unwrap();
                 let window = &app.windows[observe::primary(&app, display.active_window())];
                 if display.active_window() != Some(window.id) || window.hidden {
                     g.require_idle()?;
-                    display.activate(window, Duration::from_millis(1500))?;
+                    let accept = |active: Option<u32>| active.is_some_and(|a| app.windows.iter().any(|w| w.id == a && w.transient_for == Some(window.id)));
+                    display.activate(window, Duration::from_millis(1500), &accept, &|| g.check())?;
                 }
             }
             let observer = observe::Observer { display, a11y: a11y.as_ref(), a11y_error: a11y_error.as_ref() };
-            let app = if method == "activate_app" { launcher.resolve(display, &format!("pid:{}", app.pid), false, env, None)? } else { app };
+            let app = if method == "activate_app" { launcher.resolve(display, &format!("pid:{}", app.pid), false, env, None, &idle)? } else { app };
             let (state, snap) = observer.observe(app, args["includeScreenshot"].as_bool().unwrap_or(false))?;
             if let Some(g) = guard { g.finish()?; }
             *snapshot = Some(snap);
+            if method == "get_app_state" { monitor.observed(); }
             return Ok(state);
         }
         let s = snapshot.as_ref().filter(|s| s.app.pid == app.pid && s.app.started == app.started
@@ -126,9 +150,9 @@ impl Engine {
         } else {
             input::Ctx::new(display, keymap, a11y.as_ref(), &guard, s).perform(method, args, image)
         };
-        let finished = guard.finish();
+        // A person's stop or activity during the call wins over the call's own result.
+        guard.finish()?;
         let result = result?;
-        finished?;
         if result["outcome"] == "unknown" { *snapshot = None; }
         Ok(result)
     }
@@ -174,12 +198,26 @@ fn paste(display: &display::Display, keymap: &mut keys::Keymap, a11y: Option<&a1
     Ok(result)
 }
 
+enum Message { Line(String), End }
+
+/// Block termination signals in every thread; one thread waits for them.
+fn block_signals() -> libc::sigset_t {
+    unsafe {
+        let mut set: libc::sigset_t = std::mem::zeroed();
+        libc::sigemptyset(&mut set);
+        for signal in [libc::SIGTERM, libc::SIGINT, libc::SIGHUP] { libc::sigaddset(&mut set, signal); }
+        libc::pthread_sigmask(libc::SIG_BLOCK, &set, std::ptr::null_mut());
+        set
+    }
+}
+
 fn main() {
     let mode = std::env::args().nth(1).unwrap_or_default();
     if mode != "serve" && mode != "--doctor" {
         eprintln!("Usage: opencu-engine serve | --doctor");
         std::process::exit(2);
     }
+    let signals = block_signals();
     let mut engine = Engine::new();
     if mode == "--doctor" {
         match &mut engine {
@@ -188,16 +226,39 @@ fn main() {
         }
         return;
     }
-    let stdin = io::stdin();
-    let mut out = io::BufWriter::new(io::stdout().lock());
-    for line in stdin.lock().lines() {
-        let Ok(line) = line else { break };
+    let (tx, rx) = mpsc::channel();
+    let reader = tx.clone();
+    std::thread::spawn(move || {
+        for line in io::stdin().lock().lines() {
+            let Ok(line) = line else { break };
+            if reader.send(Message::Line(line)).is_err() { return; }
+        }
+        let _ = reader.send(Message::End);
+    });
+    // On SIGTERM, SIGINT or SIGHUP, stop input in progress (its held keys are
+    // released on the normal path), then clean up as on end of input.
+    let terminator = engine.as_ref().ok().map(|e| e.monitor.terminator());
+    std::thread::spawn(move || {
+        let mut signal = 0;
+        unsafe { libc::sigwait(&signals, &mut signal) };
+        if let Some(t) = terminator { t.terminate(); }
+        let _ = tx.send(Message::End);
+    });
+    while let Ok(Message::Line(line)) = rx.recv() {
+        let mut fatal = false;
         let (id, result) = match serde_json::from_str::<Value>(&line) {
             Ok(v) => {
                 let id = v.get("id").cloned().unwrap_or(Value::Null);
                 let r = match v["method"].as_str() {
                     Some("doctor") => match &mut engine { Ok(e) => Ok(e.doctor()), Err(e) => Err(e.clone()) },
-                    Some(method) => match &mut engine { Ok(e) => e.dispatch(method, &v["params"]), Err(e) => Err(e.clone()) },
+                    Some(method) => match &mut engine {
+                        Ok(e) => std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| e.dispatch(method, &v["params"])))
+                            .unwrap_or_else(|_| {
+                                fatal = true;
+                                Err(Error::new("ENGINE_FAILED", "The OpenCU engine failed and stopped; input may already have run. Read fresh state after reconnecting."))
+                            }),
+                        Err(e) => Err(e.clone()),
+                    },
                     None => Err(Error::new("INVALID_REQUEST", "method must be a string")),
                 };
                 (id, r)
@@ -208,7 +269,7 @@ fn main() {
             Ok(result) => json!({"id": id, "result": result}),
             Err(e) => json!({"id": id, "error": e.json()}),
         };
-        if writeln!(out, "{response}").and_then(|_| out.flush()).is_err() { break; }
+        if !emit(&response) || fatal { break; }
     }
     if let Ok(e) = &mut engine { e.close(); }
 }

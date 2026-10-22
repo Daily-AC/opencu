@@ -100,6 +100,11 @@ impl Display {
         }
         let (conn, screen_num) = x11rb::connect(None)
             .map_err(|e| Error::new("DISPLAY_UNAVAILABLE", format!("Cannot connect to the X server: {e}")))?;
+        // Under XWayland a person's input to native Wayland windows is invisible
+        // to the safety monitor, so Wayland sessions are refused even with DISPLAY.
+        if conn.extension_information("XWAYLAND").ok().flatten().is_some() {
+            return Err(Error::new("DISPLAY_UNAVAILABLE", "This is XWayland inside a Wayland session. Only X11 sessions are supported."));
+        }
         let screen = &conn.setup().roots[screen_num];
         let root = screen.root;
         let rect = Rect { x: 0, y: 0, width: screen.width_in_pixels as i32, height: screen.height_in_pixels as i32 };
@@ -277,6 +282,40 @@ impl Display {
         tree.children.iter().find_map(|child| self.pid(*child))
     }
 
+    /// A full-screen override-redirect window of another program above every
+    /// managed window: a screen locker or screen saver (i3lock, xscreensaver,
+    /// xfce4-screensaver, KDE). Keyboard input would go to it.
+    pub fn covering_window(&self, target_pid: u32) -> Option<String> {
+        let tree = self.conn.query_tree(self.root).ok()?.reply().ok()?;
+        for id in tree.children.into_iter().rev() {
+            let Some(a) = self.conn.get_window_attributes(id).ok().and_then(|c| c.reply().ok()) else { continue };
+            if a.map_state != MapState::VIEWABLE || a.class != WindowClass::INPUT_OUTPUT { continue; }
+            if !a.override_redirect { return None; }
+            let Some(r) = self.root_rect(id) else { continue };
+            let covers = r.x <= self.screen.x && r.y <= self.screen.y
+                && r.x + r.width >= self.screen.x + self.screen.width && r.y + r.height >= self.screen.y + self.screen.height;
+            if covers && self.owner_pid(id, &[]) != Some(target_pid) {
+                let class = self.property(id, AtomEnum::WM_CLASS.into(), AtomEnum::STRING)
+                    .map(|r| String::from_utf8_lossy(&r.value).split('\0').next().unwrap_or("").to_owned()).unwrap_or_default();
+                return Some(if class.is_empty() { format!("window 0x{id:x}") } else { class });
+            }
+        }
+        None
+    }
+
+    /// A key or pointer button that is down right now (a person holding it,
+    /// or one left pressed by a killed client).
+    pub fn held_input(&self) -> Option<String> {
+        let keys = self.conn.query_keymap().ok()?.reply().ok()?.keys;
+        if let Some(code) = keys.iter().enumerate().find_map(|(i, byte)| (0..8).find(|b| byte & (1 << b) != 0).map(|b| i * 8 + b)) {
+            return Some(format!("keycode {code} is held down"));
+        }
+        let pointer = self.conn.query_pointer(self.root).ok()?.reply().ok()?;
+        let buttons = u16::from(pointer.mask) & (u16::from(KeyButMask::BUTTON1) | u16::from(KeyButMask::BUTTON2)
+            | u16::from(KeyButMask::BUTTON3) | u16::from(KeyButMask::BUTTON4) | u16::from(KeyButMask::BUTTON5));
+        (buttons != 0).then(|| "a mouse button is held down".to_owned())
+    }
+
     pub fn focus(&self) -> Option<Window> {
         self.conn.get_input_focus().ok()?.reply().ok().map(|r| r.focus)
     }
@@ -293,12 +332,16 @@ impl Display {
 
     /// Ask the window manager to activate a window (de-iconifying it), and set
     /// keyboard focus as `xdotool windowactivate` does. Waits for confirmation.
-    pub fn activate(&self, window: &WindowInfo, budget: Duration) -> Result<()> {
+    /// `accept` also takes the window's own dialogs; `check` runs before each request.
+    pub fn activate(&self, window: &WindowInfo, budget: Duration, accept: &dyn Fn(Option<Window>) -> bool,
+        check: &dyn Fn() -> Result<()>) -> Result<()> {
         let started = Instant::now();
         let mut sent = 0;
         loop {
-            let active = self.active_window() == Some(window.id);
-            let focused = self.focus().is_some_and(|f| self.is_ancestor(window.id, f) || f == window.frame);
+            let current = self.active_window();
+            let active = current == Some(window.id) || accept(current);
+            let focused = self.focus().is_some_and(|f| self.is_ancestor(window.id, f) || f == window.frame
+                || current.is_some_and(|c| c != window.id && accept(Some(c)) && self.is_ancestor(c, f)));
             let viewable = self.conn.get_window_attributes(window.id).ok().and_then(|c| c.reply().ok())
                 .is_some_and(|a| a.map_state == MapState::VIEWABLE);
             if active && focused && viewable { return Ok(()); }
@@ -307,6 +350,7 @@ impl Display {
                 return Err(Error::new("ACTIVATION_FAILED", "The window manager did not bring the target window to the front; no input was sent."));
             }
             if sent == 0 || (sent == 1 && elapsed >= budget * 2 / 5) {
+                check()?;
                 sent += 1;
                 let time = self.server_time();
                 let prior = self.active_window().unwrap_or(0);
@@ -352,6 +396,8 @@ impl Display {
         } else { None };
         let (image, visual_owner) = match image {
             Some(image) => (image, window.frame),
+            // Screen pixels could show other windows covering the target.
+            None if self.composite => return Err(Error::new("SCREENSHOT_FAILED", "The window's pixels could not be read; read state again.")),
             None => {
                 // Without Composite, read what is on screen in the window's area.
                 let clip = intersect(rect, self.screen).ok_or_else(|| Error::new("SCREENSHOT_FAILED", "The window is off screen."))?;

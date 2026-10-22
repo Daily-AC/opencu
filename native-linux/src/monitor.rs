@@ -1,8 +1,9 @@
 //! Person-activity monitor. A dedicated X connection receives XInput2 raw
-//! events for every device. Events from the XTEST slave devices are synthetic
-//! (OpenCU's own input, or another client's XTest); any other device is a person,
-//! for example the keyboard and pointer of a VNC viewer. Physical Escape latches
-//! a stop for this engine connection.
+//! events for every device. Any device other than the XTEST slaves is a person,
+//! for example the keyboard and pointer of a VNC viewer. OpenCU injects only
+//! inside a guard, so XTEST input outside one comes from another program (x11vnc,
+//! Barrier, an on-screen keyboard) and also counts as activity. Physical Escape
+//! latches a stop for this engine connection.
 use opencu_engine::{Error, Result};
 use std::collections::BTreeSet;
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -23,6 +24,9 @@ struct State {
     stopped: bool,
     interrupted: bool,
     guarding: bool,
+    /// A person interrupted input; the next input needs a fresh get_app_state.
+    needs_observation: bool,
+    terminating: bool,
     devices: Vec<String>,
     failed: Option<String>,
 }
@@ -30,6 +34,14 @@ struct State {
 pub struct Monitor {
     state: Arc<Mutex<State>>,
     fence: Sender<Sender<()>>,
+}
+
+/// Lets a signal handler stop input in progress.
+#[derive(Clone)]
+pub struct Terminator(Arc<Mutex<State>>);
+
+impl Terminator {
+    pub fn terminate(&self) { self.0.lock().unwrap().terminating = true; }
 }
 
 pub fn user_stopped() -> Error {
@@ -45,34 +57,35 @@ pub fn is_xtest_device(name: &str) -> bool {
 }
 
 impl Monitor {
-    pub fn new() -> Result<Self> {
+    /// `on_stop` runs on the monitor thread when Escape latches the stop.
+    pub fn new(on_stop: Box<dyn Fn() + Send>) -> Result<Self> {
         let (conn, screen) = x11rb::connect(None)
             .map_err(|e| Error::new("SAFETY_MONITOR_UNAVAILABLE", format!("Cannot open the monitor X connection: {e}")))?;
         let root = conn.setup().roots[screen].root;
         let version = conn.xinput_xi_query_version(2, 2).ok().and_then(|c| c.reply().ok());
-        if version.is_none_or(|v| v.major_version < 2) {
-            return Err(Error::new("SAFETY_MONITOR_UNAVAILABLE", "The X server has no XInput 2; OpenCU cannot tell a person's input from its own."));
+        // Before XI 2.1 raw events stop while another client holds a grab.
+        if version.is_none_or(|v| (v.major_version, v.minor_version) < (2, 1)) {
+            return Err(Error::new("SAFETY_MONITOR_UNAVAILABLE", "The X server has no XInput 2.1; OpenCU cannot tell a person's input from its own."));
         }
-        let raw = xinput::XIEventMask::RAW_KEY_PRESS | xinput::XIEventMask::RAW_BUTTON_PRESS | xinput::XIEventMask::RAW_MOTION;
-        // Hierarchy changes can only be selected for all devices.
-        conn.xinput_xi_select_events(root, &[
-            xinput::EventMask { deviceid: xinput::Device::ALL_MASTER.into(), mask: vec![raw] },
-            xinput::EventMask { deviceid: xinput::Device::ALL.into(), mask: vec![xinput::XIEventMask::HIERARCHY] },
-        ])
+        // All devices, so floating slaves count too; each event carries its source device.
+        let raw = xinput::XIEventMask::RAW_KEY_PRESS | xinput::XIEventMask::RAW_BUTTON_PRESS | xinput::XIEventMask::RAW_MOTION
+            | xinput::XIEventMask::RAW_TOUCH_BEGIN | xinput::XIEventMask::HIERARCHY;
+        conn.xinput_xi_select_events(root, &[xinput::EventMask { deviceid: xinput::Device::ALL.into(), mask: vec![raw] }])
             .and_then(|c| Ok(c.check()))
             .map_err(|e| Error::new("SAFETY_MONITOR_UNAVAILABLE", e.to_string()))?
             .map_err(|e| Error::new("SAFETY_MONITOR_UNAVAILABLE", e.to_string()))?;
         // Input before this connection existed cannot be attributed; the
         // screensaver idle counter conservatively includes synthetic input.
+        // Without it, assume a person was just active.
         let idle = conn.screensaver_query_info(root).ok().and_then(|c| c.reply().ok())
             .map(|i| Duration::from_millis(i.ms_since_user_input as u64));
         let state = Arc::new(Mutex::new(State {
-            last_person: idle.and_then(|d| Instant::now().checked_sub(d)),
+            last_person: Some(idle.and_then(|d| Instant::now().checked_sub(d)).unwrap_or_else(Instant::now)),
             ..Default::default()
         }));
         let (fence, requests) = channel();
         let thread_state = state.clone();
-        std::thread::Builder::new().name("opencu-monitor".into()).spawn(move || run(conn, thread_state, requests))
+        std::thread::Builder::new().name("opencu-monitor".into()).spawn(move || run(conn, thread_state, requests, on_stop))
             .map_err(|e| Error::new("SAFETY_MONITOR_UNAVAILABLE", e.to_string()))?;
         let monitor = Self { state, fence };
         monitor.sync()?;
@@ -96,6 +109,11 @@ impl Monitor {
         self.state.lock().unwrap().stopped
     }
 
+    pub fn terminator(&self) -> Terminator { Terminator(self.state.clone()) }
+
+    /// A successful get_app_state satisfies a pending fresh-read requirement.
+    pub fn observed(&self) { self.state.lock().unwrap().needs_observation = false; }
+
     pub fn devices(&self) -> Vec<String> {
         self.state.lock().unwrap().devices.clone()
     }
@@ -109,6 +127,10 @@ impl Monitor {
         self.sync()?;
         let mut state = self.state.lock().unwrap();
         if state.stopped { return Err(user_stopped()); }
+        if state.terminating { return Err(terminating()); }
+        if state.needs_observation {
+            return Err(Error::new("OBSERVATION_REQUIRED", "A person interrupted earlier input; read get_app_state before new input."));
+        }
         state.guarding = true;
         state.interrupted = false;
         drop(state);
@@ -128,6 +150,7 @@ impl Guard<'_> {
         let state = self.monitor.state.lock().unwrap();
         if state.stopped { return Err(user_stopped()); }
         if state.interrupted { return Err(person_active()); }
+        if state.terminating { return Err(terminating()); }
         Ok(())
     }
 
@@ -161,8 +184,16 @@ impl Guard<'_> {
 
 impl Drop for Guard<'_> {
     fn drop(&mut self) {
-        if !self.done { self.monitor.state.lock().unwrap().guarding = false; }
+        if !self.done {
+            // Attribute this call's own events before leaving the guard.
+            let _ = self.monitor.sync();
+            self.monitor.state.lock().unwrap().guarding = false;
+        }
     }
+}
+
+fn terminating() -> Error {
+    Error::new("ENGINE_STOPPING", "The OpenCU engine is shutting down; no further input was sent.")
 }
 
 fn devices(conn: &RustConnection) -> (BTreeSet<u16>, Vec<String>) {
@@ -196,31 +227,40 @@ fn escape_keycodes(conn: &RustConnection) -> BTreeSet<u32> {
     codes
 }
 
-fn person(state: &Mutex<State>, synthetic: &BTreeSet<u16>, source: u16, escape: bool) {
-    if synthetic.contains(&source) { return; }
+/// Record activity; true when this event latched the stop.
+fn person(state: &Mutex<State>, synthetic: &BTreeSet<u16>, source: u16, escape: bool) -> bool {
     let mut s = state.lock().unwrap();
+    if synthetic.contains(&source) {
+        // Inside a guard this is OpenCU's own input.
+        if !s.guarding { s.last_person = Some(Instant::now()); }
+        return false;
+    }
     s.last_person = Some(Instant::now());
-    if s.guarding { s.interrupted = true; }
+    if s.guarding { s.interrupted = true; s.needs_observation = true; }
+    let latched = escape && !s.stopped;
     if escape { s.stopped = true; }
+    latched
 }
 
-/// Handle one event; false when the connection failed.
-fn handle(conn: &RustConnection, state: &Mutex<State>, synthetic: &mut BTreeSet<u16>, escapes: &mut BTreeSet<u32>, event: Event) {
+/// Handle one event; true when it latched the stop.
+fn handle(conn: &RustConnection, state: &Mutex<State>, synthetic: &mut BTreeSet<u16>, escapes: &mut BTreeSet<u32>, event: Event) -> bool {
     match event {
         Event::XinputRawKeyPress(e) => person(state, synthetic, e.sourceid, escapes.contains(&e.detail)),
         Event::XinputRawButtonPress(e) => person(state, synthetic, e.sourceid, false),
         Event::XinputRawMotion(e) => person(state, synthetic, e.sourceid, false),
+        Event::XinputRawTouchBegin(e) => person(state, synthetic, e.sourceid, false),
         Event::XinputHierarchy(_) => {
             let (s, p) = devices(conn);
             *synthetic = s;
             state.lock().unwrap().devices = p;
+            false
         }
-        Event::MappingNotify(_) => *escapes = escape_keycodes(conn),
-        _ => {}
+        Event::MappingNotify(_) => { *escapes = escape_keycodes(conn); false }
+        _ => false,
     }
 }
 
-fn run(conn: RustConnection, state: Arc<Mutex<State>>, requests: Receiver<Sender<()>>) {
+fn run(conn: RustConnection, state: Arc<Mutex<State>>, requests: Receiver<Sender<()>>, on_stop: Box<dyn Fn() + Send>) {
     let (mut synthetic, people) = devices(&conn);
     let mut escapes = escape_keycodes(&conn);
     state.lock().unwrap().devices = people;
@@ -228,7 +268,7 @@ fn run(conn: RustConnection, state: Arc<Mutex<State>>, requests: Receiver<Sender
     let drain = |synthetic: &mut BTreeSet<u16>, escapes: &mut BTreeSet<u32>| -> std::result::Result<(), String> {
         loop {
             match conn.poll_for_event() {
-                Ok(Some(event)) => handle(&conn, &state, synthetic, escapes, event),
+                Ok(Some(event)) => if handle(&conn, &state, synthetic, escapes, event) { on_stop() },
                 Ok(None) => return Ok(()),
                 Err(e) => return Err(e.to_string()),
             }

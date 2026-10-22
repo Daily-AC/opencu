@@ -22,7 +22,6 @@ const VALUE: &str = "org.a11y.atspi.Value";
 const PROPERTIES: &str = "org.freedesktop.DBus.Properties";
 
 pub mod state {
-    pub const ACTIVE: u32 = 1;
     pub const CHECKED: u32 = 4;
     pub const DEFUNCT: u32 = 6;
     pub const EDITABLE: u32 = 7;
@@ -31,13 +30,11 @@ pub mod state {
     pub const EXPANDED: u32 = 10;
     pub const FOCUSABLE: u32 = 11;
     pub const FOCUSED: u32 = 12;
-    pub const MULTI_LINE: u32 = 17;
     pub const PRESSED: u32 = 20;
     pub const SELECTABLE: u32 = 22;
     pub const SELECTED: u32 = 23;
     pub const SENSITIVE: u32 = 24;
     pub const SHOWING: u32 = 25;
-    pub const VISIBLE: u32 = 30;
     pub const MANAGES_DESCENDANTS: u32 = 31;
     pub const INDETERMINATE: u32 = 32;
     pub const CHECKABLE: u32 = 41;
@@ -80,6 +77,8 @@ impl Node {
 pub struct Tree {
     pub nodes: Vec<Node>,
     pub roots: Vec<usize>,
+    /// For each root, its position in the requested roots.
+    pub sources: Vec<usize>,
     pub inspected: usize,
     pub truncated: Option<String>,
 }
@@ -94,6 +93,8 @@ pub struct A11y {
     conn: Connection,
     session: Option<Connection>,
     restore: bool,
+    /// When this connection turned accessibility on; apps register shortly after.
+    enabled_at: Option<Instant>,
     pub via: String,
     pids: Mutex<HashMap<String, Option<u32>>>,
 }
@@ -121,7 +122,17 @@ pub fn role_label(role: &str) -> String {
 }
 
 impl A11y {
-    pub fn connect(env: &SessionEnv, root_property: Option<String>) -> Result<Self> {
+    /// Connect, giving up after five seconds: a bus that accepts but never
+    /// answers must not hold a call past the host's timeout.
+    pub fn open(env: &SessionEnv, root_property: Option<String>) -> Result<Self> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let env = env.clone();
+        std::thread::spawn(move || { let _ = tx.send(Self::connect(&env, root_property)); });
+        rx.recv_timeout(Duration::from_secs(5))
+            .unwrap_or_else(|_| Err(Error::new("A11Y_UNAVAILABLE", "The accessibility bus did not answer within 5 seconds.")))
+    }
+
+    fn connect(env: &SessionEnv, root_property: Option<String>) -> Result<Self> {
         zbus::block_on(async {
             let session_address = env.get("DBUS_SESSION_BUS_ADDRESS");
             let session = match &session_address {
@@ -164,11 +175,13 @@ impl A11y {
                         &("org.a11y.Status", "IsEnabled", Value::from(true))).await.is_ok();
                 }
             }
-            Ok(Self { conn, session, restore, via, pids: Mutex::new(HashMap::new()) })
+            Ok(Self { conn, session, restore, enabled_at: restore.then(Instant::now), via, pids: Mutex::new(HashMap::new()) })
         })
     }
 
     pub fn enabled_by_opencu(&self) -> bool { self.restore }
+
+    pub fn recently_enabled(&self) -> bool { self.enabled_at.is_some_and(|t| t.elapsed() < Duration::from_secs(10)) }
 
     async fn call<B, R>(&self, obj: &ObjRef, iface: &str, method: &str, body: &B) -> Result<R>
     where B: serde::Serialize + DynamicType, R: DeserializeOwned + Type {
@@ -303,12 +316,12 @@ impl A11y {
     /// Breadth-first read with pipelined calls, then the caller prints it in tree order.
     pub fn tree(&self, roots: &[ObjRef], budget: &Budget) -> Tree {
         zbus::block_on(async {
-            let mut tree = Tree { nodes: vec![], roots: vec![], inspected: 0, truncated: None };
+            let mut tree = Tree { nodes: vec![], roots: vec![], sources: vec![], inspected: 0, truncated: None };
             let mut timeouts = 0;
             let mut level = vec![];
-            for (root, info) in roots.iter().zip(join_all(roots.iter().map(|r| self.info(r.clone(), 0))).await) {
-                let _ = root;
+            for (source, info) in join_all(roots.iter().map(|r| self.info(r.clone(), 0))).await.into_iter().enumerate() {
                 if let Ok(node) = info {
+                    tree.sources.push(source);
                     tree.roots.push(tree.nodes.len());
                     level.push(tree.nodes.len());
                     tree.nodes.push(node);
@@ -369,10 +382,6 @@ impl A11y {
         })
     }
 
-    pub fn states(&self, obj: &ObjRef) -> Result<u64> {
-        zbus::block_on(async { Ok(bits(&self.call::<_, Vec<u32>>(obj, ACCESSIBLE, "GetState", &()).await?)) })
-    }
-
     /// Action names by position. Firefox's bridge returns placeholder text
     /// from GetActions, so names are read one by one.
     async fn action_names(&self, obj: &ObjRef) -> Result<Vec<String>> {
@@ -427,18 +436,38 @@ impl A11y {
         })
     }
 
-    pub fn grab_focus(&self, obj: &ObjRef) -> Result<bool> {
-        zbus::block_on(self.call::<_, bool>(obj, COMPONENT, "GrabFocus", &()))
+    /// States, role and name, to confirm an indexed element is still the same control.
+    pub fn identity(&self, obj: &ObjRef) -> Result<(u64, String, String)> {
+        zbus::block_on(async {
+            let (states, role, name) = join3(self.call::<_, Vec<u32>>(obj, ACCESSIBLE, "GetState", &()),
+                self.call::<_, String>(obj, ACCESSIBLE, "GetRoleName", &()), self.prop::<String>(obj, ACCESSIBLE, "Name")).await;
+            Ok((bits(&states?), role?, name.unwrap_or_default().trim().to_owned()))
+        })
     }
 
+    /// Turn accessibility back off, unless a screen reader or another OpenCU
+    /// engine of this user still relies on it.
     pub fn close(&self) {
-        if self.restore {
-            if let Some(session) = &self.session {
-                let _ = zbus::block_on(session.call_method(Some("org.a11y.Bus"), "/org/a11y/bus", Some(PROPERTIES), "Set",
-                    &("org.a11y.Status", "IsEnabled", Value::from(false))));
-            }
+        if !self.restore || other_engine_running() { return; }
+        if let Some(session) = &self.session {
+            let reader = zbus::block_on(session.call_method(Some("org.a11y.Bus"), "/org/a11y/bus", Some(PROPERTIES), "Get",
+                &("org.a11y.Status", "ScreenReaderEnabled"))).ok()
+                .and_then(|r| r.body().deserialize::<OwnedValue>().ok()).and_then(|v| bool::try_from(v).ok());
+            if reader == Some(true) { return; }
+            let _ = zbus::block_on(session.call_method(Some("org.a11y.Bus"), "/org/a11y/bus", Some(PROPERTIES), "Set",
+                &("org.a11y.Status", "IsEnabled", Value::from(false))));
         }
     }
+}
+
+fn other_engine_running() -> bool {
+    use std::os::unix::fs::MetadataExt;
+    let (me, uid) = (std::process::id(), unsafe { libc::getuid() });
+    std::fs::read_dir("/proc").map(|entries| entries.flatten().any(|e| {
+        let Some(pid) = e.file_name().to_str().and_then(|p| p.parse::<u32>().ok()) else { return false };
+        pid != me && e.metadata().is_ok_and(|m| m.uid() == uid)
+            && std::fs::read_to_string(format!("/proc/{pid}/comm")).is_ok_and(|c| c.trim() == "opencu-engine")
+    })).unwrap_or(false)
 }
 
 fn bits(states: &[u32]) -> u64 {

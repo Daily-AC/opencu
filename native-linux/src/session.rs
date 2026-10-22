@@ -5,6 +5,7 @@
 use std::collections::BTreeMap;
 use std::os::unix::fs::MetadataExt;
 
+#[derive(Clone)]
 pub struct SessionEnv {
     vars: BTreeMap<String, String>,
     pub source: String,

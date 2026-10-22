@@ -253,6 +253,7 @@ lines.on('line', line => {
   const replies = JSON.parse(readFileSync(dir + '/replies', 'utf8'));
   const reply = replies.shift();
   writeFileSync(dir + '/replies', JSON.stringify(replies));
+  if (reply?.event) process.stdout.write(JSON.stringify(reply.event) + '\\n');
   if (reply?.hang) {
     if (reply.stubborn) setInterval(() => {}, 1000);
     late = { id: q.id, ...reply.late }; return;
@@ -321,6 +322,16 @@ test('a late USER_STOPPED from the timed-out engine prevents restart', async t =
   assert.match((await f.call('get_app_state')).content[0].text, /timed out/);
   assert.equal((await f.call('get_app_state'))._meta['opencu/error'], 'USER_STOPPED');
   assert.equal((await f.starts()).length, 1);
+});
+
+test('an unsolicited USER_STOPPED during a hung call latches before the timeout replaces the engine', async t => {
+  const f = await restartingFixture(t, [{ hang: true, event: { event: 'stop', error: { code: 'USER_STOPPED', message: 'Physical Escape' } } }]);
+  assert.match((await f.call('get_app_state')).content[0].text, /timed out/);
+  for (const method of ['get_app_state', 'press_key']) {
+    assert.equal((await f.call(method, { key: 'Return' }))._meta['opencu/error'], 'USER_STOPPED');
+  }
+  assert.equal((await f.starts()).length, 1);
+  assert.deepEqual((await f.calls()).map(q => q.method), ['get_app_state']);
 });
 
 
