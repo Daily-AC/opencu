@@ -20,7 +20,7 @@ const runtime = new AgentDesktopRuntime({ root });
 const app = z.string().min(1).describe('App name or full app path; macOS bundle ID; Windows process name, window title fragment, or Start-menu shortcut name; Linux desktop entry name, executable name or window title fragment');
 const element_index = z.number().int().describe('Element index from the latest returned app state');
 const duration = z.number().finite().min(0).max(30).optional().describe('Seconds to hold before releasing, from 0 to 30. Windows press_key defaults to 0.05 seconds when omitted; explicit 0 remains allowed.');
-const scope = z.number().int().min(1).optional().describe('Windows only for now: element index from the latest returned state. Read only its retained subtree, renumbered from [1], including after actions. If it disappears, return the whole window with a notice. macOS returns INVALID_ARGUMENT.');
+const scope = z.number().int().min(1).optional().describe('Windows only for now: element index from the latest returned state. Read only its retained subtree, renumbered from [1], including after actions. If it disappears, return the whole window with a notice. macOS and Linux return INVALID_ARGUMENT.');
 const stateOptions = {
   scope,
   disableDiff: z.boolean().optional(),
@@ -81,7 +81,7 @@ for (const definition of Object.values(definitions)) {
 }
 
 definitions.run_actions = {
-  description: 'Run a short known sequence and return its final state. Single-action tools already return text state; use this for several known actions or an inline final screenshot. Example: focus an observed field, select all, paste, then inspect the result. Stop when new information or approval is needed. Accepts {"method":"wait","ms":N} for 1–15000 ms on both platforms; wait sends no input and honours person stops. Coordinate input must be first (including before any wait) and use a fresh screenshot. Stops on error or an unknown accessibility action outcome without replay; earlier actions may have run. An unknown outcome requires an explicit get_app_state before continuing. A locked pattern that refreshes indexes stops the remaining batch and returns fresh state; choose subsequent actions from that state.',
+  description: 'Run a short known sequence and return its final state. Single-action tools already return text state; use this for several known actions or an inline final screenshot. Example: focus an observed field, select all, paste, then inspect the result. Stop when new information or approval is needed. Accepts {"method":"wait","ms":N} for 1–15000 ms on every platform; wait sends no input and honours person stops. Coordinate input must be first (including before any wait) and use a fresh screenshot. Stops on error or an unknown accessibility action outcome without replay; earlier actions may have run. An unknown outcome requires an explicit get_app_state before continuing. A locked pattern that refreshes indexes stops the remaining batch and returns fresh state; choose subsequent actions from that state.',
   schema: {
     app,
     actions: z.array(z.discriminatedUnion('method', Object.entries(definitions)
@@ -99,7 +99,7 @@ definitions.list_apps = {
   schema: {}, readOnly: true,
 };
 definitions.activate_app = {
-  description: 'Bring the requested app forward and return its state. Use when foreground interaction is required. On Windows, changing foreground requires 10 seconds without human keyboard or mouse activity; otherwise PERSON_ACTIVE is returned with no foreground change or input. Inspect the returned window before input and do not compete with user activity.',
+  description: 'Bring the requested app forward and return its state. Use when foreground interaction is required. On Windows and Linux, changing foreground requires 10 seconds without human keyboard or mouse activity; otherwise PERSON_ACTIVE is returned with no foreground change or input. Inspect the returned window before input and do not compete with user activity.',
   schema: { app, ...Object.fromEntries(Object.entries(stateOptions).filter(([key]) => key !== 'scope')) },
 };
 definitions.agent_desktop = {
