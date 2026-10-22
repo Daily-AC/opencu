@@ -9,6 +9,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       fonts-noto-cjk fonts-dejavu-core x11-utils xdotool imagemagick \
       python3 ca-certificates procps curl git less \
     && rm -rf /var/lib/apt/lists/*
+# Chromium cannot create its sandbox namespaces in an unprivileged container.
+RUN printf 'export CHROMIUM_FLAGS="$CHROMIUM_FLAGS --no-sandbox --force-renderer-accessibility"\n' > /etc/chromium.d/opencu-container
 RUN useradd -m -u 1000 -s /bin/bash her
 COPY session.sh /usr/local/bin/opencu-test-session
 RUN chmod 755 /usr/local/bin/opencu-test-session

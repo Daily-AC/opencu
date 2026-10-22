@@ -1,0 +1,41 @@
+#!/bin/sh
+# Install OpenCU for the current user on x86_64 Linux, without root.
+# The archive is refused unless its SHA-256 matches the value below. The
+# manifest is written last; hosts discover OpenCU through it.
+set -eu
+version='@@VERSION@@'
+expected='@@SHA256@@'
+url='@@ASSET_URL@@'
+dir="${OPENCU_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/opencu}"
+
+[ "$(uname -s)" = Linux ] && [ "$(uname -m)" = x86_64 ] || {
+    echo "OpenCU $version for Linux supports x86_64 only (this is $(uname -s) $(uname -m)). Nothing was installed." >&2; exit 1; }
+parent=$(dirname -- "$dir")
+mkdir -p "$parent"
+work=$(mktemp -d "$parent/.opencu-install.XXXXXX")
+trap 'rm -rf "$work"' EXIT INT TERM
+if [ -n "${OPENCU_LOCAL_ARCHIVE:-}" ]; then
+    cp -- "$OPENCU_LOCAL_ARCHIVE" "$work/opencu.tar.gz"
+elif command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$url" -o "$work/opencu.tar.gz"
+else
+    wget -qO "$work/opencu.tar.gz" "$url"
+fi
+actual=$(sha256sum "$work/opencu.tar.gz" | cut -d ' ' -f 1)
+if [ "$actual" != "$expected" ]; then
+    echo "SHA-256 mismatch: expected $expected, got $actual. Nothing was installed." >&2; exit 1
+fi
+mkdir "$work/opencu"
+tar -xzf "$work/opencu.tar.gz" -C "$work/opencu" --no-same-owner
+rm -rf "$dir.old"
+if [ -e "$dir" ]; then mv -- "$dir" "$dir.old"; fi
+mv -- "$work/opencu" "$dir"
+rm -rf "$dir.old"
+node="$dir/.dependencies/node/bin/node"
+printf '{"name":"opencu","version":"%s","platform":"linux","mcp":{"command":"%s","args":["%s"]}}\n' \
+    "$version" "$node" "$dir/src/server.mjs" > "$dir/opencu.json.tmp"
+mv -- "$dir/opencu.json.tmp" "$dir/opencu.json"
+echo "Installed OpenCU $version in $dir"
+echo "Manifest: $dir/opencu.json"
+echo "MCP command: $dir/bin/opencu"
+if [ -n "${DISPLAY:-}" ]; then "$dir/bin/opencu" doctor || true; else echo 'Set DISPLAY and run: '"$dir"'/bin/opencu doctor'; fi

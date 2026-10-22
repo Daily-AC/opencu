@@ -18,6 +18,7 @@ export function toolError(error) {
 
 export function defaultEnginePath(root, platform = process.platform) {
   if (platform === 'win32') return path.join(root, '.build/win/opencu-engine.exe');
+  if (platform === 'linux') return path.join(root, '.build/linux/opencu-engine');
   return path.join(root, '.build/OpenCU.app/Contents/MacOS/opencu-engine');
 }
 
@@ -60,7 +61,7 @@ export class OpenCURuntime {
 
   async #start() {
     try { if (!this.#spawnEngine) await access(this.enginePath); }
-    catch { throw new Error(`OpenCU engine is missing. Run npm run ${process.platform === 'win32' ? 'build:win' : 'build'}, or use the prepared OpenCU release.`); }
+    catch { throw new Error(`OpenCU engine is missing. Run npm run ${{ win32: 'build:win', linux: 'build:linux' }[process.platform] ?? 'build'}, or use the prepared OpenCU release.`); }
     this.#active();
     if (this.#personStop) throw this.#personStop;
     const child = this.#child = this.#spawnEngine ? await this.#spawnEngine()
