@@ -57,9 +57,15 @@ Accessibility uses AT-SPI2 over D-Bus. The bus address comes from
 While connected, OpenCU sets `org.a11y.Status.IsEnabled`; on exit, including
 after a termination signal, it turns it off again unless a screen reader is
 enabled (`ScreenReaderEnabled`) or another OpenCU engine of the same user is
-running. Apps register, and add their windows, shortly after accessibility is
-turned on, so for 10 seconds after a connection turned it on a read waits up to
-4 seconds for the app's frame. Connecting to the bus gives up after 5 seconds.
+running. GTK apps register shortly after accessibility is turned on; Firefox
+checks only when one of its windows is activated, so a Firefox started earlier
+and not in front stays unregistered until then. For 10 seconds after a connection
+turned accessibility on, and right after `activate_app` brought the window
+forward, a read waits up to 2 seconds for the app's frame; an unregistered app's
+state says to call `activate_app` and read again. Desktops that start apps
+outside OpenCU should set `GNOME_ACCESSIBILITY=1` in the session environment, so
+those apps expose their trees from the start. Connecting to the bus gives up
+after 5 seconds.
 The registered application is found by the D-Bus
 connection's PID; its top-level frame is matched to the X window by title, then
 by geometry. Calls use `Properties.Get` only (Qt5 crashes on a one-argument

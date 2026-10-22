@@ -78,19 +78,25 @@ Other session variables are optional: OpenCU finds the accessibility bus and
 the session's environment itself. Relay tools unchanged as above; Linux lists
 no `agent_desktop`. A person stop (`USER_STOPPED`) follows the Windows rules.
 An MCP client that reconnects automatically after a crash should have that
-turned off for OpenCU, and its per-call timeout should exceed 125 seconds; in dsh:
+turned off for OpenCU, and its per-call timeout should exceed 125 seconds. In a
+dsh `--patch` file a new entry goes under `insert` (otherwise dsh reports the
+entry as not found):
 
 ```yaml
-- id: mcp-opencu
-  name: '@deepseek-ai/dsh-mcp-client'
-  config:
-    serverName: opencu
-    transport: stdio
-    command: /home/her/.local/share/opencu/bin/opencu
-    env: { DISPLAY: ':1' }
-    toolCallTimeoutMs: 130000
-    reconnect: { enabled: false }
+- insert:
+    - id: mcp-opencu
+      name: '@deepseek-ai/dsh-mcp-client'
+      config:
+        serverName: opencu
+        transport: stdio
+        command: /home/her/.local/share/opencu/bin/opencu
+        env: { DISPLAY: ':1' }
+        toolCallTimeoutMs: 130000
+        reconnect: { enabled: false }
 ```
+
+Apps the agent or the desktop starts outside OpenCU expose accessibility trees
+from the start only if the session environment has `GNOME_ACCESSIBILITY=1`.
 
 See the [Linux engine contract](linux-engine-contract.md) for behavior and limits.
 

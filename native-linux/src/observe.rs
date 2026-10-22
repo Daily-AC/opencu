@@ -142,6 +142,8 @@ pub struct Observer<'a> {
     pub display: &'a Display,
     pub a11y: Option<&'a A11y>,
     pub a11y_error: Option<&'a Error>,
+    /// The window was just activated: an app may register its tree now.
+    pub activated: bool,
 }
 
 impl Observer<'_> {
@@ -189,8 +191,9 @@ impl Observer<'_> {
     fn tree(&self, a11y: &A11y, app: &App, windows: &[WindowInfo], text: &mut String, elements: &mut Vec<Element>, omitted: &mut usize, notes: &mut Vec<String>) {
         let deadline = Instant::now() + Duration::from_secs(8);
         // Apps register, and add their windows, shortly after this connection
-        // turns accessibility on; wait for that instead of reporting no tree.
-        let settle = Instant::now() + if a11y.recently_enabled() { Duration::from_secs(4) } else { Duration::ZERO };
+        // turns accessibility on, and Firefox only when its window is next
+        // activated; wait for that instead of reporting no tree.
+        let settle = Instant::now() + if a11y.recently_enabled() || self.activated { Duration::from_secs(2) } else { Duration::ZERO };
         let frames = loop {
             let roots = match a11y.applications(app.pid) {
                 Ok(roots) => roots,
@@ -208,7 +211,7 @@ impl Observer<'_> {
             }
             if match_frame(&windows[0], &frames, &[]).is_some() || Instant::now() >= settle.min(deadline) {
                 if roots.is_empty() {
-                    notes.push("Accessibility tree unavailable: the app is not registered on the accessibility bus. Use a screenshot and coordinates.".into());
+                    notes.push("Accessibility tree unavailable: the app is not registered on the accessibility bus. Some apps, such as Firefox, register only when their window is activated after accessibility was turned on: call activate_app, then read state. Otherwise use a screenshot and coordinates.".into());
                     return;
                 }
                 break frames;

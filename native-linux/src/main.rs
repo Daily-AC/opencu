@@ -124,6 +124,7 @@ impl Engine {
         let app = launcher.resolve(display, query, observing && !stopped, env, guard.as_ref(), &idle)?;
         if observing {
             open_a11y(display, env, a11y, a11y_error);
+            let mut activated = false;
             if method == "activate_app" {
                 let g = guard.as_ref().unwrap();
                 let window = &app.windows[observe::primary(&app, display.active_window())];
@@ -131,9 +132,10 @@ impl Engine {
                     g.require_idle()?;
                     let accept = |active: Option<u32>| active.is_some_and(|a| app.windows.iter().any(|w| w.id == a && w.transient_for == Some(window.id)));
                     display.activate(window, Duration::from_millis(1500), &accept, &|| g.check())?;
+                    activated = true;
                 }
             }
-            let observer = observe::Observer { display, a11y: a11y.as_ref(), a11y_error: a11y_error.as_ref() };
+            let observer = observe::Observer { display, a11y: a11y.as_ref(), a11y_error: a11y_error.as_ref(), activated };
             let app = if method == "activate_app" { launcher.resolve(display, &format!("pid:{}", app.pid), false, env, None, &idle)? } else { app };
             let (state, snap) = observer.observe(app, args["includeScreenshot"].as_bool().unwrap_or(false))?;
             if let Some(g) = guard { g.finish()?; }
