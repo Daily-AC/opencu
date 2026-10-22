@@ -12,6 +12,14 @@ enum AgentDisplayGeometry {
             && abs(a.width - b.width) <= 1 && abs(a.height - b.height) <= 1
     }
 
+    /// 1728 points wide, shaped like the main screen's full-screen area (below a
+    /// notch), so a full-screen preview of the agent display has no side bars.
+    static func size(screen: CGSize, topInset: CGFloat) -> CGSize {
+        guard screen.width > 0, screen.height - topInset > 0 else { return CGSize(width: 1728, height: 1117) }
+        let height = 1728 * (screen.height - topInset) / screen.width
+        return CGSize(width: 1728, height: min(1728, max(864, height.rounded())))
+    }
+
     static func placement(main: CGRect, others: [CGRect], size: CGSize) throws -> CGRect {
         guard valid(main), others.allSatisfy(valid), valid(CGRect(origin: .zero, size: size)) else {
             throw OpenCUError("AGENT_DISPLAY_GEOMETRY", "Invalid display geometry.")

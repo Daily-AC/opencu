@@ -51,7 +51,8 @@ enum AgentDisplaySPI {
         unsafeBitCast(imp, to: Set.self)(object, NSSelectorFromString(name), value)
     }
 
-    static func create(scale: Int) throws -> (object: AnyObject, id: UInt32) {
+    static func create(scale: Int, size: CGSize) throws -> (object: AnyObject, id: UInt32) {
+        let width = UInt32(size.width), height = UInt32(size.height)
         let descriptorClass: AnyClass = try type("CGVirtualDisplayDescriptor")
         let settingsClass: AnyClass = try type("CGVirtualDisplaySettings")
         let modeClass: AnyClass = try type("CGVirtualDisplayMode")
@@ -78,8 +79,8 @@ enum AgentDisplaySPI {
         let descriptor = try make(descriptorClass)
         try setObject(descriptor, "setName:", PresenceStrings().text("OpenCU Agent Display") as NSString)
         try setObject(descriptor, "setQueue:", DispatchQueue.global(qos: .userInitiated) as AnyObject)
-        try setUInt(descriptor, "setMaxPixelsWide:", UInt32(1728 * scale))
-        try setUInt(descriptor, "setMaxPixelsHigh:", UInt32(1117 * scale))
+        try setUInt(descriptor, "setMaxPixelsWide:", width * UInt32(scale))
+        try setUInt(descriptor, "setMaxPixelsHigh:", height * UInt32(scale))
         try setUInt(descriptor, "setVendorID:", 0x4f43)
         try setUInt(descriptor, "setProductID:", 0x4147)
         // A fresh identity avoids restoring a saved arrangement from a prior run.
@@ -92,10 +93,10 @@ enum AgentDisplaySPI {
             unsafeBitCast(imp, to: SetPoint.self)(descriptor, NSSelectorFromString(name), point)
         }
         typealias SetSize = @convention(c) (AnyObject, Selector, CGSize) -> Void
-        unsafeBitCast(sizeIMP, to: SetSize.self)(descriptor, NSSelectorFromString("setSizeInMillimeters:"), CGSize(width: 460, height: 297))
+        unsafeBitCast(sizeIMP, to: SetSize.self)(descriptor, NSSelectorFromString("setSizeInMillimeters:"), CGSize(width: 460, height: 460 * size.height / size.width))
         typealias InitMode = @convention(c) (UnsafeMutableRawPointer, Selector, UInt32, UInt32, Double) -> Unmanaged<AnyObject>?
         guard let modeResult = unsafeBitCast(modeIMP, to: InitMode.self)(try allocate(modeClass),
-            NSSelectorFromString("initWithWidth:height:refreshRate:"), 1728, 1117, 60) else {
+            NSSelectorFromString("initWithWidth:height:refreshRate:"), width, height, 60) else {
             throw unavailable("mode initialization")
         }
         let mode = modeResult.takeRetainedValue()

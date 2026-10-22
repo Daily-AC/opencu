@@ -41,6 +41,7 @@ final class AgentDesktopWindow: NSObject, NSWindowDelegate {
     private var accessory: NSTitlebarAccessoryViewController?
     private var top: (normal: NSLayoutConstraint, clean: NSLayoutConstraint)?
     private var hovering = false
+    private var frameBeforeClean: NSRect?
     private var minimizeAfterFullScreen = false
     private var decision: ((Bool) -> Void)?
     var onStop: (() -> Void)?
@@ -123,7 +124,11 @@ final class AgentDesktopWindow: NSObject, NSWindowDelegate {
         if window.isMiniaturized { window.deminiaturize(nil) }
         window.orderFrontRegardless()
     }
-    func showFrame(_ frame: CGImage) { image.image = NSImage(cgImage: frame, size: .zero) }
+    func showFrame(_ frame: CGImage) {
+        let first = image.image == nil
+        image.image = NSImage(cgImage: frame, size: .zero)
+        if first && cleanActive { applyClean() } // Fit the clean view once the picture's shape is known.
+    }
     func clearFrame() { image.image = nil }
     func status(_ status: AgentDesktopStatusText) { if decision == nil { setMessage(strings.text(status.rawValue)) } }
     func ask(_ proposal: AgentDisplay.Proposal, answer: @escaping (Bool) -> Void) {
@@ -207,11 +212,26 @@ final class AgentDesktopWindow: NSObject, NSWindowDelegate {
         bar.isHidden = on
         NSLayoutConstraint.deactivate([on ? top.normal : top.clean])
         NSLayoutConstraint.activate([on ? top.clean : top.normal])
-        window.titlebarAppearsTransparent = on
         window.titleVisibility = on ? .hidden : .visible
         window.isMovableByWindowBackground = on
         window.backgroundColor = on ? .black : .windowBackgroundColor
+        fitPicture(on)
         updateChrome()
+    }
+    /// The clean view keeps the window shaped like the agent display: no black bars.
+    private func fitPicture(_ on: Bool) {
+        guard let window, !window.styleMask.contains(.fullScreen) else { return }
+        guard on, let picture = image.image?.size, picture.width > 0, picture.height > 0 else {
+            window.resizeIncrements = NSSize(width: 1, height: 1) // Clears the aspect lock.
+            if !on, let saved = frameBeforeClean { frameBeforeClean = nil; window.setFrame(saved, display: true) }
+            return
+        }
+        if frameBeforeClean == nil { frameBeforeClean = window.frame }
+        window.aspectRatio = picture
+        var frame = window.frame
+        let height = (frame.width * picture.height / picture.width).rounded()
+        frame.origin.y += frame.height - height; frame.size.height = height
+        window.setFrame(frame, display: true, animate: false)
     }
     /// The clean view shows only the picture; its title bar returns on hover.
     private func updateChrome() {
@@ -221,6 +241,9 @@ final class AgentDesktopWindow: NSObject, NSWindowDelegate {
             window.standardWindowButton(kind)?.isHidden = hidden
         }
         accessory?.view.isHidden = hidden
+        // On hover the clean view's title bar gets its own backing, so its controls do
+        // not blend into the agent display's menu bar drawn underneath.
+        window.titlebarAppearsTransparent = cleanActive && hidden
     }
     @objc private func approve() { answer(true) }
     @objc private func reject() { answer(false) }

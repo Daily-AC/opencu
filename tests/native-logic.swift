@@ -584,6 +584,8 @@ struct OpenCUInputLogicChecks {
             expect(!AgentDesktopAdmissionPolicy.tearsDownDesktop(interruption), "Input interruptions preserve desktop ownership")
         }
         expect(AgentDesktopAdmissionPolicy.tearsDownDesktop("AGENT_DISPLAY_LAYOUT_CHANGED"), "A real layout failure still cleans up")
+        expect(AgentDisplayGeometry.size(screen: CGSize(width: 1728, height: 1117), topInset: 32) == CGSize(width: 1728, height: 1085), "Agent display matches a notched screen's full-screen area")
+        expect(AgentDisplayGeometry.size(screen: CGSize(width: 1440, height: 900), topInset: 0) == CGSize(width: 1728, height: 1080), "Agent display keeps a notch-free screen's shape")
         expect(!AgentDesktopAdmissionPolicy.usableWindow(role: "AXWindow", minimized: true, fullScreen: false, onDisplay: false), "Minimized windows reduce without moving")
         expect(!AgentDesktopAdmissionPolicy.usableWindow(role: "AXWindow", minimized: false, fullScreen: true, onDisplay: true), "Full-screen windows reduce without moving")
         expect(!AgentDesktopAdmissionPolicy.usableWindow(role: "AXSheet", minimized: false, fullScreen: false, onDisplay: false), "Focused off-display sheets reduce without moving")

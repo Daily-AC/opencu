@@ -36,6 +36,7 @@ final class AgentDisplay {
     private var requestedFrame: CGRect?
     private var baseline: [Display] = []
     private var scale = 1
+    private var size = CGSize(width: 1728, height: 1117)
     private var lastMove: Arguments?
     private var lastRemoval: Arguments?
     private let reconfiguration = DisplayReconfiguration()
@@ -79,8 +80,9 @@ final class AgentDisplay {
             throw OpenCUError("AGENT_DISPLAY_UNSUPPORTED_LAYOUT", "A non-mirrored main display with 1x or 2x backing scale is required.")
         }
         scale = Int(screen.backingScaleFactor)
+        size = AgentDisplayGeometry.size(screen: screen.frame.size, topInset: screen.safeAreaInsets.top)
         requestedFrame = try AgentDisplayGeometry.placement(main: main.frame,
-            others: baseline.filter { !$0.main }.map(\.frame), size: CGSize(width: 1728, height: 1117))
+            others: baseline.filter { !$0.main }.map(\.frame), size: size)
         targets.removeAll()
         admitted.removeAll()
         lastMove = nil
@@ -90,7 +92,7 @@ final class AgentDisplay {
             // Keep the sole owning reference in this controller. Do not let an
             // async local extend its lifetime past destroy's release.
             try autoreleasepool {
-                let created = try AgentDisplaySPI.create(scale: scale)
+                let created = try AgentDisplaySPI.create(scale: scale, size: size)
                 display = created.object
                 try ledger.created(created.id)
             }
@@ -117,7 +119,7 @@ final class AgentDisplay {
             let current = try displays()
             guard current.filter({ $0.id != ledger.displayID }) == baseline,
                   let agent = current.first(where: { $0.id == ledger.displayID }), !agent.main, !agent.mirrored,
-                  agent.frame.size == CGSize(width: 1728, height: 1117),
+                  agent.frame.size == size,
                   NSScreen.screens.first(where: { ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? UInt32) == agent.id })?.backingScaleFactor == CGFloat(scale),
                   !baseline.contains(where: { let i = $0.frame.intersection(agent.frame); return !i.isNull && i.width > 0 && i.height > 0 }) else {
                 throw OpenCUError("AGENT_DISPLAY_LAYOUT_CHANGED", "macOS changed the original layout, main display, mirroring, or requested logical size.")
