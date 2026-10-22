@@ -35,6 +35,8 @@ pub mod state {
     pub const SELECTED: u32 = 23;
     pub const SENSITIVE: u32 = 24;
     pub const SHOWING: u32 = 25;
+    #[cfg(test)]
+    pub const VISIBLE: u32 = 30;
     pub const MANAGES_DESCENDANTS: u32 = 31;
     pub const INDETERMINATE: u32 = 32;
     pub const CHECKABLE: u32 = 41;

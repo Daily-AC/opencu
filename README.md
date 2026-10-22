@@ -587,7 +587,9 @@ writes `opencu.json` for hosts. Connect an agent with the stdio command
 `~/.local/share/opencu/bin/opencu` (`DISPLAY` must be set) and check the desktop
 with `~/.local/share/opencu/bin/opencu doctor`. The desktop needs an X server with
 XTEST, Composite and XInput 2 (Xorg, Xvfb and Xvnc have them) and, for element
-trees, `at-spi2-core` in the session. A container image can extract the release
+trees, `at-spi2-core` in the session. Set `GNOME_ACCESSIBILITY=1` in the session
+environment so apps started outside OpenCU expose their trees from the start;
+otherwise Firefox, for example, registers only when its window is next activated. A container image can extract the release
 archive instead; [tests/linux-desktop/Dockerfile](tests/linux-desktop/Dockerfile)
 is the disposable XFCE desktop used for acceptance. Hosts follow the
 [host integration contract](docs/host-integration.md#linux-060); behavior and
