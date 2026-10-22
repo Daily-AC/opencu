@@ -19,7 +19,7 @@ OpenCU is installed when this per-user manifest exists:
 ```json
 {
   "name": "opencu",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "platform": "win32",
   "mcp": {
     "command": "C:\\Users\\me\\AppData\\Local\\OpenCU\\node\\node.exe",
