@@ -1,0 +1,24 @@
+[package]
+name = "opencu-engine-linux"
+version = "0.5.0"
+edition = "2021"
+license = "MIT"
+
+[[bin]]
+name = "opencu-engine"
+path = "src/main.rs"
+
+[dependencies]
+# Platform-independent validation shared with the Windows engine.
+opencu-engine = { path = "../native-win" }
+serde_json = "1"
+serde = "1"
+x11rb = { version = "0.14", features = ["xtest", "composite", "xinput", "screensaver"] }
+zbus = { version = "5", default-features = false, features = ["async-io"] }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+png = "0.18"
+libc = "0.2"
+
+[profile.release]
+strip = true
+lto = true

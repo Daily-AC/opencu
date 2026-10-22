@@ -9,3 +9,4 @@ __pycache__/
 evidence/*-private.*
 
 native-win/target/
+native-linux/target/
