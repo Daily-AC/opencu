@@ -7,7 +7,7 @@ one in front. It needs no account, model credentials or proprietary runtime: any
 MCP client can start it, and the calling agent supplies the model and decides
 what to do.
 
-**Status (v0.4.1):** macOS source builds and an unsigned Windows x64 package.
+**Status (v0.5.0):** macOS source builds and an unsigned Windows x64 package.
 On the development Mac, 9 of the last 10 runs of its 18-check background GUI
 suite passed, and it has completed a handful of real tasks. It has not been
 benchmarked at scale. Read [Limitations](#limitations) before relying on it.
@@ -168,11 +168,14 @@ The measurements behind this section are in
 
 ### Background operation
 
-- **Windows agent desktop (0.4.0).** Windows 11 VM acceptance established separate
-  foreground/input, no-password sign-in/refusal, Escape and close/EOF cleanup.
-  Setup, nonactivating open, watch-only hover, pointer isolation, Escape, close
-  and the locked-screen refusal were accepted on the VM
-  ([evidence](evidence/opencu-windows-agent-desktop-2026-10-21-v0.4.0.json)).
+- **Windows agent desktop (0.4.0, ordinary window since 0.5.0).** Windows 11 VM
+  acceptance established separate foreground/input, no-password sign-in/refusal,
+  Escape, Stop and EOF cleanup. Setup, nonactivating open, watch-only hover,
+  pointer isolation, Escape and the locked-screen refusal were accepted on the VM
+  ([evidence](evidence/opencu-windows-agent-desktop-2026-10-21-v0.4.0.json)); in
+  0.5.0, close-to-minimize with the child still working, Stop, keep on top,
+  maximize and clean view were accepted with real clicks
+  ([evidence](evidence/opencu-windows-regression-2026-10-22-v0.5.0.json)).
   Administrator approval is needed once, possibly followed by one sign-out/in;
   smart-card-only sign-in is unsupported and unmeasured. While the parent screen
   is locked, the child stays alive for reads, screenshots and supported indexed
@@ -185,8 +188,8 @@ The measurements behind this section are in
   click the view and press Escape to stop; the caller can also end the MCP connection.
   Console/remote disconnect and logoff still end the child. One child session per
   machine; apps still share your account, profiles and files. Single-instance apps
-  can refuse another instance. External minimize, covered/partly off-screen views,
-  GPU/video apps and unsupported Windows editions remain unmeasured. This is UI
+  can refuse another instance. Covered/partly off-screen views, GPU/video apps
+  and unsupported Windows editions remain unmeasured. This is UI
   isolation, not a security sandbox.
 - **macOS agent desktop.** A watch-only virtual monitor in the same macOS session,
   not a Windows-style separate session. Each window move needs local consent;
@@ -197,6 +200,9 @@ The measurements behind this section are in
   owner passed all seven product checks on 2026-10-21 on macOS 26.6 with one
   built-in display and Stage Manager on, before and after the 0.4.1 rebase and
   localization ([evidence](evidence/opencu-macos-agent-desktop-2026-10-21.json)).
+  The final 0.5.0 build passed the eight checks of the ordinary-window version on
+  2026-10-22, driven through Accessibility on OpenCU's own controls
+  ([evidence](evidence/opencu-macos-agent-desktop-2026-10-22.json)).
   This does not establish other display layouts.
 - **Stage Manager.** A window in the Stage Manager strip cannot become the key
   window: many commands are disabled, Chromium stops rendering its pages, and a
@@ -334,7 +340,7 @@ package, its offline checks, error codes and safety behavior are in the
 
 ### Windows agent desktop
 
-After installing 0.4.0, run this once from a **normal**, non-administrator terminal:
+After installing 0.4.0 or later, run this once from a **normal**, non-administrator terminal:
 
 ```powershell
 & "$env:LOCALAPPDATA\OpenCU\bin\opencu.cmd" setup agent-desktop
@@ -393,6 +399,16 @@ Hardware concurrency, parked-pointer, hover, Escape and close regressions also
 passed. A locked indexed click on the text box returned UNSUPPORTED_ACTION in
 about two seconds ([evidence](evidence/opencu-windows-agent-desktop-2026-10-21-v0.4.0.json)).
 
+On 2026-10-22 the 0.5.0 package passed the same clean-VM regression: verify-gui-win
+three times (40/40 each), the package verifier, the agent-desktop suite with and
+without `--locked-parent`, and the hardware-input, hover, Escape and locked-parent
+checks. With real Hyper-V clicks, the title-bar close button only minimized the
+host while the child kept working and could still be captured; the taskbar button
+brought it back; **Stop** then logged the child off, and every later call returned
+`USER_STOPPED` with no reconnect. Keep on top, maximize, clean view and leaving
+clean view from the title-bar menu behaved as described below
+([evidence](evidence/opencu-windows-regression-2026-10-22-v0.5.0.json)).
+
 The child window is hidden by the lock screen, so nobody at the machine can see it. `status` reports `parentLocked: true` or `false`.
 Unlocking does not restart anything: the same child and host window remain.
 The agent must issue a new call, under the normal input rules.
@@ -424,11 +440,22 @@ a person or app moving it back. The
 records the checks and scope. The first capture from a new build path showed the
 macOS screen-capture reminder once, correctly naming “opencu”.
 
+On 2026-10-22 the final 0.5.0 build passed all **8/8** checks on the same Mac in one
+automated run that pressed only OpenCU's own consent card, preview buttons and Dock
+tile through Accessibility, with fixtures only. It repeated the start, consent,
+background input, manual return, tool stop and EOF checks. In addition, closing
+and minimizing tucked the preview into the Dock and its tile brought it back; keep on top and clean view switched and were remembered; clean view kept the
+agent display's shape; Stop latched; and an unused desktop stopped itself after
+318 seconds and returned its window. Full-screen sharpness and the clean view's
+hover were checked by the owner by hand
+([evidence](evidence/opencu-macos-agent-desktop-2026-10-22.json)).
+
 The same `agent_desktop({action: "start" | "stop" | "status"})` tool automatically
 opens a small **OpenCU agent desktop** window and a virtual monitor. The preview is
 always **watch-only**: clicking it never forwards input. It is an ordinary window:
 it can be resized, minimized, made full screen, kept on top with the pin button, or
-switched to a picture-only clean view; its title bar returns on hover. The picture
+switched to a picture-only clean view; its title bar returns on hover. Until then
+its buttons are hidden from assistive technologies too; the menu-bar Stop remains. The picture
 follows the window's size up to the virtual monitor's own pixels; the agent's
 screenshots are captured separately and do not depend on it. The host, consent card,
 Stop controls and activity badges follow the first preferred system language:

@@ -1,0 +1,85 @@
+{
+  "test": "macos-agent-desktop",
+  "date": "2026-10-22",
+  "version": "0.5.0",
+  "environment": {
+    "platform": "macOS",
+    "macOS": "26.6.2 (25G83), system language zh-Hans",
+    "physicalDisplay": "single built-in display",
+    "stageManager": "on"
+  },
+  "provenance": {
+    "phase": "0.5.0 final build (branch head 06d8438, engine opencu-engine 0.5.0)",
+    "driver": "owner-free automation: MCP over bin/opencu; OpenCU's own consent card, preview buttons and Dock tile pressed through Accessibility; disposable fixtures only",
+    "sourceReportSHA256": "f808709614922828904abe98c753dbc4fd94cebeb75c8e666b106a147570aa40",
+    "startedAt": "2026-10-22T03:07:24.081Z",
+    "finishedAt": "2026-10-22T03:13:19.987Z"
+  },
+  "checks": [
+    {
+      "name": "start: visible preview, one display, no admitted windows, foreground/pointer unchanged",
+      "result": "PASS"
+    },
+    {
+      "name": "consent: decline reduced; two exact windows require separate approvals",
+      "result": "PASS"
+    },
+    {
+      "name": "Stage Manager: indexed/coordinate/CJK/shortcut/menu effects; foreground/pointer unchanged",
+      "result": "PASS"
+    },
+    {
+      "name": "manual return: input revoked and cleanup leaves the window there",
+      "result": "PASS"
+    },
+    {
+      "name": "tool stop: exact restoration, apps open, fresh removal, idempotence",
+      "result": "PASS"
+    },
+    {
+      "name": "preview window: close/minimize go to the Dock, Dock shows, keep on top, clean view; Stop latches",
+      "result": "PASS"
+    },
+    {
+      "name": "EOF: pending consent and idle leave no host, stream, display or worker",
+      "result": "PASS"
+    },
+    {
+      "name": "idle: an unused desktop returns its window and stops itself; the next app call is told",
+      "result": "PASS"
+    }
+  ],
+  "guardedSteps": [
+    {
+      "label": "1 start",
+      "idleBeforeSeconds": 160.1,
+      "elapsedSeconds": 2.067,
+      "pointerMovedPx": 0,
+      "foregroundChanged": false
+    },
+    {
+      "label": "3 background input",
+      "idleBeforeSeconds": 166.3,
+      "elapsedSeconds": 3.804,
+      "pointerMovedPx": 0,
+      "foregroundChanged": false
+    }
+  ],
+  "measurements": {
+    "idleStopSeconds": 318,
+    "cleanViewAspect": {
+      "window": 1.5914,
+      "agentDisplay": 1.5926
+    },
+    "leavingCleanViewRestoresFrame": true,
+    "previewClosedAfterStopMs": 401,
+    "preferencesRestored": true
+  },
+  "scopeNotes": [
+    "Checks 1-5 ran with the owner's saved clean-view preference on; the consent card still showed its buttons. Check 6 started from both view preferences off and wrote the owner's values back afterwards.",
+    "Checks 1 and 3 started only after 60 s without keyboard or mouse input and required the pointer and foreground to stay unchanged; the HID idle timer itself is reset by OpenCU's background input, so it was used only as the precondition.",
+    "Leaving clean view by its title-bar button needs a hover; this run left it by clearing the saved preference and letting the next consent card redraw the window, which runs the same code. Full screen sharpness, the clean view's hover and pointer activity during start and moves were checked by the owner by hand (10-21 run-VesGn1 and 10-22 morning), not here.",
+    "Window return was simulated by the fixture itself, as in the 10-21 runs."
+  ],
+  "ok": true
+}
