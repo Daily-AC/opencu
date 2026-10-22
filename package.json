@@ -2,14 +2,16 @@
   "name": "opencu",
   "version": "0.5.0",
   "type": "module",
-  "description": "Independent local computer-use engine and MCP server for macOS and Windows",
+  "description": "Independent local computer-use engine and MCP server for macOS, Windows and Linux",
   "scripts": {
     "start": "node src/server.mjs",
     "build": "python3 scripts/build-engine.py",
     "test": "node --test tests/*.test.mjs",
     "package": "python3 scripts/package-opencu.py",
     "build:win": "node scripts/build-win.mjs",
-    "package:win": "python3 scripts/package-win.py"
+    "package:win": "python3 scripts/package-win.py",
+    "build:linux": "node scripts/build-linux.mjs",
+    "package:linux": "python3 scripts/package-linux.py"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.1",

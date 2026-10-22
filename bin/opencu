@@ -10,6 +10,11 @@ done
 root=$(CDPATH= cd -P -- "$(dirname -- "$entry")/.." && pwd)
 app="$root/.build/OpenCU.app"
 engine="$app/Contents/MacOS/opencu-engine"
+build="python3 \"$root/scripts/build-engine.py\""
+if [ "$(uname -s)" = Linux ]; then
+    engine="$root/.build/linux/opencu-engine"
+    build="npm run build:linux (in $root)"
+fi
 
 case "${1:-mcp}" in
     -h|--help|help)
@@ -17,13 +22,13 @@ case "${1:-mcp}" in
             '  mcp     Run the MCP server on stdin/stdout (default).' \
             '  engine  Run the native JSON-lines stdio engine directly (experimental APIs included).' \
             '  doctor  Report engine and macOS permission status.' \
-            '  setup   Open the standard macOS permission setup flow.'
+            '  setup   Open the standard macOS permission setup flow (Linux needs none).'
         exit 0
         ;;
 esac
 
 if [ ! -x "$engine" ]; then
-    printf '%s\n' "OpenCU engine is missing. Build this checkout with: python3 \"$root/scripts/build-engine.py\"" >&2
+    printf '%s\n' "OpenCU engine is missing. Build this checkout with: $build" >&2
     printf '%s\n' 'Release archives include the compiled engine and do not require a compiler.' >&2
     exit 1
 fi
@@ -39,6 +44,10 @@ case "${1:-mcp}" in
         ;;
     setup)
         shift
+        if [ "$(uname -s)" = Linux ]; then
+            printf '%s\n' 'OpenCU needs no setup on Linux. Run opencu doctor to check the X display and accessibility bus.'
+            exit 0
+        fi
         exec /usr/bin/open -n "$app" --args --setup "$@"
         ;;
     mcp)

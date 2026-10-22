@@ -34,7 +34,7 @@ const STRUCTURAL: &[&str] = &[
     "html container", "redundant object", "unknown", "invalid", "split pane", "form", "landmark", "table row",
     "block quote", "article", "tool bar", "status bar", "page tab list", "menu bar", "list", "tree", "table", "description list",
 ];
-const DEFAULT_ACTIONS: &[&str] = &["click", "press", "activate", "jump", "toggle", "select", "invoke", "switch", "open", "showmenu", "expand or contract", "clickancestor"];
+const DEFAULT_ACTIONS: &[&str] = &["click", "press", "activate", "jump", "toggle", "select", "invoke", "switch", "open", "showmenu", "expand or contract", "clickancestor", "dodefault", "showcontextmenu"];
 const TOGGLES: &[&str] = &["check box", "toggle button", "radio button", "check menu item", "radio menu item", "switch"];
 
 /// Pick the capture window: the app's active window, otherwise its topmost
@@ -84,7 +84,8 @@ fn match_frame(window: &WindowInfo, frames: &[Frame], used: &[usize]) -> Option<
 /// Actions of the element itself; Firefox gives every descendant of a
 /// clickable element a `clickAncestor` action.
 fn own_actions(node: &Node) -> bool {
-    node.actions.iter().any(|a| !a.is_empty() && !a.eq_ignore_ascii_case("clickancestor"))
+    node.actions.iter().any(|a| !a.is_empty() && !["clickancestor", "showcontextmenu"].contains(&a.to_lowercase().as_str()))
+        && !(STRUCTURAL.contains(&node.role.as_str()) && node.actions.iter().all(|a| ["dodefault", "showcontextmenu"].contains(&a.to_lowercase().as_str())))
 }
 
 fn toggle(node: &Node) -> Option<&'static str> {
