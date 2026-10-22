@@ -38,6 +38,9 @@ final class AgentDesktopWindow: NSObject, NSWindowDelegate {
     private lazy var pin = symbolButton(strings.text("Keep on top"), #selector(togglePin))
     private lazy var clean = symbolButton(strings.text("Clean view"), #selector(toggleClean))
     private let bar = NSStackView()
+    /// Title-bar backing shown on hover in the clean view. A subview, so showing it does
+    /// not rebuild the title bar or its tracking areas (toggling transparency flickered).
+    private let shade = NSVisualEffectView()
     private var accessory: NSTitlebarAccessoryViewController?
     private var top: (normal: NSLayoutConstraint, clean: NSLayoutConstraint)?
     private var hovering = false
@@ -94,6 +97,9 @@ final class AgentDesktopWindow: NSObject, NSWindowDelegate {
         content.onHover = { [weak self] inside in self?.hovering = inside; self?.updateChrome() }
         window.contentView = content
         content.addSubview(stack)
+        shade.material = .titlebar; shade.blendingMode = .withinWindow; shade.state = .active
+        shade.isHidden = true; shade.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(shade)
         let guide = window.contentLayoutGuide as! NSLayoutGuide
         top = (stack.topAnchor.constraint(equalTo: guide.topAnchor), stack.topAnchor.constraint(equalTo: content.topAnchor))
         NSLayoutConstraint.activate([
@@ -101,6 +107,10 @@ final class AgentDesktopWindow: NSObject, NSWindowDelegate {
             stack.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             stack.bottomAnchor.constraint(equalTo: content.bottomAnchor),
             image.widthAnchor.constraint(equalTo: stack.widthAnchor),
+            shade.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            shade.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            shade.topAnchor.constraint(equalTo: content.topAnchor),
+            shade.bottomAnchor.constraint(equalTo: guide.topAnchor),
             bar.widthAnchor.constraint(equalTo: stack.widthAnchor),
         ])
         let controls = NSStackView(views: [pin, clean])
@@ -212,6 +222,7 @@ final class AgentDesktopWindow: NSObject, NSWindowDelegate {
         bar.isHidden = on
         NSLayoutConstraint.deactivate([on ? top.normal : top.clean])
         NSLayoutConstraint.activate([on ? top.clean : top.normal])
+        window.titlebarAppearsTransparent = on
         window.titleVisibility = on ? .hidden : .visible
         window.isMovableByWindowBackground = on
         window.backgroundColor = on ? .black : .windowBackgroundColor
@@ -241,9 +252,9 @@ final class AgentDesktopWindow: NSObject, NSWindowDelegate {
             window.standardWindowButton(kind)?.isHidden = hidden
         }
         accessory?.view.isHidden = hidden
-        // On hover the clean view's title bar gets its own backing, so its controls do
-        // not blend into the agent display's menu bar drawn underneath.
-        window.titlebarAppearsTransparent = cleanActive && hidden
+        // On hover the clean view's controls get a backing, so they do not blend into
+        // the agent display's menu bar drawn underneath.
+        shade.isHidden = !cleanActive || hidden || window.styleMask.contains(.fullScreen)
     }
     @objc private func approve() { answer(true) }
     @objc private func reject() { answer(false) }
