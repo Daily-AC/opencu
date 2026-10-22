@@ -45,7 +45,7 @@ impl<'a> Ctx<'a> {
     }
 
     fn key(&mut self, code: u8, press: bool) -> Result<()> {
-        if press { self.guard.check()?; self.keyboard_target()?; }
+        if press { self.guard.check()?; self.keyboard_target()?; self.not_covered()?; }
         self.fake(if press { KEY_PRESS_EVENT } else { KEY_RELEASE_EVENT }, code, 0, 0)?;
         if press { self.held_keys.push(code); } else { self.held_keys.retain(|c| *c != code); }
         Ok(())
@@ -96,6 +96,14 @@ impl<'a> Ctx<'a> {
         false
     }
 
+    /// A screen locker or saver over the display would receive the keys.
+    pub fn not_covered(&self) -> Result<()> {
+        match self.display.covering_window(self.snapshot.app.pid) {
+            Some(by) => Err(Error::new("SCREEN_LOCKED", format!("A full-screen window of another program ({by}) covers the display, such as a screen locker; no input was sent."))),
+            None => Ok(()),
+        }
+    }
+
     fn keyboard_target(&self) -> Result<()> {
         if self.in_family(self.display.active_window()) { Ok(()) } else {
             Err(Error::new("WINDOW_FOCUS_CHANGED", "The target window lost the foreground during input; remaining input was not sent."))
@@ -115,7 +123,7 @@ impl<'a> Ctx<'a> {
         let live = self.live_window()?;
         if self.in_family(self.display.active_window()) && live.viewable && !live.hidden { return Ok(()); }
         self.guard.require_idle()?;
-        self.display.activate(&live, Duration::from_millis(1500))?;
+        self.display.activate(&live, Duration::from_millis(1500), &|active| self.in_family(active), &|| self.guard.check())?;
         self.guard.check()?;
         if !self.in_family(self.display.active_window()) {
             return Err(Error::new("ACTIVATION_FAILED", "The target window did not become active; no input was sent."));
@@ -129,9 +137,13 @@ impl<'a> Ctx<'a> {
         let element = self.snapshot.elements.get(index - 1)
             .ok_or_else(|| Error::new("STALE_ELEMENT", "That element index is not in the latest state; read state again."))?;
         let a11y = self.a11y.ok_or_else(|| Error::new("A11Y_UNAVAILABLE", "Accessibility is unavailable; use screenshot coordinates."))?;
-        let states = a11y.states(&element.obj)?;
+        let (states, role, name) = a11y.identity(&element.obj)?;
         if states & (1 << state::DEFUNCT) != 0 {
             return Err(Error::new("STALE_ELEMENT", "The element no longer exists; read state again."));
+        }
+        // Toolkits reuse object paths for new controls (Qt ids, recycled list rows).
+        if role != element.role || name != element.name {
+            return Err(Error::new("STALE_ELEMENT", "The element at that index changed since the last state; read state again."));
         }
         if states & (1 << state::ENABLED | 1 << state::SENSITIVE) == 0 {
             return Err(Error::new("ELEMENT_DISABLED", "The element is disabled; no input was sent."));
@@ -197,6 +209,7 @@ impl<'a> Ctx<'a> {
     }
 
     pub fn perform(&mut self, method: &str, args: &Value, image: Option<Screenshot>) -> Result<Value> {
+        self.not_covered()?;
         let result = self.dispatch(method, args, image);
         self.release_all();
         result
@@ -373,6 +386,14 @@ impl<'a> Ctx<'a> {
         }
     }
 
+}
+
+impl Drop for Ctx<'_> {
+    // Nothing stays pressed on an early return or a panic.
+    fn drop(&mut self) { self.release_all(); }
+}
+
+impl Ctx<'_> {
     /// Ctrl+V into the target, for paste.
     pub fn ctrl_v(&mut self) -> Result<()> {
         let ctrl = self.keymap.stroke(&self.display.conn, 0xffe3)?.keycode;

@@ -10,6 +10,14 @@ dir="${OPENCU_HOME:-${XDG_DATA_HOME:-$HOME/.local/share}/opencu}"
 
 [ "$(uname -s)" = Linux ] && [ "$(uname -m)" = x86_64 ] || {
     echo "OpenCU $version for Linux supports x86_64 only (this is $(uname -s) $(uname -m)). Nothing was installed." >&2; exit 1; }
+# The bundled Node.js needs glibc.
+if [ -e /lib/ld-musl-x86_64.so.1 ] && [ ! -e /lib64/ld-linux-x86-64.so.2 ]; then
+    echo "OpenCU $version needs a glibc Linux; this system uses musl (for example Alpine). Nothing was installed." >&2; exit 1
+fi
+# Only ever replace an earlier OpenCU install.
+if [ -e "$dir" ] && [ ! -e "$dir/opencu.json" ] && [ ! -e "$dir/bin/opencu" ]; then
+    echo "$dir exists and is not an OpenCU install. Choose another OPENCU_HOME. Nothing was installed." >&2; exit 1
+fi
 parent=$(dirname -- "$dir")
 mkdir -p "$parent"
 work=$(mktemp -d "$parent/.opencu-install.XXXXXX")
@@ -32,7 +40,8 @@ if [ -e "$dir" ]; then mv -- "$dir" "$dir.old"; fi
 mv -- "$work/opencu" "$dir"
 rm -rf "$dir.old"
 node="$dir/.dependencies/node/bin/node"
-printf '{"name":"opencu","version":"%s","platform":"linux","mcp":{"command":"%s","args":["%s"]}}\n' \
+"$node" -e 'const [version, command, server] = process.argv.slice(1);
+process.stdout.write(JSON.stringify({ name: "opencu", version, platform: "linux", mcp: { command, args: [server] } }) + "\n");' \
     "$version" "$node" "$dir/src/server.mjs" > "$dir/opencu.json.tmp"
 mv -- "$dir/opencu.json.tmp" "$dir/opencu.json"
 echo "Installed OpenCU $version in $dir"

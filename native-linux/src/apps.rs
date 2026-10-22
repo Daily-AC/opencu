@@ -231,7 +231,10 @@ pub struct Launcher {
 impl Launcher {
     pub fn new() -> Self { Self { attempts: BTreeSet::new() } }
 
-    pub fn resolve(&mut self, display: &Display, query: &str, launch: bool, env: &SessionEnv, guard: Option<&Guard>) -> Result<App> {
+    /// Find a running app, or launch a desktop entry. Only desktop entries are
+    /// launched: a read must never run an arbitrary program such as `reboot`.
+    pub fn resolve(&mut self, display: &Display, query: &str, launch: bool, env: &SessionEnv, guard: Option<&Guard>,
+        idle: &dyn Fn() -> Result<()>) -> Result<App> {
         let entries = desktop_entries();
         let mut apps = running(display);
         let found = matching(query, &apps, &entries);
@@ -247,18 +250,17 @@ impl Launcher {
         let q = query.trim();
         let entry = entries.iter().find(|e| e.name.eq_ignore_ascii_case(q) || e.id.eq_ignore_ascii_case(q.strip_suffix(".desktop").unwrap_or(q)))
             .or_else(|| entries.iter().find(|e| e.program() == basename(q)));
-        let argv = match entry {
-            Some(e) => split_exec(&e.exec),
-            None => match which(q) {
-                Some(path) => vec![path],
-                None => return Err(Error::new("APP_NOT_FOUND", "No running window, desktop entry or executable matches. Use list_apps to see names.")),
-            },
+        let Some(entry) = entry else {
+            return Err(Error::new("APP_NOT_FOUND", "No running window or desktop entry matches. Use list_apps to see names."));
         };
+        let argv = split_exec(&entry.exec);
+        let entry = Some(entry);
         if !launch {
             return Err(Error::new("APP_NOT_RUNNING", "The target is not running; read its state first"));
         }
         if argv.is_empty() { return Err(Error::new("LAUNCH_FAILED", "The desktop entry has an empty Exec line.")); }
         if let Some(g) = guard { g.check()?; }
+        idle()?;
         let key = argv.join(" ");
         if self.attempts.contains(&key) {
             return Err(Error::new("APP_LAUNCH_PENDING", "An earlier launch still has no visible window. Inspect list_apps; reconnect only to deliberately launch again."));
@@ -299,17 +301,6 @@ impl Launcher {
         }
         Err(Error::new("APP_LAUNCH_PENDING", "Application was launched but has no visible window yet. Read state later; this connection will not launch it again."))
     }
-}
-
-fn which(name: &str) -> Option<String> {
-    if name.contains('/') {
-        return Path::new(name).is_file().then(|| name.to_owned());
-    }
-    let path = std::env::var("PATH").unwrap_or_else(|_| "/usr/local/bin:/usr/bin:/bin".into());
-    path.split(':').map(|d| Path::new(d).join(name)).find(|p| {
-        use std::os::unix::fs::PermissionsExt;
-        p.metadata().is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-    }).map(|p| p.to_string_lossy().into_owned())
 }
 
 #[cfg(test)]
