@@ -223,8 +223,9 @@ fn main() {
     let mut engine = Engine::new();
     if mode == "--doctor" {
         match &mut engine {
-            Ok(e) => { println!("{}", e.doctor()); e.close(); }
-            Err(e) => println!("{}", json!({"engine": "independent", "version": env!("CARGO_PKG_VERSION"), "platform": "linux", "error": e.json()})),
+            // Clean up before printing: a closed pipe must not leave accessibility on.
+            Ok(e) => { let report = e.doctor(); e.close(); emit(&report); }
+            Err(e) => { emit(&json!({"engine": "independent", "version": env!("CARGO_PKG_VERSION"), "platform": "linux", "error": e.json()})); }
         }
         return;
     }
