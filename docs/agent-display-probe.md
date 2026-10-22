@@ -31,7 +31,7 @@ display and one outstanding window restoration. Methods are:
 
 | Method (all prefixed `experimental_agent_display_`) | Parameters | Result / behavior |
 | --- | --- | --- |
-| `create` | `{}` | Create a 1728 × 1117 point, 60 Hz display at the main display's 1x/2x backing scale. Refuse mirrored/unsupported layouts or an outstanding display/restoration. |
+| `create` | `{}` | Create a 1728-point-wide, 60 Hz display at the main display's 1x/2x backing scale (1728 × 1117 during this probe; since 2026-10-21 its height follows the main screen's full-screen area below a notch). Refuse mirrored/unsupported layouts or an outstanding display/restoration. |
 | `move_window` | `{app: "bundle ID or .app path"}` | Resolve an already-running app's selected ordinary window; record its AX identity, matched WindowServer ID and original frame/display before any write (including off-stage windows). Move only that window. Refuse a second move until restored. |
 | `restore` | `{}` | Restore the recorded window, even if selection changed. Verify process/window identity and the original display still exists. Never substitute another window. Idempotent after success. |
 | `destroy` | `{}` | Attempt restoration, release the display even if restoration fails, wait for removal, return `ok` and `cleanupErrors`. Repeated calls are safe. |
