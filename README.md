@@ -271,17 +271,30 @@ The measurements behind this section are in
 
 ### Linux
 
-- X11 only; Wayland sessions are refused. Input uses the foreground: there is
-  no background operation and no agent desktop on Linux.
-- A person is detected only when their input arrives through a device other than
-  XTEST. Xvnc (TigerVNC, KasmVNC) and hardware input qualify; x11vnc on Xvfb injects
-  viewer input through XTEST, so OpenCU cannot see that person or their Escape.
+- X11 only; Wayland sessions, including XWayland, are refused. Input uses the
+  foreground: there is no background operation and no agent desktop on Linux.
+- A person's input is fully attributed only when it arrives through a device other
+  than XTEST. Xvnc (TigerVNC, KasmVNC) and hardware input qualify. Remote and
+  shared-input tools that inject through XTEST (x11vnc, Barrier, on-screen
+  keyboards) count as activity between OpenCU's calls, but not during one, and
+  their Escape does not stop OpenCU.
+- Input is refused while the screen is locked: logind, an
+  `org.freedesktop.ScreenSaver` service, or a full-screen locker window on top
+  (i3lock, xscreensaver, xfce4-screensaver) reveal it. A locker that reports in
+  none of these ways is not detected. Disable screen savers on agent-owned
+  desktops: an active one blocks input.
+- Only desktop entries are launched; a program without one must be started
+  another way.
+- Flatpak apps report their sandbox PID, so two of them can be taken for one app.
+  Typing assumes the first keyboard group without an active input method; use
+  `paste` otherwise.
 - Apps without an AT-SPI tree, and Chromium or Electron apps started without
   `--force-renderer-accessibility` (OpenCU adds it when it launches them), work only
   through screenshots and coordinates. Chromium in an unprivileged container also
   needs `--no-sandbox`.
 - While connected, OpenCU announces assistive technology to the session
-  (`org.a11y.Status.IsEnabled`) and restores the previous value afterwards.
+  (`org.a11y.Status.IsEnabled`) and turns it off again afterwards, unless a screen
+  reader or another OpenCU connection still uses it.
 - After `paste`, the restored clipboard lives in the engine process and is lost
   when the connection ends unless a clipboard manager keeps it.
 - `scope` is not supported yet.
