@@ -269,6 +269,23 @@ The measurements behind this section are in
   browsers so their pages are readable. This slows window moves by window
   managers; OpenCU turns it off again on disconnect.
 
+### Linux
+
+- X11 only; Wayland sessions are refused. Input uses the foreground: there is
+  no background operation and no agent desktop on Linux.
+- A person is detected only when their input arrives through a device other than
+  XTEST. Xvnc (TigerVNC, KasmVNC) and hardware input qualify; x11vnc on Xvfb injects
+  viewer input through XTEST, so OpenCU cannot see that person or their Escape.
+- Apps without an AT-SPI tree, and Chromium or Electron apps started without
+  `--force-renderer-accessibility` (OpenCU adds it when it launches them), work only
+  through screenshots and coordinates. Chromium in an unprivileged container also
+  needs `--no-sandbox`.
+- While connected, OpenCU announces assistive technology to the session
+  (`org.a11y.Status.IsEnabled`) and restores the previous value afterwards.
+- After `paste`, the restored clipboard lives in the engine process and is lost
+  when the connection ends unless a clipboard manager keeps it.
+- `scope` is not supported yet.
+
 ### Virtual display compatibility
 
 The macOS virtual display is exposed through the consented `agent_desktop` product
@@ -531,6 +548,37 @@ The script needs Stage Manager already enabled and existing OpenCU permissions.
 It asks the person to answer consent cards and use the preview's window controls; a fixture moves its
 own window back to stand in for the person taking it back;
 it never targets personal applications. See [ADR 0003](docs/adr/0003-macos-agent-desktop-virtual-display.md).
+
+## Linux preview
+
+The Rust engine in `native-linux/` drives X11 desktops: window capture through
+Composite (covered windows capture their own pixels), AT-SPI2 trees with indexed
+clicks, values, text selection and actions, and XTest pointer and keyboard input
+that follows the Windows foreground rules (the target is brought forward only
+after 10 seconds without a person's input; a person's input during a call
+returns `PERSON_ACTIVE`; a physical Escape latches `USER_STOPPED`). It runs as an
+ordinary user, also in a headless container on Xvfb or Xvnc, and needs no
+desktop-specific interfaces. Wayland is not supported.
+
+### Install
+
+On x86_64 Linux, as the desktop's user:
+
+```sh
+curl -fsSL https://github.com/Daily-AC/opencu/releases/latest/download/install.sh | sh
+```
+
+This installs the engine, Node.js 22 and the MCP dependencies into
+`~/.local/share/opencu` without root, after checking the release's SHA-256, and
+writes `opencu.json` for hosts. Connect an agent with the stdio command
+`~/.local/share/opencu/bin/opencu` (`DISPLAY` must be set) and check the desktop
+with `~/.local/share/opencu/bin/opencu doctor`. The desktop needs an X server with
+XTEST, Composite and XInput 2 (Xorg, Xvfb and Xvnc have them) and, for element
+trees, `at-spi2-core` in the session. A container image can extract the release
+archive instead; [tests/linux-desktop/Dockerfile](tests/linux-desktop/Dockerfile)
+is the disposable XFCE desktop used for acceptance. Hosts follow the
+[host integration contract](docs/host-integration.md#linux-060); behavior and
+measured results are in the [Linux engine contract](docs/linux-engine-contract.md).
 
 ## Development
 

@@ -7,7 +7,7 @@ it in the person's desktop session, keeps one connection per agent session and
 relays MCP messages without interpreting the tools. OpenCU can then add or change
 tools without a host release.
 
-Status: defined for Windows from v0.3.0. On macOS, local agents start
+Status: defined for Windows from v0.3.0 and Linux from v0.6.0. On macOS, local agents start
 `bin/opencu` directly; a macOS install manifest is not defined yet.
 
 ## Discovery
@@ -56,6 +56,43 @@ The package is not code-signed.
 - Connect stdin and stdout as the MCP stream and read stderr as diagnostics.
   Create no console window.
 - OpenCU opens no network port. It exits when stdin closes.
+
+## Linux (0.6.0)
+
+`install.sh` from the release installs for the current user without root:
+
+```sh
+curl -fsSL https://github.com/Daily-AC/opencu/releases/latest/download/install.sh | sh
+```
+
+It refuses an archive whose SHA-256 differs from the value embedded in the
+script, installs into `${XDG_DATA_HOME:-$HOME/.local/share}/opencu` (or
+`$OPENCU_HOME`) and writes `opencu.json` there last, with the same `mcp.command`
+and `mcp.args` fields as on Windows. `OPENCU_LOCAL_ARCHIVE` installs a
+downloaded archive without network access. A container image can instead
+extract the archive anywhere and run `<dir>/bin/opencu`.
+
+Launch it as the desktop's user with `DISPLAY` set, for example
+`docker exec -i -u her -e DISPLAY=:1 desktop /home/her/.local/share/opencu/bin/opencu`.
+Other session variables are optional: OpenCU finds the accessibility bus and
+the session's environment itself. Relay tools unchanged as above; Linux lists
+no `agent_desktop`. A person stop (`USER_STOPPED`) follows the Windows rules.
+An MCP client that reconnects automatically after a crash should have that
+turned off for OpenCU, and its per-call timeout should exceed 125 seconds; in dsh:
+
+```yaml
+- id: mcp-opencu
+  name: '@deepseek-ai/dsh-mcp-client'
+  config:
+    serverName: opencu
+    transport: stdio
+    command: /home/her/.local/share/opencu/bin/opencu
+    env: { DISPLAY: ':1' }
+    toolCallTimeoutMs: 130000
+    reconnect: { enabled: false }
+```
+
+See the [Linux engine contract](linux-engine-contract.md) for behavior and limits.
 
 ## Session lifetime
 
