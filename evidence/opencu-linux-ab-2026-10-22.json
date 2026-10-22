@@ -1,0 +1,171 @@
+{
+ "date": "2026-10-22",
+ "engine": "OpenCU 0.6.0 Linux (arm64 build in an arm64 container)",
+ "desktop": "Debian 12, TigerVNC Xvnc, XFCE (xfwm4 compositing), Firefox ESR, Mousepad, xfce4-terminal; user without root; fresh container per trial",
+ "agent": "dsh 0.2.1-rc.2 headless, gemini-3.8-flash-high (text and image input)",
+ "arms": {
+  "A": "shell, file tools, read_image, guide for import -window root screenshots and xdotool",
+  "B": "A plus OpenCU over stdio MCP"
+ },
+ "tasks": {
+  "t1-crm": "register three customers through a two-step browser wizard (records must come from Firefox)",
+  "t2-unsaved": "fix a date in an unsaved Mousepad note and save it; every other character must match",
+  "t3-quiz": "answer an interactive terminal quiz checked by the server",
+  "t4-research": "look up a year in Firefox and write it to a file (control: the model may know it)",
+  "t5-chart": "find the top month of a canvas chart with random data and save it through Mousepad (agents read the chart API with curl instead)"
+ },
+ "metrics": "median per task and arm; inputTokens is the sum over model steps",
+ "runs": {
+  "run-1": {
+   "description": "engine before the safety hardening, arms A and B, 2 trials",
+   "results": {
+    "t1-crm/A": {
+     "passed": "2/2",
+     "seconds": 459,
+     "toolCalls": 58.5,
+     "opencuCalls": 0.0,
+     "inputTokens": 317581,
+     "outputTokens": 11380
+    },
+    "t1-crm/B": {
+     "passed": "2/2",
+     "seconds": 277,
+     "toolCalls": 41.5,
+     "opencuCalls": 34.5,
+     "inputTokens": 175374,
+     "outputTokens": 4359
+    },
+    "t2-unsaved/A": {
+     "passed": "2/2",
+     "seconds": 223,
+     "toolCalls": 34.0,
+     "opencuCalls": 0.0,
+     "inputTokens": 229682,
+     "outputTokens": 5366
+    },
+    "t2-unsaved/B": {
+     "passed": "2/2",
+     "seconds": 79,
+     "toolCalls": 12.0,
+     "opencuCalls": 11.0,
+     "inputTokens": 101248,
+     "outputTokens": 3764
+    },
+    "t3-quiz/A": {
+     "passed": "2/2",
+     "seconds": 58,
+     "toolCalls": 9.0,
+     "opencuCalls": 0.0,
+     "inputTokens": 82564,
+     "outputTokens": 1656
+    },
+    "t3-quiz/B": {
+     "passed": "2/2",
+     "seconds": 59,
+     "toolCalls": 8.0,
+     "opencuCalls": 7.0,
+     "inputTokens": 98412,
+     "outputTokens": 1618
+    },
+    "t4-research/A": {
+     "passed": "2/2",
+     "seconds": 116,
+     "toolCalls": 14.0,
+     "opencuCalls": 0.0,
+     "inputTokens": 149114,
+     "outputTokens": 2414
+    },
+    "t4-research/B": {
+     "passed": "2/2",
+     "seconds": 92,
+     "toolCalls": 11.0,
+     "opencuCalls": 6.0,
+     "inputTokens": 100409,
+     "outputTokens": 1870
+    },
+    "t5-chart/A": {
+     "passed": "2/2",
+     "seconds": 235,
+     "toolCalls": 32.0,
+     "opencuCalls": 0.0,
+     "inputTokens": 291395,
+     "outputTokens": 5164
+    },
+    "t5-chart/B": {
+     "passed": "2/2",
+     "seconds": 94,
+     "toolCalls": 12.0,
+     "opencuCalls": 9.0,
+     "inputTokens": 114754,
+     "outputTokens": 2066
+    }
+   }
+  },
+  "run-2": {
+   "description": "hardened engine, arm B, 2 trials",
+   "results": {
+    "t1-crm/B": {
+     "passed": "2/2",
+     "seconds": 296,
+     "toolCalls": 36.5,
+     "opencuCalls": 32.5,
+     "inputTokens": 159056,
+     "outputTokens": 3548
+    },
+    "t2-unsaved/B": {
+     "passed": "2/2",
+     "seconds": 83,
+     "toolCalls": 9.0,
+     "opencuCalls": 8.0,
+     "inputTokens": 84430,
+     "outputTokens": 4119
+    },
+    "t3-quiz/B": {
+     "passed": "2/2",
+     "seconds": 55,
+     "toolCalls": 7.0,
+     "opencuCalls": 5.0,
+     "inputTokens": 84894,
+     "outputTokens": 1588
+    },
+    "t4-research/B": {
+     "passed": "2/2",
+     "seconds": 98,
+     "toolCalls": 15.5,
+     "opencuCalls": 12.0,
+     "inputTokens": 102936,
+     "outputTokens": 2486
+    },
+    "t5-chart/B": {
+     "passed": "2/2",
+     "seconds": 92,
+     "toolCalls": 13.0,
+     "opencuCalls": 8.5,
+     "inputTokens": 132574,
+     "outputTokens": 2500
+    }
+   }
+  },
+  "run-3": {
+   "description": "final engine, arm B, t1 and t5, 2 trials",
+   "results": {
+    "t1-crm/B": {
+     "passed": "2/2",
+     "seconds": 252,
+     "toolCalls": 43.5,
+     "opencuCalls": 35.0,
+     "inputTokens": 177064,
+     "outputTokens": 4568
+    },
+    "t5-chart/B": {
+     "passed": "2/2",
+     "seconds": 89,
+     "toolCalls": 13.5,
+     "opencuCalls": 10.0,
+     "inputTokens": 138708,
+     "outputTokens": 2376
+    }
+   }
+  }
+ }
+}

@@ -7,7 +7,8 @@ one in front. It needs no account, model credentials or proprietary runtime: any
 MCP client can start it, and the calling agent supplies the model and decides
 what to do.
 
-**Status (v0.5.0):** macOS source builds and an unsigned Windows x64 package.
+**Status (v0.6.0):** macOS source builds, an unsigned Windows x64 package and,
+new in 0.6.0, a [Linux x64 package](#linux-preview) for X11 desktops.
 On the development Mac, 9 of the last 10 runs of its 18-check background GUI
 suite passed, and it has completed a handful of real tasks. It has not been
 benchmarked at scale. Read [Limitations](#limitations) before relying on it.
@@ -594,6 +595,18 @@ archive instead; [tests/linux-desktop/Dockerfile](tests/linux-desktop/Dockerfile
 is the disposable XFCE desktop used for acceptance. Hosts follow the
 [host integration contract](docs/host-integration.md#linux-060); behavior and
 measured results are in the [Linux engine contract](docs/linux-engine-contract.md).
+
+### Measured
+
+On 2026-10-22 a dsh agent with `gemini-3.8-flash-high` ran five tasks twice in a
+fresh XFCE container per trial, with a shell, screenshots and `xdotool` (A) or the
+same plus OpenCU (B). Both arms passed 10/10, so with this model OpenCU did not
+change what could be done. It changed the cost of work inside app windows: a
+browser registration wizard took 277 instead of 459 seconds (median) and 175k
+instead of 318k input tokens; fixing and saving an unsaved Mousepad note took 79
+instead of 223 seconds and 101k instead of 230k tokens. A terminal quiz tied. The
+hardened engine then passed the same tasks 14/14 in arm B
+([evidence](evidence/opencu-linux-ab-2026-10-22.json)).
 
 ## Development
 
