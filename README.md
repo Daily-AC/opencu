@@ -64,12 +64,11 @@ irm https://github.com/Daily-AC/opencu/releases/latest/download/install.ps1 | ie
 curl -fsSL https://github.com/Daily-AC/opencu/releases/latest/download/install.sh | sh
 ```
 
-**macOS** · Apple silicon, macOS 14 or later, Node.js 22+ and Command Line Tools
+**macOS** · Apple silicon, macOS 14 or later, Node.js 22+
 
 ```sh
-git clone https://github.com/Daily-AC/opencu.git && cd opencu
-npm ci --ignore-scripts && npm run build
-./bin/opencu setup    # grant Accessibility and Screen Recording once
+npm install -g opencu
+opencu setup    # grant Accessibility and Screen Recording once
 ```
 
 Run `opencu doctor` to check an installation. Platform guides:
@@ -81,24 +80,26 @@ OpenCU is a stdio MCP server. The command to register is:
 
 | Platform | Command |
 |---|---|
-| macOS | `/path/to/opencu/bin/opencu` |
+| macOS | `opencu` |
 | Windows | `%LOCALAPPDATA%\OpenCU\bin\opencu.cmd` |
 | Linux | `~/.local/share/opencu/bin/opencu` |
 
 ```sh
 # Claude Code
-claude mcp add --scope user opencu -- /path/to/opencu/bin/opencu
+claude mcp add --scope user opencu -- opencu
 
 # Codex
-codex mcp add opencu -- /path/to/opencu/bin/opencu
+codex mcp add opencu -- opencu
 ```
+
+On Windows and Linux, use the command from the table instead of `opencu`.
 
 Any other MCP client:
 
 ```json
 {
   "mcpServers": {
-    "opencu": { "command": "/path/to/opencu/bin/opencu" }
+    "opencu": { "command": "opencu" }
   }
 }
 ```
@@ -170,7 +171,7 @@ windows, or its global pointer setting
 
 | | macOS | Windows | Linux |
 |---|---|---|---|
-| Install | Build from source | Prebuilt x64, unsigned | Prebuilt x64 |
+| Install | npm, Apple silicon | Prebuilt x64, unsigned | Prebuilt x64 |
 | Input | Background, to the target app only | Foreground, after 10 s without your input | Foreground, after 10 s without your input |
 | Agent desktop | Virtual display with a watch-only preview | Separate session in a window | Not available |
 | Screen locked | Refused; the agent desktop pauses | Refused; the agent desktop keeps indexed clicks and values | Refused |
@@ -189,8 +190,10 @@ and files, and any local process that can run `opencu` uses its permissions.
 
 ## Limitations
 
-- **macOS:** source builds only, Apple silicon only. macOS asks about once a month
-  whether OpenCU may keep capturing the screen. It cannot operate a locked Mac.
+- **macOS:** Apple silicon only. The package is signed with OpenCU's own certificate
+  and is not notarized, so install it with npm, not a browser download. macOS asks
+  about once a month whether OpenCU may keep capturing the screen. It cannot operate
+  a locked Mac.
 - **Windows:** the package is unsigned, so SmartScreen or Defender may warn.
   Outside the agent desktop, input uses the foreground.
 - **Linux:** X11 only; Wayland is refused. Input uses the foreground.

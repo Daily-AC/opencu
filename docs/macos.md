@@ -4,7 +4,7 @@ On macOS, OpenCU reads and operates app windows through Accessibility,
 CoreGraphics and ScreenCaptureKit, and it can work in a background app while you
 keep using the one in front.
 
-**Status (v0.6.0):** source builds for Apple silicon. On the development Mac, 9 of
+**Status (v0.6.0):** npm package and source builds for Apple silicon. On the development Mac, 9 of
 the last 10 runs of the 18-check background GUI suite passed, and it has completed
 a handful of real tasks. Read [Limitations](limitations.md) before relying on it.
 
@@ -26,9 +26,25 @@ a handful of real tasks. Read [Limitations](limitations.md) before relying on it
 
 - Apple silicon Mac with macOS 14 or later. Developed on macOS 26.6 and also run
   on 15.6 in a VM; macOS 14 itself has not been tested.
-- Node.js 22+ and Apple's Command Line Tools.
+- Node.js 22+. A source build also needs Apple's Command Line Tools.
 
 ## Install
+
+```sh
+npm install -g opencu
+opencu setup
+opencu doctor
+```
+
+The npm package contains the compiled engine, signed with OpenCU's own release
+certificate. It is not notarized. npm does not mark the files it installs as
+quarantined, so Gatekeeper lets the engine run; the same package downloaded in a
+browser would be blocked. Every release is signed with the same certificate, so
+permissions survive upgrades.
+
+### From source
+
+Source builds need Apple's Command Line Tools:
 
 ```sh
 git clone https://github.com/Daily-AC/opencu.git
@@ -39,8 +55,7 @@ npm run build
 ./bin/opencu doctor
 ```
 
-There is no prebuilt macOS download. OpenCU is not notarized, so Gatekeeper would
-block a downloaded build. The first `npm run build` creates a signing identity
+The first `npm run build` creates a signing identity
 for this Mac in `~/Library/Application Support/OpenCU/signing`, in its own
 keychain; the login keychain is not modified. Every build is signed with it, so
 permission grants survive rebuilds, and another app claiming OpenCU's bundle

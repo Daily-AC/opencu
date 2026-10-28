@@ -5,7 +5,11 @@ The measurements behind this section are in
 
 ## Install and permissions
 
-- Source build only, Apple silicon only. There is no notarized Developer ID build.
+- Apple silicon only. The npm package is signed with OpenCU's own release
+  certificate and is not notarized. npm does not quarantine what it installs, so
+  Gatekeeper lets it run; a package downloaded in a browser is blocked. Source
+  builds are signed with a per-Mac identity instead, so switching between the npm
+  package and a source build means granting permissions again.
 - On macOS 15 and later, the system periodically asks whether OpenCU may keep
   capturing the screen ("…is requesting to bypass the system private window
   picker…"). Choose **Allow**. **Open System Settings** does not count as an
