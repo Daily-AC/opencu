@@ -79,21 +79,71 @@ def requirement(leaf):
     return f'designated => identifier "{BUNDLE_ID}" and certificate leaf = H"{leaf}"'
 
 
-def sign(app, leaf, password):
-    subprocess.run(["security", "unlock-keychain", "-p", password, str(KEYCHAIN)], check=True)
+def sign(app, leaf, password, keychain=KEYCHAIN):
+    subprocess.run(["security", "unlock-keychain", "-p", password, str(keychain)], check=True)
     listed = subprocess.run(["security", "list-keychains", "-d", "user"], check=True, capture_output=True, text=True).stdout
     search = [line.strip().strip('"') for line in listed.splitlines() if line.strip()]
     # codesign only selects an identity from the search list. Add the dedicated
     # keychain for this signature and restore the user's list afterwards.
-    if str(KEYCHAIN) not in search:
-        subprocess.run(["security", "list-keychains", "-d", "user", "-s", *search, str(KEYCHAIN)], check=True)
+    if str(keychain) not in search:
+        subprocess.run(["security", "list-keychains", "-d", "user", "-s", *search, str(keychain)], check=True)
     try:
         subprocess.run([
-            "codesign", "--force", "--keychain", str(KEYCHAIN), "--sign", leaf, "--identifier", BUNDLE_ID,
+            "codesign", "--force", "--keychain", str(keychain), "--sign", leaf, "--identifier", BUNDLE_ID,
             "--requirements", f"={requirement(leaf)}", "--timestamp=none", str(app),
         ], check=True)
     finally:
         subprocess.run(["security", "list-keychains", "-d", "user", "-s", *search], check=True)
+
+
+class ReleaseIdentity:
+    """The published package's certificate, given as OPENCU_RELEASE_P12 and OPENCU_RELEASE_P12_PASSWORD.
+
+    Every user's Accessibility and Screen Recording grant is pinned to this certificate's leaf, so every
+    npm release must be signed with the same one. It lives only in a throwaway keychain for one signature.
+    """
+
+    def __init__(self, p12, password):
+        self.p12, self.password = pathlib.Path(p12), password
+        self.temporary = tempfile.TemporaryDirectory(prefix="opencu-release-signing-")
+        self.keychain = pathlib.Path(self.temporary.name) / "release.keychain-db"
+        self.keychain_password = secrets.token_hex(24)
+
+    def __enter__(self):
+        area = pathlib.Path(self.temporary.name)
+        environment = {**os.environ, "OPENCU_IN": self.password, "OPENCU_TRANSFER": secrets.token_hex(16)}
+        certificate = area / "certificate.pem"
+        subprocess.run([OPENSSL, "pkcs12", "-in", str(self.p12), "-passin", "env:OPENCU_IN", "-nokeys", "-clcerts",
+                        "-out", str(certificate)], check=True, env=environment, capture_output=True)
+        der = subprocess.run([OPENSSL, "x509", "-in", str(certificate), "-outform", "DER"], check=True, capture_output=True).stdout
+        self.leaf = hashlib.sha1(der).hexdigest()
+        # Re-wrap with a one-time password so the release password never appears in an argument list.
+        both = area / "identity.pem"
+        transfer = area / "identity.p12"
+        subprocess.run([OPENSSL, "pkcs12", "-in", str(self.p12), "-passin", "env:OPENCU_IN", "-nodes", "-out", str(both)],
+                       check=True, env=environment, capture_output=True)
+        subprocess.run([OPENSSL, "pkcs12", "-export", "-in", str(both), "-out", str(transfer), "-passout", "env:OPENCU_TRANSFER"],
+                       check=True, env=environment, capture_output=True)
+        both.unlink()
+        subprocess.run(["security", "create-keychain", "-p", self.keychain_password, str(self.keychain)], check=True)
+        subprocess.run(["security", "set-keychain-settings", str(self.keychain)], check=True)
+        subprocess.run(["security", "import", str(transfer), "-k", str(self.keychain), "-P", environment["OPENCU_TRANSFER"],
+                        "-T", "/usr/bin/codesign"], check=True, capture_output=True)
+        transfer.unlink()
+        subprocess.run(["security", "set-key-partition-list", "-S", "apple-tool:,apple:,codesign:", "-s",
+                        "-k", self.keychain_password, str(self.keychain)], check=True, capture_output=True)
+        return self
+
+    def __exit__(self, *_):
+        subprocess.run(["security", "delete-keychain", str(self.keychain)], capture_output=True)
+        self.temporary.cleanup()
+
+
+def release_identity():
+    p12, password = os.environ.get("OPENCU_RELEASE_P12"), os.environ.get("OPENCU_RELEASE_P12_PASSWORD")
+    if bool(p12) != bool(password):
+        raise SystemExit("Set both OPENCU_RELEASE_P12 and OPENCU_RELEASE_P12_PASSWORD, or neither.")
+    return ReleaseIdentity(p12, password) if p12 else None
 
 
 def main():
@@ -101,7 +151,8 @@ def main():
     if platform.system() != "Darwin" or platform.machine() != "arm64":
         raise SystemExit("OpenCU currently builds for macOS arm64 (macOS 14 or later).")
     source_hashes = sources()
-    leaf, password = signing_identity()
+    release = release_identity()
+    leaf, password = (None, None) if release else signing_identity()
     build = ["swift", "build", "--package-path", str(NATIVE), "-c", "release"]
     subprocess.run([*build, "--product", "opencu-engine"], check=True)
     binaries = pathlib.Path(subprocess.check_output([*build, "--show-bin-path"], text=True).strip())
@@ -124,7 +175,12 @@ def main():
         subprocess.run(["python3", str(ROOT / "scripts/render-presence.py"), "--icon", str(resources / "AppIcon.icns")], check=True)
         if sources() != source_hashes:
             raise SystemExit("Native resources changed during icon generation; run the build again.")
-        sign(app, leaf, password)
+        if release:
+            with release:
+                leaf = release.leaf
+                sign(app, leaf, release.keychain_password, release.keychain)
+        else:
+            sign(app, leaf, password)
         subprocess.run(["codesign", "--verify", "--deep", "--strict", str(app)], check=True)
         engine_version = subprocess.check_output([str(executable), "--version"], text=True, timeout=15).strip()
         if not engine_version:
@@ -137,7 +193,7 @@ def main():
             "bundle_identifier": BUNDLE_ID,
             "app": ".build/OpenCU.app", "executable": ".build/OpenCU.app/Contents/MacOS/opencu-engine",
             "executable_sha256": sha256(executable), "executable_bytes": executable.stat().st_size,
-            "signature": "local OpenCU signing identity; strict verification passed",
+            "signature": ("OpenCU release identity" if release else "local OpenCU signing identity") + "; strict verification passed",
             "designated_requirement": requirement(leaf),
             "source": "Original Swift implementation using macOS frameworks and runtime-checked OS-exported SPI for targeted input, exact window identity and background operation",
             "macos_api_compatibility": "OS-exported SPI availability and behavior can vary across macOS releases",
@@ -151,8 +207,8 @@ def main():
             shutil.rmtree(destination)
         app.rename(destination)
         (OUTPUT / "engine-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
-    print(json.dumps({"app": str(destination), "version": engine_version,
-                      "sha256": manifest["executable_sha256"], "signature": "local identity verified"}))
+    print(json.dumps({"app": str(destination), "version": engine_version, "sha256": manifest["executable_sha256"],
+                      "signature": ("release" if release else "local") + " identity verified", "leaf": leaf}))
 
 
 if __name__ == "__main__":
