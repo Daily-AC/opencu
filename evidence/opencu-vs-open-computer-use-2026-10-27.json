@@ -1,0 +1,302 @@
+{
+ "date": "2026-10-27",
+ "question": "With the same agent, model and tasks, what changes between OpenCU and iFurySt/open-computer-use 1.1.2 (npm, default settings)?",
+ "compared": {
+  "open-computer-use": "1.1.2 from npm, default settings (no global pointer fallbacks, no Locked Use)",
+  "OpenCU": {
+   "linux": "0.6.0 (8b71d5b engine)",
+   "windows": "0.5.0 (the Windows package attached to the v0.6.0 release)",
+   "macos": "0.2.0 fix build b975d29, already installed in the benchmark VM; not the current release"
+  }
+ },
+ "linux": {
+  "desktop": "Debian 12 XFCE container, Firefox ESR, Mousepad; fresh container per trial; both arms ran in parallel on the same host",
+  "agent": "dsh 0.2.1-rc.2 headless, gemini-3.8-flash-high; each arm = shell, files, screenshots plus one engine over stdio MCP",
+  "trials": 2,
+  "metrics": "median per task; inputTokens summed over model steps",
+  "tasks": {
+   "t1-crm": "register three customers through a two-step browser wizard",
+   "t2-unsaved": "fix a date in an unsaved Mousepad note and save it",
+   "t3-quiz": "answer an interactive terminal quiz",
+   "t4-research": "look up a year in Firefox and write it to a file",
+   "t5-chart": "find the top month of a canvas chart and save it through Mousepad"
+  },
+  "results": {
+   "OpenCU": {
+    "t1-crm": {
+     "passed": "2/2",
+     "seconds": 244,
+     "toolCalls": 39.5,
+     "engineCalls": 33.0,
+     "inputTokens": 189890
+    },
+    "t2-unsaved": {
+     "passed": "2/2",
+     "seconds": 78,
+     "toolCalls": 11.5,
+     "engineCalls": 10.5,
+     "inputTokens": 86644
+    },
+    "t3-quiz": {
+     "passed": "2/2",
+     "seconds": 42,
+     "toolCalls": 6.5,
+     "engineCalls": 6.5,
+     "inputTokens": 97034
+    },
+    "t4-research": {
+     "passed": "2/2",
+     "seconds": 96,
+     "toolCalls": 12.0,
+     "engineCalls": 8.0,
+     "inputTokens": 111238
+    },
+    "t5-chart": {
+     "passed": "2/2",
+     "seconds": 102,
+     "toolCalls": 15.5,
+     "engineCalls": 8.0,
+     "inputTokens": 146854
+    }
+   },
+   "open-computer-use": {
+    "t1-crm": {
+     "passed": "1/2",
+     "seconds": 872,
+     "toolCalls": 96.0,
+     "engineCalls": 41.5,
+     "inputTokens": 2054633
+    },
+    "t2-unsaved": {
+     "passed": "2/2",
+     "seconds": 255,
+     "toolCalls": 15.0,
+     "engineCalls": 14.0,
+     "inputTokens": 210980
+    },
+    "t3-quiz": {
+     "passed": "2/2",
+     "seconds": 64,
+     "toolCalls": 6.5,
+     "engineCalls": 6.5,
+     "inputTokens": 70562
+    },
+    "t4-research": {
+     "passed": "2/2",
+     "seconds": 552,
+     "toolCalls": 59.0,
+     "engineCalls": 17.5,
+     "inputTokens": 421746
+    },
+    "t5-chart": {
+     "passed": "2/2",
+     "seconds": 199,
+     "toolCalls": 25.5,
+     "engineCalls": 12.0,
+     "inputTokens": 299244
+    }
+   }
+  },
+  "observed": [
+   "open-computer-use did not list Firefox until the agent enabled the AT-SPI bus itself (org.a11y.Status) or restarted Firefox with GNOME_ACCESSIBILITY=1; OpenCU enables the bus.",
+   "In t1 trial 1, open-computer-use set_value and type_text on the Firefox name and phone entries returned without an error and the entries stayed empty; the agent pasted through the clipboard instead. That trial hit the 900-second limit.",
+   "open-computer-use exits without XDG_RUNTIME_DIR; the container wrapper supplied one for it."
+  ]
+ },
+ "windows": {
+  "machine": "Windows 11 VM, controller reaches it over wanctl",
+  "agent": "pi with deepseek-v4.1-flash-1017; each arm = shell and screenshots plus one engine",
+  "trials": 2,
+  "tasks": {
+   "t05": "enter 10 records in a WinForms form",
+   "t06": "go through an NSIS installer wizard",
+   "t07": "save a Notepad file as ANSI through Save As",
+   "t08": "enter records while a popup interrupts"
+  },
+  "results": {
+   "t05": {
+    "open-computer-use": "2/2, 771 s",
+    "OpenCU": "2/2, 307 s"
+   },
+   "t06": {
+    "open-computer-use": "1/2, 900 s",
+    "OpenCU": "2/2, 208 s"
+   },
+   "t07": {
+    "open-computer-use": "0/2, 900 s",
+    "OpenCU": "1/2, 667 s"
+   },
+   "t08": {
+    "open-computer-use": "1/2, 1034 s",
+    "OpenCU": "2/2, 149 s"
+   },
+   "total": {
+    "open-computer-use": "4/8",
+    "OpenCU": "7/8"
+   }
+  },
+  "observed": [
+   "In all 8 open-computer-use trials the agent also wrote its own Win32 input code (WM_SETTEXT, BM_CLICK, SendInput or SendKeys); the 4 passes completed input that way. In the 8 OpenCU trials it wrote none.",
+   "open-computer-use exposes MCP element indices per process, so the bench kept one open-computer-use.exe mcp process on the VM behind a bridge (about 1.5 to 7 s per call); this slows its timings, not its pass count.",
+   "Five other trials were discarded and rerun for both arms: a gateway connection reset, Defender quarantining the test installer, and Defender removing wanctl.exe on the VM."
+  ]
+ },
+ "macos": {
+  "benchmark": "MacArena (MacPaw) local subset at upstream dcdc7d36, the 10 tasks that produced grades in earlier runs; original setup commands and graders",
+  "machine": "macOS 15.6.1 VM, fresh clone per trial, 2 CPU / 6 GiB",
+  "agent": "OMP 18.8.7 with deepseek-v4.1-flash-1017; 60 requests and 900 s per task; the agent only had the engine",
+  "trials": 1,
+  "results": {
+   "TextEdit: duplicate a document and save it to the Desktop": {
+    "OpenCU": {
+     "passed": true,
+     "requests": 34,
+     "actorSeconds": 115
+    },
+    "open-computer-use": {
+     "passed": true,
+     "requests": 29,
+     "actorSeconds": 241
+    }
+   },
+   "Preview: increase exposure": {
+    "open-computer-use": {
+     "passed": false,
+     "requests": 56,
+     "actorSeconds": 900
+    },
+    "OpenCU": {
+     "passed": false,
+     "requests": 43,
+     "actorSeconds": 900
+    }
+   },
+   "Preview: crop the left side": {
+    "OpenCU": {
+     "passed": false,
+     "requests": 35,
+     "actorSeconds": 900
+    },
+    "open-computer-use": {
+     "passed": false,
+     "requests": 34,
+     "actorSeconds": 900
+    }
+   },
+   "Obsidian: create a vault": {
+    "open-computer-use": {
+     "passed": true,
+     "requests": 39,
+     "actorSeconds": 384
+    },
+    "OpenCU": {
+     "passed": true,
+     "requests": 23,
+     "actorSeconds": 177
+    }
+   },
+   "Obsidian: add a wiki link": {
+    "OpenCU": {
+     "passed": false,
+     "requests": 60,
+     "actorSeconds": 393
+    },
+    "open-computer-use": {
+     "passed": false,
+     "requests": 60,
+     "actorSeconds": 416
+    }
+   },
+   "Obsidian: switch to the light theme": {
+    "open-computer-use": {
+     "passed": false,
+     "requests": 60,
+     "actorSeconds": 443
+    },
+    "OpenCU": {
+     "passed": false,
+     "requests": 60,
+     "actorSeconds": 365
+    }
+   },
+   "VS Code: create src/main.js": {
+    "OpenCU": {
+     "passed": false,
+     "requests": 60,
+     "actorSeconds": 450
+    },
+    "open-computer-use": {
+     "passed": false,
+     "requests": 60,
+     "actorSeconds": 555
+    }
+   },
+   "VS Code: create script.js": {
+    "open-computer-use": {
+     "passed": true,
+     "requests": 56,
+     "actorSeconds": 471
+    },
+    "OpenCU": {
+     "passed": true,
+     "requests": 30,
+     "actorSeconds": 198
+    }
+   },
+   "Contacts: export a vCard": {
+    "OpenCU": {
+     "passed": false,
+     "requests": 60,
+     "actorSeconds": 438
+    },
+    "open-computer-use": {
+     "passed": false,
+     "requests": 60,
+     "actorSeconds": 408
+    }
+   },
+   "Safari: save a page as PDF": {
+    "open-computer-use": {
+     "passed": true,
+     "requests": 36,
+     "actorSeconds": 402
+    },
+    "OpenCU": {
+     "passed": true,
+     "requests": 14,
+     "actorSeconds": 54
+    }
+   }
+  },
+  "summary": {
+   "passed": {
+    "OpenCU": "4/10",
+    "open-computer-use": "4/10"
+   },
+   "sameTasksPassed": true,
+   "actorSecondsOnTheFourPasses": {
+    "OpenCU": 544,
+    "open-computer-use": 1498
+   },
+   "medianMs": {
+    "click": {
+     "OpenCU": 292,
+     "open-computer-use": 2029
+    },
+    "set_value": {
+     "OpenCU": 216,
+     "open-computer-use": 1748
+    },
+    "press_key": {
+     "OpenCU": 232,
+     "open-computer-use": 304
+    },
+    "get_app_state": {
+     "OpenCU": 125,
+     "open-computer-use": 120
+    }
+   }
+  }
+ },
+ "limits": "Two trials per cell on Linux and Windows, one on macOS; one model per platform; the macOS OpenCU arm is an older build. Not tested: open-computer-use Locked Use, its SkyLight background input on occluded Chrome windows, and its global pointer fallback setting."
+}
