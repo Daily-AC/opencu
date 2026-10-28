@@ -1,0 +1,65 @@
+{
+ "date": "2026-10-19 to 2026-10-20",
+ "question": "On a Windows desktop, does adding OpenCU help an agent that already has a shell and full-screen screenshots over a remote-control connection?",
+ "engine": "OpenCU 0.3.1 Windows (the 0.3.2 fix for synchronous modal dialogs came after two of the failures below)",
+ "machine": "Windows 11 VM, restored from the same checkpoint for every trial; the agent reached it over wanctl",
+ "agent": "pi with DeepSeek V4.1 Flash (cline-pass/deepseek-v4.1-flash)",
+ "arms": {
+  "A": "shell commands on the VM and full-screen screenshots",
+  "B": "A plus OpenCU through wanctl act"
+ },
+ "trials": "2 per task and arm (t10 once)",
+ "metrics": "median seconds per task and arm",
+ "results": {
+  "ui_only": {
+   "t05 enter 10 records in a WinForms form": {
+    "A": "1/2, 1033 s",
+    "B": "2/2, 188 s"
+   },
+   "t06 go through an NSIS installer wizard": {
+    "A": "1/2, 900 s",
+    "B": "2/2, 325 s"
+   },
+   "t07 save a Notepad file as ANSI through Save As": {
+    "A": "0/2, 900 s",
+    "B": "2/2, 334 s"
+   },
+   "t08 enter records while a popup interrupts": {
+    "A": "0/2, 741 s",
+    "B": "1/2, 666 s"
+   },
+   "total": {
+    "A": "2/8",
+    "B": "7/8"
+   }
+  },
+  "scriptable": {
+   "t02 LibreOffice Calc pivot table": {
+    "A": "2/2, 926 s",
+    "B": "1/2, 1158 s"
+   },
+   "t03 LibreOffice Impress deck": {
+    "A": "2/2, 397 s",
+    "B": "1/2, 882 s"
+   },
+   "t04 OBS Studio scene": {
+    "A": "2/2, 433 s",
+    "B": "1/2, 1200 s"
+   },
+   "note": "Both arms passed these mostly by scripting around the UI (Python-UNO, writing slide XML, obs-websocket). Two of the three B failures hit the 0.3.1 modal-dialog defect fixed in 0.3.2; one was a remote command that hung."
+  },
+  "other": {
+   "t01 change the default browser": {
+    "A": "2/2, 900 s",
+    "B": "2/2, 900 s",
+    "note": "state was correct early; both kept verifying until the limit"
+   },
+   "t10 Minesweeper": {
+    "A": "1/1, 945 s",
+    "B": "1/1, 867 s"
+   }
+  }
+ },
+ "a_failures": "A's UI-only failures: scripts driving dialogs that never returned over the remote connection, misreading uncommon characters in screenshots, and spending the whole run looking for a way around the UI.",
+ "limits": "Two trials per cell, one VM, one model. The person-activity task (t09) is excluded: it tested a rule OpenCU does not implement between calls."
+}

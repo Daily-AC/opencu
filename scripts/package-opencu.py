@@ -221,7 +221,8 @@ def main():
     package = json.loads((ROOT / "package.json").read_text())
     if package["name"] != "opencu" or package["version"] != engine["version"]:
         raise SystemExit("Package metadata must identify OpenCU and match the compiled engine version.")
-    if not (ROOT / "README.md").read_text().lstrip().startswith("# OpenCU"):
+    head = (ROOT / "README.md").read_text().lstrip()[:400]
+    if not (head.startswith("# OpenCU") or '<h1 align="center">OpenCU</h1>' in head):
         raise SystemExit("README must describe the independent OpenCU engine before creating a release archive.")
     tests = [str(path.relative_to(ROOT)) for path in sorted((ROOT / "tests").glob("*.test.mjs"))]
     source_files = [*SOURCE_FILES, *tests, ".build/engine-manifest.json"]

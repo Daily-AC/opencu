@@ -39,7 +39,7 @@ to speak the existing JSON-lines protocol with the same tool semantics.
 ## Consequences
 
 - Wayland sessions are refused; XWayland apps on a Wayland desktop are not
-  supported. This is stated in the README's Limitations.
+  supported. This is stated in [Limitations](../limitations.md).
 - Person detection depends on the X server keeping VNC or hardware input on
   its own devices. TigerVNC/KasmVNC Xvnc do; x11vnc on Xvfb injects through
   XTEST, so a person's input there is indistinguishable from OpenCU's.
