@@ -8,6 +8,10 @@
   <strong>Computer use for any AI agent, on your own machine.</strong>
 </p>
 
+https://github.com/user-attachments/assets/5da04b21-47fe-44c4-9d3d-e2b3a2e9a9c6
+
+<p align="center"><sub>Re-created in code from a real session.</sub></p>
+
 <p align="center">
   OpenCU is an MCP server that lets Claude Code, Codex or any other MCP client read<br>
   and operate the apps on macOS, Windows and Linux. It runs locally, needs no account<br>
