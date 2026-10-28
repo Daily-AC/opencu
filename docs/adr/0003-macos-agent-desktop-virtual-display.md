@@ -109,4 +109,4 @@ when menu-bar items overflowed behind a notch); only Stop, menu-bar Stop or macO
 Stop Sharing are person stops. The quiet-desktop guard was narrowed so pointer and
 foreground activity elsewhere no longer interrupt start or moves; a move stops only
 when the person starts using that window. An unused desktop stops itself after five
-idle minutes. The README describes the current behavior.
+idle minutes. [OpenCU on macOS](../macos.md#agent-desktop) describes the current behavior.
