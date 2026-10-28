@@ -621,10 +621,11 @@ of the two engines.
 | Windows 11 VM | 4 tasks that can only be done through the UI, 2 trials each | 7/8 | 4/8 |
 | macOS VM (MacArena subset) | 10 tasks, 1 trial each | 4/10 | 4/10, the same tasks |
 
-- **Linux:** the browser tasks took OpenCU 96 to 244 seconds (median) and
-  open-computer-use 552 to 872. open-computer-use did not list Firefox until the
-  agent turned on the AT-SPI bus itself, and in one trial its `set_value` and
-  `type_text` left the Firefox entries empty without an error.
+- **Linux:** the two Firefox tasks (a registration wizard and a lookup) took OpenCU
+  244 and 96 seconds (median) and open-computer-use 872 and 552. open-computer-use
+  did not list Firefox until the agent turned on the AT-SPI bus itself, and in one
+  trial its `set_value` and `type_text` left the Firefox entries empty without an
+  error.
 - **Windows:** in all eight open-computer-use trials the agent also wrote its own
   Win32 input code, and its four passes completed input that way. It wrote none
   with OpenCU. open-computer-use ran behind a bridge on the VM (1.5 to 7 seconds per
