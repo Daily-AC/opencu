@@ -608,6 +608,37 @@ instead of 223 seconds and 101k instead of 230k tokens. A terminal quiz tied. Th
 hardened engine then passed the same tasks 14/14 in arm B
 ([evidence](evidence/opencu-linux-ab-2026-10-22.json)).
 
+## Compared with open-computer-use
+
+On 2026-10-27 we ran the same agents, models and tasks with OpenCU and with
+[iFurySt/open-computer-use](https://github.com/iFurySt/open-computer-use) 1.1.2
+from npm at its default settings. Each agent had a shell and screenshots plus one
+of the two engines.
+
+| Platform | Tasks | OpenCU | open-computer-use |
+|---|---|---|---|
+| Linux (XFCE container) | 5 desktop tasks, 2 trials each | 10/10 | 9/10 |
+| Windows 11 VM | 4 tasks that can only be done through the UI, 2 trials each | 7/8 | 4/8 |
+| macOS VM (MacArena subset) | 10 tasks, 1 trial each | 4/10 | 4/10, the same tasks |
+
+- **Linux:** the browser tasks took OpenCU 96 to 244 seconds (median) and
+  open-computer-use 552 to 872. open-computer-use did not list Firefox until the
+  agent turned on the AT-SPI bus itself, and in one trial its `set_value` and
+  `type_text` left the Firefox entries empty without an error.
+- **Windows:** in all eight open-computer-use trials the agent also wrote its own
+  Win32 input code, and its four passes completed input that way. It wrote none
+  with OpenCU. open-computer-use ran behind a bridge on the VM (1.5 to 7 seconds per
+  call), so its Windows timings are not comparable.
+- **macOS:** both engines passed the same four tasks. On those, the agent took 544
+  seconds in total with OpenCU and 1,498 with open-computer-use; median click time
+  was 292 ms against 2,029 ms. The OpenCU build in that VM was 0.2.0, not the
+  current release.
+
+The samples are small and each platform used one model. We did not test
+open-computer-use's locked-screen mode, its background input on covered Chrome
+windows, or its global pointer setting. Setup, versions and per-task results are in
+the [evidence](evidence/opencu-vs-open-computer-use-2026-10-27.json).
+
 ## Development
 
 ```sh
