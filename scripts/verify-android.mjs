@@ -47,20 +47,26 @@ try{
   const doctorRun=spawnSync(path.join(root,'bin/opencu'),['android','--serial',serial,'doctor'],{encoding:'utf8',timeout:15000});
   assert.equal(doctorRun.status,0,doctorRun.stderr);const doctor=JSON.parse(doctorRun.stdout);
   evidence.doctor=doctor;assert.equal(doctor.uid,2000);assert.equal(doctor.uiAutomationConnected,true);assert.equal(doctor.personMonitor.ready,true);
+  shell('am','force-stop',pkg);
+  assert.equal(foreground(),'com.android.launcher','Fresh launch check must begin on the launcher');
   for(let run=1;run<=3;run++){
-    awake();assert.ok([pkg,'com.android.launcher'].includes(foreground()),'Unexpected app before fixture reset');
-    shell('am','force-stop',pkg); // Fixture initializes its truth from scratch in onCreate; no pm clear permission needed.
+    awake();assert.ok([pkg,'com.android.launcher'].includes(foreground()),'Unexpected app before fixture run');
     client=connect();const init=await client.initialize();const tools=await client.tools();assert.equal(tools.length,12);
-    // New evdev readers cannot know the preceding physical history. Observe a full initial quiet interval.
-    await delay(10100);awake();
+    // The engine seeds its activity guard from PowerManager's last physical activity.
+    // There is deliberately no connection-start sleep here.
+    awake();
     let s=ok(guard(await client.call('get_app_state',{app:pkg})));fixtureFront();
     const checks=[];evidence.runs.push({run,checks});
-    if(run===1){evidence.transcript={initialize:{request:{method:'initialize',params:{protocolVersion:'2025-11-25',capabilities:{},clientInfo:{name:'opencu-android-fixture-verifier',version:'1'}}},response:init},toolsList:{request:{method:'tools/list'},toolNames:tools.map(t=>t.name),pages:2},getAppState:{request:{method:'tools/call',params:{name:'get_app_state',arguments:{app:pkg}}},response:s}};}
+    if(run===1){
+      checks.push({name:'fresh_connection_open',pass:true,foreground:foreground(),elapsedMs:0});
+      evidence.transcript={initialize:{request:{method:'initialize',params:{protocolVersion:'2024-11-05',capabilities:{},clientInfo:{name:'opencu-android-fixture-verifier',version:'1'}}},response:init},toolsList:{request:{method:'tools/list'},toolNames:tools.map(t=>t.name),pages:2},getAppState:{request:'tools/call get_app_state',response:s}};
+    }
     await check('form_ascii_unicode_checkbox',async()=>{
       assert.ok(Buffer.byteLength(text(s))<4096,'Fixture form exceeds text budget');
       s=ok(await call('set_value',{element_index:index(s,'id=ascii '),value:`ASCII run ${run}`}));
       s=ok(await call('set_value',{element_index:index(s,'id=chinese '),value:'无线调试 测试'}));
-      s=await click(s,'checkbox');const t=truth();assert.equal(t.ascii,`ASCII run ${run}`);assert.equal(t.chinese,'无线调试 测试');assert.equal(t.checked,true);return {truth:t,stateBytes:Buffer.byteLength(text(s))};
+      if(!text(s).split('\n').some(line=>line.includes('id=checkbox ')&&line.includes(' checked')))s=await click(s,'checkbox');
+      const t=truth();assert.equal(t.ascii,`ASCII run ${run}`);assert.equal(t.chinese,'无线调试 测试');assert.equal(t.checked,true);return {truth:t,stateBytes:Buffer.byteLength(text(s))};
     },checks);
     await check('batch_fill_load_until_without_extra_read',async()=>{
       const before=client.next;

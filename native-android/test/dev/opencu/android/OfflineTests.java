@@ -16,17 +16,19 @@ public final class OfflineTests {
             Map<String,Object> record=map(raw);Element node=new Element();
             for(String key:record.keySet()) {
                 if(key.equals("expected")||key.equals("bounds")||key.equals("actions"))continue;
-                java.lang.reflect.Field field=Element.class.getField(key);Object value=record.get(key);
+                java.lang.reflect.Field field=Element.class.getField(key);Object value=record.containsKey(key)?record.get(key):Boolean.FALSE;
                 if(field.getType()==int.class)field.setInt(node,((Number)value).intValue());else field.set(node,value);
             }
             List<Object> bounds=list(record.get("bounds"));node.left=((Number)bounds.get(0)).intValue();node.top=((Number)bounds.get(1)).intValue();node.right=((Number)bounds.get(2)).intValue();node.bottom=((Number)bounds.get(3)).intValue();
             if(record.containsKey("actions"))for(Object a:list(record.get("actions")))node.actions.put((String)a,0);
-            check(node.useful(),"recorded visible node retained");check(node.line().equals(record.get("expected")),"recorded node line fidelity");
+            check(node.useful(),"recorded visible node retained");
+            if (!node.line().equals(record.get("expected"))) throw new AssertionError("recorded node line fidelity: " + node.line() + " != " + record.get("expected"));
             node.visible=false;check(!node.useful(),"recorded node hidden variant omitted");
         }
         Element e=element();check(e.useful(),"editable survives");check(e.line().equals("[1] EditText text=\"无线调试 测试\" id=chinese editable bounds=40,200,1000,330"),"compact deterministic format");
         Element hidden=element();hidden.visible=false;check(!hidden.useful(),"invisible omitted");hidden.visible=true;hidden.right=hidden.left;check(!hidden.useful(),"zero size omitted");
         Element layout=new Element();layout.clazz="android.widget.LinearLayout";layout.right=1000;layout.bottom=1000;check(!layout.useful(),"pure layout omitted while child traversal stays independent");
+        Element idOnly=element();idOnly.text="";idOnly.desc="";idOnly.id="fixture:id/img_clr";idOnly.editable=false;idOnly.clickable=false;idOnly.longClickable=false;idOnly.scrollable=false;idOnly.checkable=false;idOnly.actions.clear();check(!idOnly.useful(),"id-only decorative node omitted");
         e.enabled=false;e.password=true;e.checked=true;check(e.line().contains("enabled=false password"),"flags");check(!e.line().contains("无线"),"password hidden");
         Element old=element(),current=element();check(old.same(current),"identity matches");current.left+=7;check(!old.same(current),"moved stale");current=element();current.text="different";check(!old.same(current),"changed text stale");current=element();current.window++;check(!old.same(current),"window stale");check(!old.same(null),"vanished stale");
         String app="dev.opencu.android.fixture";
@@ -60,6 +62,9 @@ public final class OfflineTests {
         Await stable=new Await(loading,obj("stable",true),"",0);check(stable.poll(loading,0).equals("continue"),"stable starts");check(stable.poll(ready,350).equals("continue"),"state change restarts stability");check(stable.poll(ready,749).equals("continue"),"stable before 400 ms");check(stable.poll(ready,750).equals("complete"),"stable after 400 ms");
         Person contact=new Person(0);contact.accept("[ 10.000000] /dev/input/event2: EV_ABS ABS_MT_TRACKING_ID 00000007",10000);error("PERSON_ACTIVE",()->contact.check(contact.token(),20000,false));contact.accept("[ 10.100000] /dev/input/event2: EV_ABS ABS_MT_TRACKING_ID ffffffff",10100);contact.check(contact.token(),20000,false);
         Person person=new Person(0);person.check(0,10000,true);error("PERSON_ACTIVE",()->new Person(0).check(0,9999,true));
+        check(Core.lastUserActivityTime("lastUserActivityTime=12345\\n", 99) == 12345, "PowerManager activity seed parses");
+        new Person(Core.lastUserActivityTime("lastUserActivityTime=12345", 99)).check(0,22345,true);
+        error("PERSON_ACTIVE",()->new Person(Core.lastUserActivityTime("lastUserActivityTime=22300", 99)).check(0,22345,true));
         person.accept(event(10,"KEY_A","DOWN"),11000);error("PERSON_ACTIVE",()->person.check(0,11001,false));long token=person.token();error("PERSON_ACTIVE",()->person.check(token,11001,false));
         person.accept(event(10.1,"KEY_A","UP"),11100);person.check(person.token(),11100,false);check(!person.stopped,"ordinary key does not stop");
         Person stop=new Person(0);for(double time:new double[]{20,20.5,21.5}){stop.accept(event(time,"KEY_VOLUMEDOWN","DOWN"),(long)(time*1000));stop.accept(event(time+.01,"KEY_VOLUMEDOWN","UP"),(long)(time*1000)+10);}check(stop.stopped,"three presses within inclusive 1.5 s stop");error("USER_STOPPED",()->stop.check(stop.token(),999999,false));
@@ -71,8 +76,9 @@ public final class OfflineTests {
         final int[] calls={0};Protocol protocol=new Protocol((name,a)->{calls[0]++;return Protocol.textResult("fixture");},"test");
         check(map(protocol.handle("{bad").get("error")).get("code").equals(-32700),"parse error");
         check(map(protocol.handle("[]").get("error")).get("code").equals(-32600),"JSON-RPC batching unsupported");
-        String init=write(obj("jsonrpc","2.0","id","a","method","initialize","params",obj("protocolVersion","2025-11-25","capabilities",obj(),"clientInfo",obj("name","test","version","1"))));
+        String init=write(obj("jsonrpc","2.0","id","a","method","initialize","params",obj("protocolVersion","2024-11-05","capabilities",obj(),"clientInfo",obj("name","test","version","1"))));
         Map<String,Object> initialized=map(protocol.handle(init).get("result"));check(map(initialized.get("serverInfo")).get("name").equals("opencu"),"server identity");check(initialized.get("instructions").equals(Protocol.INSTRUCTIONS),"instructions returned");
+        check(initialized.get("protocolVersion").equals("2024-11-05"),"legacy MCP protocol is negotiated unchanged");
         check(protocol.handle(write(obj("jsonrpc","2.0","method","notifications/initialized")))==null,"no notification response");
         Map<String,Object> first=map(protocol.handle(write(obj("jsonrpc","2.0","id",2,"method","tools/list"))).get("result"));check(first.get("nextCursor").equals("8"),"pagination cursor");
         Map<String,Object> second=map(protocol.handle(write(obj("jsonrpc","2.0","id",3,"method","tools/list","params",obj("cursor","8")))).get("result"));check(list(first.get("tools")).size()+list(second.get("tools")).size()==12,"complete tool list");

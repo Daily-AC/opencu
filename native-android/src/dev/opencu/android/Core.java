@@ -4,6 +4,10 @@ import java.util.*;
 import java.util.regex.*;
 
 public final class Core {
+    public static long lastUserActivityTime(String powerDump, long fallback) {
+        Matcher matcher = Pattern.compile("lastUserActivityTime=(\\d+)").matcher(powerDump == null ? "" : powerDump);
+        return matcher.find() ? Long.parseLong(matcher.group(1)) : fallback;
+    }
     public static final class Failure extends RuntimeException {
         public final String code;
         public Failure(String code, String message) { super(message); this.code=code; }
@@ -12,16 +16,21 @@ public final class Core {
     public static final class Element {
         public int index, window, left, top, right, bottom;
         public String path="", clazz="", text="", desc="", id="", pkg="";
-        public boolean visible=true, clickable, longClickable, editable, scrollable, checked, selected, focused, enabled=true, password;
+        public boolean visible=true, clickable, longClickable, editable, scrollable, checkable, checked, selected, focused, focusable, enabled=true, password;
         public final Map<String,Integer> actions=new LinkedHashMap<>();
-        public boolean useful() { return visible && right>left && bottom>top && (!text.isEmpty() || !desc.isEmpty() || (!id.isEmpty() && !clazz.endsWith("Layout") && !clazz.endsWith("ViewGroup")) || clickable || longClickable || editable || scrollable || checked || selected || focused || !actions.isEmpty()); }
+        public boolean useful() {
+            return visible && right > left && bottom > top
+                && (!text.isEmpty() || !desc.isEmpty() || clickable || longClickable
+                    || editable || scrollable || checkable || !actions.isEmpty()
+                    || (focused && (editable || clickable)));
+        }
         public String line() {
             StringBuilder b=new StringBuilder("[").append(index).append("] ").append(clazz.substring(clazz.lastIndexOf('.')+1));
             if (!text.isEmpty()) b.append(" text=").append(Json.write(password?"<password>":text));
             if (!desc.isEmpty()) b.append(" desc=").append(Json.write(desc));
             if (!id.isEmpty()) b.append(" id=").append(id.replaceFirst("^.*:id/", ""));
             if(clickable)b.append(" clickable"); if(longClickable)b.append(" long-clickable"); if(editable)b.append(" editable"); if(scrollable)b.append(" scrollable");
-            if(checked)b.append(" checked"); if(selected)b.append(" selected"); if(focused)b.append(" focused"); if(!enabled)b.append(" enabled=false"); if(password)b.append(" password");
+            if(checkable)b.append(" checkable"); if(checked)b.append(" checked"); if(selected)b.append(" selected"); if(focused)b.append(" focused"); if(!enabled)b.append(" enabled=false"); if(password)b.append(" password");
             b.append(" bounds=").append(left).append(',').append(top).append(',').append(right).append(',').append(bottom);
             if(!actions.isEmpty())b.append(" actions=").append(Json.write(actions.keySet()));
             return b.toString();

@@ -14,7 +14,7 @@ export class Client {
   fail(e){for(const p of this.pending.values()){clearTimeout(p.timer);p.reject(e);}this.pending.clear();}
   request(method,params={}) {const id=this.next++;return new Promise((resolve,reject)=>{const timer=setTimeout(()=>{this.pending.delete(id);reject(new Error(`Timeout: ${method}; ${this.stderr}`));},35000);this.pending.set(id,{resolve,reject,timer});this.process.stdin.write(`${JSON.stringify({jsonrpc:'2.0',id,method,params})}\n`);});}
   notify(method,params={}){this.process.stdin.write(`${JSON.stringify({jsonrpc:'2.0',method,params})}\n`);}
-  async initialize(){this.init=await this.request('initialize',{protocolVersion:'2025-11-25',capabilities:{},clientInfo:{name:'opencu-android-fixture-verifier',version:'1'}});this.notify('notifications/initialized');return this.init;}
+  async initialize(){this.init=await this.request('initialize',{protocolVersion:'2024-11-05',capabilities:{},clientInfo:{name:'opencu-android-fixture-verifier',version:'1'}});this.notify('notifications/initialized');return this.init;}
   async tools(){let cursor,result=[];do{const page=await this.request('tools/list',cursor?{cursor}:{});result.push(...page.tools);cursor=page.nextCursor;}while(cursor);return result;}
   call(name,args={}){return this.request('tools/call',{name,arguments:args});}
   async close(){const start=performance.now();this.process.stdin.end();const value=await Promise.race([this.closed,new Promise((_,reject)=>{const timer=setTimeout(()=>reject(new Error('EOF did not close engine within 2 seconds')),2000);timer.unref();})]);return {elapsedMs:performance.now()-start,...value};}

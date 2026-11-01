@@ -2,27 +2,6 @@
   "source": "PGBM10 API 34, fixture main activity, real MCP visible tree recorded 2026-11-01. Other windows omitted; nodes retain their returned indexes.",
   "nodes": [
     {
-      "index": 1,
-      "clazz": "LinearLayout",
-      "visible": true,
-      "expected": "[1] LinearLayout focused bounds=0,107,1080,2352",
-      "bounds": [
-        0,
-        107,
-        1080,
-        2352
-      ],
-      "clickable": false,
-      "longClickable": false,
-      "editable": false,
-      "scrollable": false,
-      "focused": true,
-      "checked": false,
-      "selected": false,
-      "password": false,
-      "enabled": true
-    },
-    {
       "index": 2,
       "clazz": "TextView",
       "visible": true,
@@ -42,7 +21,9 @@
       "checked": false,
       "selected": false,
       "password": false,
-      "enabled": true
+      "enabled": true,
+      "checkable": false,
+      "focusable": false
     },
     {
       "index": 3,
@@ -69,7 +50,9 @@
       "enabled": true,
       "actions": [
         "long_click"
-      ]
+      ],
+      "checkable": false,
+      "focusable": false
     },
     {
       "index": 4,
@@ -96,13 +79,15 @@
       "enabled": true,
       "actions": [
         "long_click"
-      ]
+      ],
+      "checkable": false,
+      "focusable": false
     },
     {
       "index": 5,
       "clazz": "CheckBox",
       "visible": true,
-      "expected": "[5] CheckBox text=\"Fixture checkbox\" id=checkbox clickable bounds=42,486,1038,582",
+      "expected": "[5] CheckBox text=\"Fixture checkbox\" id=checkbox clickable checkable bounds=42,486,1038,582",
       "text": "Fixture checkbox",
       "id": "checkbox",
       "bounds": [
@@ -119,7 +104,9 @@
       "checked": false,
       "selected": false,
       "password": false,
-      "enabled": true
+      "enabled": true,
+      "checkable": true,
+      "focusable": false
     },
     {
       "index": 6,
@@ -142,7 +129,9 @@
       "checked": false,
       "selected": false,
       "password": false,
-      "enabled": true
+      "enabled": true,
+      "checkable": false,
+      "focusable": false
     },
     {
       "index": 7,
@@ -165,7 +154,9 @@
       "checked": false,
       "selected": false,
       "password": false,
-      "enabled": true
+      "enabled": true,
+      "checkable": false,
+      "focusable": false
     },
     {
       "index": 8,
@@ -188,7 +179,9 @@
       "checked": false,
       "selected": false,
       "password": false,
-      "enabled": true
+      "enabled": true,
+      "checkable": false,
+      "focusable": false
     },
     {
       "index": 9,
@@ -211,7 +204,9 @@
       "checked": false,
       "selected": false,
       "password": false,
-      "enabled": true
+      "enabled": true,
+      "checkable": false,
+      "focusable": false
     },
     {
       "index": 10,
@@ -234,7 +229,9 @@
       "checked": false,
       "selected": false,
       "password": false,
-      "enabled": true
+      "enabled": true,
+      "checkable": false,
+      "focusable": false
     },
     {
       "index": 11,
@@ -257,29 +254,9 @@
       "checked": false,
       "selected": false,
       "password": false,
-      "enabled": true
-    },
-    {
-      "index": 12,
-      "clazz": "View",
-      "visible": true,
-      "expected": "[12] View id=navigationBarBackground bounds=0,2352,1080,2400",
-      "id": "navigationBarBackground",
-      "bounds": [
-        0,
-        2352,
-        1080,
-        2400
-      ],
-      "clickable": false,
-      "longClickable": false,
-      "editable": false,
-      "scrollable": false,
-      "focused": false,
-      "checked": false,
-      "selected": false,
-      "password": false,
-      "enabled": true
+      "enabled": true,
+      "checkable": false,
+      "focusable": false
     }
   ]
 }

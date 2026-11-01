@@ -14,6 +14,7 @@ import java.lang.reflect.*;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
 import static dev.opencu.android.Core.*;
 import dev.opencu.android.Core.Window;
@@ -69,7 +70,8 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
         info.flags|=AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS|AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS|AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS;
         automation.setServiceInfo(info);
         PersonMonitor connectedMonitor=null;String problem="";
-        try{connectedMonitor=new PersonMonitor(output);}catch(Exception e){problem=e.getMessage();}
+        long lastActivity = lastUserActivityTime();
+        try{connectedMonitor=new PersonMonitor(output, lastActivity);}catch(Exception e){problem=e.getMessage();}
         monitor=connectedMonitor;monitorProblem=problem;
         person=monitor==null?new Core.Person(SystemClock.uptimeMillis()):monitor.person;
     }
@@ -77,7 +79,15 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
         Point p=size();
         return obj("version",BuildInfo.VERSION,"sdk",Build.VERSION.SDK_INT,"uid",android.os.Process.myUid(),"pid",android.os.Process.myPid(),"uiAutomationConnected",automation.getServiceInfo()!=null,
             "display",obj("id",0,"width",p.x,"height",p.y,"rotation",displays.getDisplay(0).getRotation()),"screenOn",power.isInteractive(),"locked",keyguard.isKeyguardLocked(),"hiddenApis",hidden,
-            "personMonitor",obj("ready",monitor!=null&&monitor.ready(),"problem",monitorProblem,"devices",monitor==null?Collections.emptyList():monitor.devices,"source","getevent -lt (kernel evdev)"));
+            "personMonitor",obj("ready",monitor!=null&&monitor.ready(),"problem",monitorProblem,"devices",monitor==null?Collections.emptyList():monitor.devices,"source","getevent -lt (kernel evdev)","lastUserActivityTime",lastUserActivityTime()));
+    }
+    private long lastUserActivityTime() {
+        try {
+            return Core.lastUserActivityTime(command("dumpsys", "power"), SystemClock.uptimeMillis());
+        } catch (Exception ignored) {
+            // A conservative current timestamp keeps foreground activation fail-closed.
+        }
+        return SystemClock.uptimeMillis();
     }
     static String command(String... args) throws Exception {
         Process p=new ProcessBuilder(args).redirectErrorStream(true).start();
@@ -170,13 +180,14 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
     private void walk(AccessibilityNodeInfo n,String path,Window w,Screen s,int depth,int[] visited) {
         if(depth>60||visited[0]++>5000){s.truncated=true;return;}
         Element e=element(n,path,w.id);
+        if (e.right <= 0 || e.left >= s.width || e.bottom <= 0 || e.top >= s.height) e.visible = false;
         if(e.useful()) { e.index=s.elements.size()+1;s.elements.put(e.index,e);w.elements.add(e);nodes.put(e.index,n); }
         for(int i=0;i<n.getChildCount();i++){AccessibilityNodeInfo child=n.getChild(i);if(child!=null)walk(child,path+"/"+i,w,s,depth+1,visited);}
     }
     private Element element(AccessibilityNodeInfo n,String path,int window) {
         Element e=new Element();e.window=window;e.path=path;e.clazz=str(n.getClassName());e.text=str(n.getText());e.desc=str(n.getContentDescription());e.id=str(n.getViewIdResourceName());e.pkg=str(n.getPackageName());
         Rect b=new Rect();n.getBoundsInScreen(b);e.left=b.left;e.top=b.top;e.right=b.right;e.bottom=b.bottom;
-        e.visible=n.isVisibleToUser();e.clickable=n.isClickable();e.longClickable=n.isLongClickable();e.editable=n.isEditable();e.scrollable=n.isScrollable();e.checked=n.isChecked();e.selected=n.isSelected();e.focused=n.isFocused();e.enabled=n.isEnabled();e.password=n.isPassword();
+        e.visible=n.isVisibleToUser();e.clickable=n.isClickable();e.longClickable=n.isLongClickable();e.editable=n.isEditable();e.scrollable=n.isScrollable();e.checkable=n.isCheckable();e.checked=n.isChecked();e.selected=n.isSelected();e.focused=n.isFocused();e.focusable=n.isFocusable();e.enabled=n.isEnabled();e.password=n.isPassword();
         for(AccessibilityNodeInfo.AccessibilityAction a:n.getActionList()) {
             int id=a.getId();String label=null;
             if(id==AccessibilityNodeInfo.ACTION_COLLAPSE)label="collapse";else if(id==AccessibilityNodeInfo.ACTION_EXPAND)label="expand";else if(id==AccessibilityNodeInfo.ACTION_DISMISS)label="dismiss";
@@ -345,8 +356,15 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
             }
             default:throw fail("METHOD_NOT_FOUND","Unknown action");
         }
-        // Allow the UI thread to publish its new accessibility state; no waitForIdle global delay.
-        pause(180,token);
+        settleAfterInput(token);
+    }
+    private void settleAfterInput(long token) {
+        check(token, false);
+        try {
+            automation.waitForIdle(60, 250);
+        } catch (TimeoutException ignored) {
+            // The bounded fallback below still provides a stable observation without blocking input.
+        }
     }
     public Map<String,Object> call(String name,Map<String,Object> args) throws Exception {
         if(name.equals("list_apps"))return apps();
@@ -384,17 +402,21 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
         catch(Failure e) {coordinates=null;e=priorityFailure(e,token);if(e.code.equals("PERSON_ACTIVE")||e.code.equals("ACTION_UNCONFIRMED"))observationRequired=true;throw e;}
     }
     private Screen afterAction(Screen before,String pkg,long token) {
+        settleAfterInput(token);
         Screen current=observe(pkg);
-        if(!current.activity.equals(before.activity)) {
-            // ActivityManager can publish the new activity before Accessibility has retired
-            // the outgoing window. Do not return indexes from that transition as the new app.
-            long end=SystemClock.uptimeMillis()+800,unchanged=SystemClock.uptimeMillis();
-            String signature=windowIdentity(current)+current.lines();
-            while(SystemClock.uptimeMillis()<end&&SystemClock.uptimeMillis()-unchanged<150) {
-                pause(35,token);Screen next=observe(pkg);String value=windowIdentity(next)+next.lines();
-                if(!value.equals(signature)){signature=value;unchanged=SystemClock.uptimeMillis();}
-                current=next;
+        long end=SystemClock.uptimeMillis()+450;
+        String signature=current.fingerprint();
+        long stableSince=SystemClock.uptimeMillis();
+        while (SystemClock.uptimeMillis() < end) {
+            SystemClock.sleep(25);
+            Screen next=observe(pkg);
+            String value=next.fingerprint();
+            if (value.equals(signature) && SystemClock.uptimeMillis() - stableSince >= 50) return next;
+            if (!value.equals(signature)) {
+                signature=value;
+                stableSince=SystemClock.uptimeMillis();
             }
+            current=next;
         }
         return current;
     }

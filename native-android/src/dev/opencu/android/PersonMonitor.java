@@ -14,12 +14,13 @@ final class PersonMonitor implements AutoCloseable {
     private volatile boolean alive, closed;
     private volatile String problem="Input monitor is starting";
     final List<String> devices=new ArrayList<>();
-    PersonMonitor(Consumer<Map<String,Object>> output) throws Exception {
+    PersonMonitor(Consumer<Map<String,Object>> output, long initialActivity) throws Exception {
         String capabilities=AndroidEngine.command("/system/bin/getevent","-lp");
         if(!capabilities.contains("KEY_VOLUMEDOWN")||!capabilities.contains("ABS_MT_POSITION"))throw fail("PERSON_MONITOR_UNAVAILABLE","Cannot verify hardware touch and volume-down devices");
         for(String line:capabilities.split("\n"))if(line.startsWith("add device "))devices.add(line.substring(line.indexOf("/dev/input/")));
         if(devices.isEmpty())throw fail("PERSON_MONITOR_UNAVAILABLE","No readable input devices");
         process=new ProcessBuilder("/system/bin/getevent","-lt").redirectError(ProcessBuilder.Redirect.INHERIT).start();
+        person.lastActivity = initialActivity;
         Set<String> opened=Collections.synchronizedSet(new HashSet<>());
         Thread reader=new Thread(()->{
             try(BufferedReader r=new BufferedReader(new InputStreamReader(process.getInputStream(),StandardCharsets.UTF_8))) {
