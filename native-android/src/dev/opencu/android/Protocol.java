@@ -194,7 +194,8 @@ public final class Protocol {
         "Insert Unicode text into the currently focused Android editable node by paste first,"
             + " replacing its selected range without installing or switching a keyboard. If paste"
             + " is unavailable, the result says it used the accessibility set-text fallback; the"
-            + " final editor/app postcondition is still checked.",
+            + " final editor postcondition is still checked. App reactions may arrive later; use"
+            + " get_app_state waitForText or run_actions until to observe them.",
         false,
         props("text", string()),
         "app",

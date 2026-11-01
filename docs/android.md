@@ -110,8 +110,8 @@ content is never bypassed. Screenshots can include covering windows.
   restoring the previous clipboard when it can be read. If paste is unavailable,
   it falls back to accessibility set-text and says so in the result; the
   postcondition still has to match or the call returns `TEXT_INPUT_FAILED`. It
-  never types through the person's keyboard. The acceptance Settings search now
-  uses the touch-first click plus this paste path.
+  never types through the person's keyboard. An app reaction can arrive after
+  the text postcondition; use `waitForText` or an `until` condition to observe it.
 - `set_value`: replace an indexed editable field's entire value. Use click for
   a checkbox. The editor must actually expose `ACTION_SET_TEXT`.
 - `paste`: `format: "text"` only, using the editor's accessibility paste action.

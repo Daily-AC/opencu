@@ -13,7 +13,7 @@ import java.lang.reflect.Method;
 
 /** Clipboard access for app_process: reads use IClipboard when the framework wrapper needs a provider. */
 final class ShellClipboard {
-  private static final String SHELL_PACKAGE = "com.android.shell";
+  private final String callerPackage;
   private final ClipboardManager manager;
   private final Object service;
   private final Method getPrimaryClip;
@@ -23,6 +23,7 @@ final class ShellClipboard {
   private final Method clearPrimaryClip;
 
   ShellClipboard(Context context) {
+    callerPackage = context.getOpPackageName();
     ClipboardManager frameworkManager;
     try {
       java.lang.reflect.Constructor<ClipboardManager> constructor =
@@ -109,8 +110,8 @@ final class ShellClipboard {
     int userId = Process.myUid() / 100_000;
     try {
       if (method.getParameterTypes().length == 5)
-        method.invoke(service, clip, SHELL_PACKAGE, null, userId, 0);
-      else method.invoke(service, SHELL_PACKAGE, null, userId, 0);
+        method.invoke(service, clip, callerPackage, null, userId, 0);
+      else method.invoke(service, callerPackage, null, userId, 0);
     } catch (IllegalAccessException | InvocationTargetException e) {
       Throwable cause = e instanceof InvocationTargetException ? e.getCause() : e;
       throw new IllegalStateException("IClipboard write failed: " + cause, cause);
@@ -155,10 +156,10 @@ final class ShellClipboard {
     int userId = Process.myUid() / 100_000;
     Object[] args;
     if (method.getParameterTypes().length == 7)
-      args = new Object[] {SHELL_PACKAGE, SHELL_PACKAGE, "", null, userId, 0, false};
+      args = new Object[] {callerPackage, callerPackage, "", null, userId, 0, false};
     else if (method.getParameterTypes().length == 4)
-      args = new Object[] {SHELL_PACKAGE, null, userId, 0};
-    else args = new Object[] {SHELL_PACKAGE, null, userId};
+      args = new Object[] {callerPackage, null, userId, 0};
+    else args = new Object[] {callerPackage, null, userId};
     try {
       return method.invoke(service, args);
     } catch (IllegalAccessException | InvocationTargetException ignored) {

@@ -90,7 +90,10 @@ public final class Core {
               .append(clazz.substring(clazz.lastIndexOf('.') + 1));
       if (!text.isEmpty()) b.append(" text=").append(Json.write(password ? "<password>" : text));
       if (!desc.isEmpty()) b.append(" desc=").append(Json.write(desc));
-      if (!id.isEmpty()) b.append(" id=").append(id.replaceFirst("^.*:id/", ""));
+      if (!id.isEmpty()) {
+        int slash = id.lastIndexOf('/');
+        b.append(" id=").append(slash < 0 ? id : id.substring(slash + 1));
+      }
       if (clickable) b.append(" clickable");
       if (longClickable) b.append(" long-clickable");
       if (editable) b.append(" editable");

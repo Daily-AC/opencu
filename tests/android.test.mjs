@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const java=process.env.JAVA_HOME??'/opt/homebrew/opt/openjdk@21';
@@ -29,4 +29,18 @@ test('Android package manifest has the wanctl contract shape', () => {
   assert.equal(manifest.size, jar.length);
   assert.match(manifest.sha256, /^[0-9a-f]{64}$/);
   assert.equal(manifest.sha256, createHash('sha256').update(jar).digest('hex'));
+});
+
+test('Android engine source stays app-agnostic', () => {
+  const sourceRoot = path.join(root, 'native-android/src');
+  const files = readdirSync(sourceRoot, {recursive: true})
+    .filter(file => String(file).endsWith('.java'))
+    .map(file => path.join(sourceRoot, String(file)));
+  for (const file of files) {
+    const source = readFileSync(file, 'utf8');
+    assert.doesNotMatch(source, /com\.android\./, file);
+    assert.doesNotMatch(source, /com\.coloros|com\.oplus/, file);
+    assert.doesNotMatch(source, /:id\//, file);
+    assert.doesNotMatch(source, /[\u3400-\u9fff]/, file);
+  }
 });

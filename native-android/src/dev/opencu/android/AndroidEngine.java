@@ -107,7 +107,7 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
     Class<?> at = Class.forName("android.app.ActivityThread");
     Object activityThread = at.getMethod("systemMain").invoke(null);
     Context system = (Context) at.getMethod("getSystemContext").invoke(activityThread);
-    context = system.createPackageContext("com.android.shell", 0);
+    context = system;
     clipboard = new ShellClipboard(context);
     hidden.put("ActivityThread.systemMain/getSystemContext", true);
     taskDisplay = ActivityManager.RunningTaskInfo.class.getField("displayId");
@@ -327,17 +327,6 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
     desktopDisplay = -1;
     activeDisplay = Display.DEFAULT_DISPLAY;
     automation = mainAutomation;
-    if ("com.android.launcher".equals(mainForegroundBeforeDesktop)
-        && !"com.android.launcher".equals(foregroundOnDisplay(Display.DEFAULT_DISPLAY))) {
-      try {
-        SystemClock.sleep(200);
-        command("/system/bin/am", "start", "-a", Intent.ACTION_MAIN, "-c", Intent.CATEGORY_HOME);
-        SystemClock.sleep(100);
-        if (!"com.android.launcher".equals(foregroundOnDisplay(Display.DEFAULT_DISPLAY)))
-          command("/system/bin/am", "start", "-a", Intent.ACTION_MAIN, "-c", Intent.CATEGORY_HOME);
-      }
-      catch (Exception ignored) { }
-    }
     mainForegroundBeforeDesktop = null;
     latest = null;
     coordinates = null;
@@ -557,7 +546,6 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
       int barLimit = Math.max(120, s.height / 12);
       boolean systemBar =
           w.type == AccessibilityWindowInfo.TYPE_SYSTEM
-              && w.pkg.equals("com.android.systemui")
               && !w.focused
               && !w.active
               && windowBounds.width() >= s.width
@@ -901,8 +889,7 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
 
   private void clickElement(
       AccessibilityNodeInfo node, Element target, Screen state, String pkg, long token, int count, double seconds) {
-    if (pkg.equals("com.android.settings") && target.id.endsWith(":id/search_src_text"))
-      pause(500, token);
+    settleAfterInput(token);
     if (touchPossible(target, state)) {
       float[] point = center(target, state);
       try {
@@ -963,10 +950,7 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
                       element.focused
                           && element.editable
                           && element.path.equals(target.path)
-                          && element.id.equals(target.id)
-                          && (!pkg.equals("com.android.settings")
-                              || !target.id.endsWith(":id/search_src_text")
-                              || element.top < 350));
+                          && element.id.equals(target.id));
       if (focused) return;
       pause(50, token);
     }
@@ -1172,27 +1156,6 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
         + before.substring(Math.max(a, b));
   }
 
-  private boolean settingsSearchReacted(Screen before, Screen after) {
-    boolean resultNode =
-        after.elements.values().stream()
-            .anyMatch(
-                e ->
-                    e.pkg.equals("com.android.settings")
-                        && (e.id.endsWith(":id/breadcrumb")
-                            || e.id.endsWith(":id/search_result_recycler_view")));
-    return resultNode && !after.fingerprint().equals(before.fingerprint());
-  }
-
-  private Screen waitForSettingsSearch(Screen before, String pkg, long token) {
-    Screen after = observe(pkg);
-    long deadline = SystemClock.uptimeMillis() + 5000;
-    while (!settingsSearchReacted(before, after) && SystemClock.uptimeMillis() < deadline) {
-      pause(100, token);
-      after = observe(pkg);
-    }
-    return after;
-  }
-
   private void perform(
       String method,
       Map<String, Object> args,
@@ -1332,20 +1295,13 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
             notice =
                 "Keyboard-style text input unavailable; used accessibility set-text fallback.";
           }
-          Screen after =
-              pkg.equals("com.android.settings") && inputPath
-                  ? waitForSettingsSearch(now, pkg, token)
-                  : observe(pkg);
+          Screen after = observe(pkg);
           String actual = focusedText(after);
           boolean reacted = actual == null && after.content().contains(value);
           if (!Core.textInputSatisfied(expected, actual, reacted))
             throw fail(
                 "TEXT_INPUT_FAILED",
                 "Focused editable did not contain the requested text after input; no app reaction was observed");
-          if (pkg.equals("com.android.settings") && !settingsSearchReacted(now, after))
-            throw fail(
-                "TEXT_INPUT_FAILED",
-                "Settings kept its home list after keyboard input; the query was not committed by the editor");
           break;
         }
       case "paste":
