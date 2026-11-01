@@ -105,8 +105,14 @@ content is never bypassed. Screenshots can include covering windows.
 - `type_text`: insert Unicode at the focused editor through its input path,
   preserving the selected range. It does not install or switch a keyboard. If an
   editor cannot expose that path, it falls back to accessibility set-text and
-  says so in the result. The fixture check exercises ASCII and Chinese input
-  through an editor that ignores direct set-text.
+  says so in the result. ASCII input uses Android's shell `input text` path on
+  the active display. On the acceptance ColorOS build, that path leaves the
+  Settings home list visible and returns `TEXT_INPUT_FAILED`; non-ASCII input
+  makes the same command fail in `InputShellCommand.sendText` because the
+  virtual keyboard has no key events, so Settings returns
+  `TEXT_INPUT_UNAVAILABLE` instead of claiming that a query ran. The fixture
+  check exercises ASCII and Chinese input through an editor that ignores direct
+  set-text.
 - `set_value`: replace an indexed editable field's entire value. Use click for
   a checkbox. The editor must actually expose `ACTION_SET_TEXT`.
 - `paste`: `format: "text"` only, using the editor's accessibility paste action.

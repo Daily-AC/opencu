@@ -42,6 +42,14 @@ public final class Core {
         + " display; coordinates in later calls use this image";
   }
 
+  public static boolean textInputMatches(String expected, String actual) {
+    return expected != null && expected.equals(actual);
+  }
+
+  public static boolean textInputSatisfied(String expected, String actual, boolean appReacted) {
+    return textInputMatches(expected, actual) || appReacted;
+  }
+
   public static final class Element {
     public int index, window, left, top, right, bottom;
     public String path = "", clazz = "", text = "", desc = "", id = "", pkg = "";

@@ -191,7 +191,7 @@ public final class Protocol {
     add(
         "type_text",
         "Insert Unicode text into the currently focused Android editable node through its input"
-            + " path (clipboard paste/commit semantics), replacing its selected range. It does not"
+            + " path (shell input text for ASCII, clipboard paste for Unicode where exposed), replacing its selected range. It does not"
             + " install or switch keyboards. If that path is unavailable, the result says it used"
             + " the accessibility set-text fallback. Returns updated state.",
         false,

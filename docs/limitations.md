@@ -162,10 +162,12 @@ The measurements behind this section are in
 - Android 14/API 34 main-display and virtual-display modes are implemented. The
   fixture checks passed three consecutive rounds in each mode on the OPPO PGBM10;
   task reuse, permission activities and display lock transitions remain OEM risks.
-- Requires Android shell uid 2000 and API 34+. Unicode indexed editing, keyboard-path
-  typing, clicks, list scrolling, back, batch guards and idle EOF are covered by
-  the fixture suite. The milestone 3 device rerun is required before treating
-  keyboard behavior as accepted on OEM apps. Custom editor clipboard policy,
+- Requires Android shell uid 2000 and API 34+. Unicode indexed editing, clicks,
+  list scrolling, back, batch guards and idle EOF are covered by the fixture
+  suite. On the acceptance ColorOS Settings build, ASCII shell input leaves the
+  home list visible (`TEXT_INPUT_FAILED`) and Unicode shell input fails before
+  injection (`TEXT_INPUT_UNAVAILABLE`); keyboard behavior is not accepted on
+  OEM apps. The fixture rerun is still required. Custom editor clipboard policy,
   coordinate gestures and custom accessibility
   actions have not been verified on the owner's apps. Timings are in the evidence;
   no general app performance claim follows from these samples.

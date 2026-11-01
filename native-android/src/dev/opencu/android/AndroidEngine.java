@@ -45,6 +45,7 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
   private Capture coordinates;
   private final Map<Integer, AccessibilityNodeInfo> nodes = new HashMap<>();
   private String notice = "";
+  private String keyboardInputFailure = "";
   private boolean observationRequired;
   private VirtualDisplay virtualDisplay;
   private Surface virtualSurface;
@@ -1000,7 +1001,8 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
       throw fail("PASTE_UNSUPPORTED", "Focused editor does not expose paste");
   }
 
-  private boolean tryKeyText(AccessibilityNodeInfo n, String value, String pkg, long token) {
+  private boolean tryPlatformInputText(
+      AccessibilityNodeInfo n, String value, String pkg, long token) {
     if (!n.isEditable()) return false;
     String before = n.isShowingHintText() ? "" : str(n.getText());
     int a = n.getTextSelectionStart(), b = n.getTextSelectionEnd();
@@ -1009,33 +1011,62 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
         before.substring(0, Math.min(a, b))
             + value
             + before.substring(Math.max(a, b));
-    KeyEvent event =
-        new KeyEvent(
-            SystemClock.uptimeMillis(),
-            value,
-            KeyCharacterMap.VIRTUAL_KEYBOARD,
-            KeyEvent.FLAG_FROM_SYSTEM | KeyEvent.FLAG_SOFT_KEYBOARD);
-    event.setSource(InputDevice.SOURCE_KEYBOARD);
-    setEventDisplay(event);
     checkTarget(token, pkg);
-    boolean injected = automation.injectInputEvent(event, true);
-    check(token, false);
-    if (!injected) return false;
+    try {
+      command(
+          "/system/bin/input",
+          "-d",
+          String.valueOf(activeDisplay),
+          "text",
+          value.replace(" ", "%s"));
+      check(token, false);
+    } catch (Exception e) {
+      keyboardInputFailure = "Android input text failed: " + e.getMessage();
+      return false;
+    }
     pause(100, token);
     Screen after = observe(pkg);
     AccessibilityNodeInfo updated;
     try {
       updated = focused(after);
     } catch (Failure e) {
+      keyboardInputFailure = "The focused editable disappeared after input text";
       return false;
     }
     String actual = updated.isShowingHintText() ? "" : str(updated.getText());
-    if (expected.equals(actual)) return true;
+    if (Core.textInputMatches(expected, actual)) return true;
     if (!before.equals(actual))
       throw fail(
           "ACTION_UNCONFIRMED",
-          "Keyboard input was sent but the editor value changed unexpectedly; read state before continuing");
+          "Input text was sent but the editor value changed unexpectedly; read state before continuing");
+    keyboardInputFailure = "Android input text was accepted but the focused editor did not change";
     return false;
+  }
+
+  private String focusedText(Screen s) {
+    try {
+      AccessibilityNodeInfo n = focused(s);
+      return n.isShowingHintText() ? "" : str(n.getText());
+    } catch (Failure e) {
+      return null;
+    }
+  }
+
+  private String expectedText(AccessibilityNodeInfo n, String value) {
+    String before = n.isShowingHintText() ? "" : str(n.getText());
+    int a = n.getTextSelectionStart(), b = n.getTextSelectionEnd();
+    if (a < 0 || b < 0 || a > before.length() || b > before.length()) a = b = before.length();
+    return before.substring(0, Math.min(a, b))
+        + value
+        + before.substring(Math.max(a, b));
+  }
+
+  private boolean settingsSearchReacted(Screen before, Screen after) {
+    String content = after.content();
+    return !content.contains("WLAN")
+        && !content.contains("移动网络")
+        && !content.contains("蓝牙")
+        && !after.fingerprint().equals(before.fingerprint());
   }
 
   private void perform(
@@ -1167,7 +1198,19 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
         {
           n = focused(now);
           String value = (String) args.get("text");
-          if (!tryKeyText(n, value, pkg, token) && !tryPaste(n, value, pkg, token)) {
+          String expected = expectedText(n, value);
+          keyboardInputFailure = "";
+          boolean inputPath =
+              tryPlatformInputText(n, value, pkg, token) || tryPaste(n, value, pkg, token);
+          if (!inputPath && pkg.equals("com.android.settings"))
+            throw fail(
+                value.chars().allMatch(c -> c < 128)
+                    ? "TEXT_INPUT_FAILED"
+                    : "TEXT_INPUT_UNAVAILABLE",
+                keyboardInputFailure.isEmpty()
+                    ? "No keyboard-style input path is available for this editor"
+                    : keyboardInputFailure);
+          if (!inputPath) {
             String before = n.isShowingHintText() ? "" : str(n.getText());
             int a = n.getTextSelectionStart(), b = n.getTextSelectionEnd();
             if (a < 0 || b < 0 || a > before.length() || b > before.length())
@@ -1182,6 +1225,19 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
             notice =
                 "Keyboard-style text input unavailable; used accessibility set-text fallback.";
           }
+          Screen after = observe(pkg);
+          String actual = focusedText(after);
+          boolean reacted = actual == null && after.content().contains(value);
+          if (!Core.textInputSatisfied(expected, actual, reacted))
+            throw fail(
+                "TEXT_INPUT_FAILED",
+                "Focused editable did not contain the requested text after input; no app reaction was observed");
+          if (pkg.equals("com.android.settings")
+              && inputPath
+              && !settingsSearchReacted(now, after))
+            throw fail(
+                "TEXT_INPUT_FAILED",
+                "Settings kept its home list after keyboard input; the query was not committed by the editor");
           break;
         }
       case "paste":

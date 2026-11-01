@@ -271,6 +271,10 @@ public final class OfflineTests {
             .equals(
                 "Screenshot: 576x1280 JPEG of the 1080x2400 display; coordinates in later calls use this image"),
         "screenshot scale notice");
+    check(Core.textInputMatches("无线调试", "无线调试"), "text input postcondition matches");
+    check(!Core.textInputMatches("无线调试", "搜索设置项"), "text input postcondition rejects unchanged field");
+    check(Core.textInputSatisfied("无线调试", null, true), "app reaction satisfies text input");
+    check(!Core.textInputSatisfied("无线调试", "搜索设置项", false), "silent text input fails");
     Await deadline = new Await(loading, obj("text", "never", "timeoutMs", 350), "", 0);
     check(deadline.poll(loading, 349).equals("continue"), "wait before deadline");
     check(deadline.poll(loading, 350).equals("timeout"), "wait at deadline");
