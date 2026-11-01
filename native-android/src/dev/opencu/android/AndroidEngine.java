@@ -36,6 +36,7 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
   private final KeyguardManager keyguard;
   private final PersonMonitor monitor;
   private final Core.Person person;
+  private final ShellClipboard clipboard;
   private final String monitorProblem;
   private final Field taskDisplay;
   private final Map<String, Object> hidden = obj();
@@ -107,6 +108,7 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
     Object activityThread = at.getMethod("systemMain").invoke(null);
     Context system = (Context) at.getMethod("getSystemContext").invoke(activityThread);
     context = system.createPackageContext("com.android.shell", 0);
+    clipboard = new ShellClipboard(context);
     hidden.put("ActivityThread.systemMain/getSystemContext", true);
     taskDisplay = ActivityManager.RunningTaskInfo.class.getField("displayId");
     hidden.put("TaskInfo.displayId", true);
@@ -865,10 +867,155 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
     return new float[] {(left + right) / 2f, (top + bottom) / 2f};
   }
 
+  private boolean touchPossible(Element target, Screen s) {
+    float[] point;
+    try {
+      point = center(target, s);
+    } catch (Failure e) {
+      return false;
+    }
+    Window owner = null;
+    for (Window window : s.windows) if (window.id == target.window) owner = window;
+    if (owner == null) return false;
+    for (Window window : s.windows) {
+      if (window.layer <= owner.layer || window.id == owner.id) continue;
+      if (window.left <= point[0]
+          && point[0] < window.right
+          && window.top <= point[1]
+          && point[1] < window.bottom
+          && (window.active || window.focused || window.type != AccessibilityWindowInfo.TYPE_SYSTEM))
+        return false;
+    }
+    for (Element candidate : s.elements.values()) {
+      if (candidate.index == target.index
+          || candidate.window != target.window
+          || !candidate.path.startsWith(target.path + "/")) continue;
+      if (candidate.left <= point[0]
+          && point[0] < candidate.right
+          && candidate.top <= point[1]
+          && point[1] < candidate.bottom
+          && (candidate.clickable || candidate.editable || !candidate.desc.isEmpty())) return false;
+    }
+    return true;
+  }
+
+  private void clickElement(
+      AccessibilityNodeInfo node, Element target, Screen state, String pkg, long token, int count, double seconds) {
+    if (pkg.equals("com.android.settings") && target.id.endsWith(":id/search_src_text"))
+      pause(500, token);
+    if (touchPossible(target, state)) {
+      float[] point = center(target, state);
+      try {
+        for (int i = 0; i < count; i++) {
+          if (count == 1 && seconds == 0) shellTap(point[0], point[1], pkg, token);
+          else
+            touch(
+                point[0],
+                point[1],
+                point[0],
+                point[1],
+                seconds > 0 ? Math.max(600, (long) (seconds * 1000)) : 45,
+                pkg,
+                token);
+          if (i < count - 1) pause(70, token);
+        }
+        if (target.editable) waitForElementFocus(target, pkg, token);
+        return;
+      } catch (Failure e) {
+        if (!e.code.equals("INPUT_UNAVAILABLE")) throw e;
+      }
+    }
+    if (!node.isClickable()
+        && node.getActionList().stream()
+            .noneMatch(a -> a.getId() == AccessibilityNodeInfo.ACTION_CLICK))
+      throw fail("INPUT_UNAVAILABLE", "A touch cannot reach this element and it has no click action");
+    accessibility(node, AccessibilityNodeInfo.ACTION_CLICK, null, pkg, token);
+    notice = "Touch unavailable; used accessibility click fallback.";
+  }
+
+  private void shellTap(float x, float y, String pkg, long token) {
+    checkTarget(token, pkg);
+    try {
+      if (activeDisplay == Display.DEFAULT_DISPLAY)
+        command(
+            "/system/bin/input", "tap", Integer.toString(Math.round(x)), Integer.toString(Math.round(y)));
+      else
+        command(
+            "/system/bin/input",
+            "-d",
+            String.valueOf(activeDisplay),
+            "tap",
+            Integer.toString(Math.round(x)),
+            Integer.toString(Math.round(y)));
+    } catch (Exception e) {
+      throw fail("INPUT_UNAVAILABLE", "Android shell tap failed: " + e.getMessage());
+    }
+  }
+
+  private void waitForElementFocus(Element target, String pkg, long token) {
+    long deadline = SystemClock.uptimeMillis() + 1500;
+    while (SystemClock.uptimeMillis() < deadline) {
+      Screen current = observe(pkg);
+      boolean focused =
+          current.elements.values().stream()
+              .anyMatch(
+                  element ->
+                      element.focused
+                          && element.editable
+                          && element.path.equals(target.path)
+                          && element.id.equals(target.id)
+                          && (!pkg.equals("com.android.settings")
+                              || !target.id.endsWith(":id/search_src_text")
+                              || element.top < 350));
+      if (focused) return;
+      pause(50, token);
+    }
+  }
+
   private AccessibilityNodeInfo focused(Screen s) {
     for (Element e : s.elements.values())
       if (e.focused && e.editable && e.pkg.equals(s.target)) return nodes.get(e.index);
     throw fail("NO_FOCUSED_ELEMENT", "No focused editable field in target app");
+  }
+
+  private AccessibilityNodeInfo focusedReady(Screen initial, String pkg, long token) {
+    Screen current = initial;
+    long deadline = SystemClock.uptimeMillis() + 6000;
+    boolean touched = false;
+    while (true) {
+      try {
+        return focused(current);
+      } catch (Failure e) {
+        if (!e.code.equals("NO_FOCUSED_ELEMENT")) throw e;
+        if (SystemClock.uptimeMillis() >= deadline) {
+          Element editable =
+              current.elements.values().stream()
+                  .filter(element -> element.editable && element.pkg.equals(pkg))
+                  .findFirst()
+                  .orElse(null);
+          AccessibilityNodeInfo node = editable == null ? null : nodes.get(editable.index);
+          if (node != null && node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)) {
+            check(token, false);
+            return node;
+          }
+          throw e;
+        }
+        if (!touched) {
+          Element editable =
+              current.elements.values().stream()
+                  .filter(element -> element.editable && element.pkg.equals(pkg))
+                  .findFirst()
+                  .orElse(null);
+          if (editable != null) {
+            float[] point = center(editable, current);
+            touch(point[0], point[1], point[0], point[1], 45, pkg, token);
+            touched = true;
+          }
+        }
+        pause(100, token);
+        current = observe(pkg);
+      }
+    }
   }
 
   private void setText(AccessibilityNodeInfo n, String value, String pkg, long token) {
@@ -955,13 +1102,12 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
 
   private boolean tryPaste(AccessibilityNodeInfo n, String text, String pkg, long token) {
     if (!n.isEditable()) return false;
-    ClipboardManager clipboard =
-        (ClipboardManager) context.getSystemService(Context.CLIPBOARD_SERVICE);
     checkTarget(token, pkg);
     ClipData old;
     try {
       old = clipboard.getPrimaryClip();
     } catch (Exception e) {
+      keyboardInputFailure = "Clipboard read failed: " + e.getClass().getSimpleName();
       return false;
     }
     String marker = "OpenCU-" + UUID.randomUUID();
@@ -972,12 +1118,19 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
       try {
         clipboard.setPrimaryClip(clip);
       } catch (Exception e) {
+        keyboardInputFailure = "Clipboard write failed: " + e.getClass().getSimpleName();
         return false;
       }
       changed = true;
-      if (!n.refresh()) return false;
+      if (!n.refresh()) {
+        keyboardInputFailure = "Focused editor refresh failed before paste";
+        return false;
+      }
       checkTarget(token, pkg);
-      if (!n.performAction(AccessibilityNodeInfo.ACTION_PASTE)) return false;
+      if (!n.performAction(AccessibilityNodeInfo.ACTION_PASTE)) {
+        keyboardInputFailure = "Focused editor rejected ACTION_PASTE";
+        return false;
+      }
       check(token, false);
       pause(80, token);
       return true;
@@ -1001,48 +1154,6 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
       throw fail("PASTE_UNSUPPORTED", "Focused editor does not expose paste");
   }
 
-  private boolean tryPlatformInputText(
-      AccessibilityNodeInfo n, String value, String pkg, long token) {
-    if (!n.isEditable()) return false;
-    String before = n.isShowingHintText() ? "" : str(n.getText());
-    int a = n.getTextSelectionStart(), b = n.getTextSelectionEnd();
-    if (a < 0 || b < 0 || a > before.length() || b > before.length()) a = b = before.length();
-    String expected =
-        before.substring(0, Math.min(a, b))
-            + value
-            + before.substring(Math.max(a, b));
-    checkTarget(token, pkg);
-    try {
-      command(
-          "/system/bin/input",
-          "-d",
-          String.valueOf(activeDisplay),
-          "text",
-          value.replace(" ", "%s"));
-      check(token, false);
-    } catch (Exception e) {
-      keyboardInputFailure = "Android input text failed: " + e.getMessage();
-      return false;
-    }
-    pause(100, token);
-    Screen after = observe(pkg);
-    AccessibilityNodeInfo updated;
-    try {
-      updated = focused(after);
-    } catch (Failure e) {
-      keyboardInputFailure = "The focused editable disappeared after input text";
-      return false;
-    }
-    String actual = updated.isShowingHintText() ? "" : str(updated.getText());
-    if (Core.textInputMatches(expected, actual)) return true;
-    if (!before.equals(actual))
-      throw fail(
-          "ACTION_UNCONFIRMED",
-          "Input text was sent but the editor value changed unexpectedly; read state before continuing");
-    keyboardInputFailure = "Android input text was accepted but the focused editor did not change";
-    return false;
-  }
-
   private String focusedText(Screen s) {
     try {
       AccessibilityNodeInfo n = focused(s);
@@ -1062,11 +1173,24 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
   }
 
   private boolean settingsSearchReacted(Screen before, Screen after) {
-    String content = after.content();
-    return !content.contains("WLAN")
-        && !content.contains("移动网络")
-        && !content.contains("蓝牙")
-        && !after.fingerprint().equals(before.fingerprint());
+    boolean resultNode =
+        after.elements.values().stream()
+            .anyMatch(
+                e ->
+                    e.pkg.equals("com.android.settings")
+                        && (e.id.endsWith(":id/breadcrumb")
+                            || e.id.endsWith(":id/search_result_recycler_view")));
+    return resultNode && !after.fingerprint().equals(before.fingerprint());
+  }
+
+  private Screen waitForSettingsSearch(Screen before, String pkg, long token) {
+    Screen after = observe(pkg);
+    long deadline = SystemClock.uptimeMillis() + 5000;
+    while (!settingsSearchReacted(before, after) && SystemClock.uptimeMillis() < deadline) {
+      pause(100, token);
+      after = observe(pkg);
+    }
+    return after;
   }
 
   private void perform(
@@ -1100,16 +1224,8 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
         {
           int count = ((Number) args.getOrDefault("click_count", 1)).intValue();
           double seconds = ((Number) args.getOrDefault("duration", 0)).doubleValue();
-          if (n != null && count == 1 && seconds == 0) {
-            int action =
-                n.isClickable()
-                    ? AccessibilityNodeInfo.ACTION_CLICK
-                    : n.isEditable() ? AccessibilityNodeInfo.ACTION_FOCUS : 0;
-            if (action != 0) accessibility(n, action, null, pkg, token);
-            else {
-              float[] p = center(old, now);
-              touch(p[0], p[1], p[0], p[1], 45, pkg, token);
-            }
+          if (n != null) {
+            clickElement(n, old, now, pkg, token, count, seconds);
           } else {
             float[] p = n == null ? point(args, "x", "y", cap, now) : center(old, now);
             for (int i = 0; i < count; i++) {
@@ -1196,20 +1312,11 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
         break;
       case "type_text":
         {
-          n = focused(now);
+          n = focusedReady(now, pkg, token);
           String value = (String) args.get("text");
           String expected = expectedText(n, value);
           keyboardInputFailure = "";
-          boolean inputPath =
-              tryPlatformInputText(n, value, pkg, token) || tryPaste(n, value, pkg, token);
-          if (!inputPath && pkg.equals("com.android.settings"))
-            throw fail(
-                value.chars().allMatch(c -> c < 128)
-                    ? "TEXT_INPUT_FAILED"
-                    : "TEXT_INPUT_UNAVAILABLE",
-                keyboardInputFailure.isEmpty()
-                    ? "No keyboard-style input path is available for this editor"
-                    : keyboardInputFailure);
+          boolean inputPath = tryPaste(n, value, pkg, token);
           if (!inputPath) {
             String before = n.isShowingHintText() ? "" : str(n.getText());
             int a = n.getTextSelectionStart(), b = n.getTextSelectionEnd();
@@ -1225,16 +1332,17 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
             notice =
                 "Keyboard-style text input unavailable; used accessibility set-text fallback.";
           }
-          Screen after = observe(pkg);
+          Screen after =
+              pkg.equals("com.android.settings") && inputPath
+                  ? waitForSettingsSearch(now, pkg, token)
+                  : observe(pkg);
           String actual = focusedText(after);
           boolean reacted = actual == null && after.content().contains(value);
           if (!Core.textInputSatisfied(expected, actual, reacted))
             throw fail(
                 "TEXT_INPUT_FAILED",
                 "Focused editable did not contain the requested text after input; no app reaction was observed");
-          if (pkg.equals("com.android.settings")
-              && inputPath
-              && !settingsSearchReacted(now, after))
+          if (pkg.equals("com.android.settings") && !settingsSearchReacted(now, after))
             throw fail(
                 "TEXT_INPUT_FAILED",
                 "Settings kept its home list after keyboard input; the query was not committed by the editor");

@@ -93,7 +93,11 @@ Changed display geometry/rotation or window identity invalidates it. Secure
 content is never bypassed. Screenshots can include covering windows.
 
 - `click`: observed `element_index` or both `x,y`; `click_count` 1–3; positive
-  `duration` holds a touch for at least the platform long-press interval.
+  `duration` holds a touch for at least the platform long-press interval. Indexed
+  clicks inject a touch at the visible center first, so Android views that only
+  enter a mode on real touch behave like a person's tap. Accessibility click is
+  used only when the center is covered/off-screen or touch injection is unavailable,
+  and the returned state says so.
 - `drag`: `from_x,from_y,to_x,to_y` from the fresh image, on the active display
   (display 0 unless `agent_desktop` is started).
 - `scroll`: observed scrollable element or image point; up/down/left/right and
@@ -102,17 +106,12 @@ content is never bypassed. Screenshots can include covering windows.
   returns the current state and a notice instead of `ACTION_UNCONFIRMED`.
 - `press_key`: back, home, enter/Return, delete/backspace, tab, recents/app_switch,
   search. No volume, power, arbitrary keycodes or modifier chords.
-- `type_text`: insert Unicode at the focused editor through its input path,
-  preserving the selected range. It does not install or switch a keyboard. If an
-  editor cannot expose that path, it falls back to accessibility set-text and
-  says so in the result. ASCII input uses Android's shell `input text` path on
-  the active display. On the acceptance ColorOS build, that path leaves the
-  Settings home list visible and returns `TEXT_INPUT_FAILED`; non-ASCII input
-  makes the same command fail in `InputShellCommand.sendText` because the
-  virtual keyboard has no key events, so Settings returns
-  `TEXT_INPUT_UNAVAILABLE` instead of claiming that a query ran. The fixture
-  check exercises ASCII and Chinese input through an editor that ignores direct
-  set-text.
+- `type_text`: paste through the focused editor first, preserving Unicode and
+  restoring the previous clipboard when it can be read. If paste is unavailable,
+  it falls back to accessibility set-text and says so in the result; the
+  postcondition still has to match or the call returns `TEXT_INPUT_FAILED`. It
+  never types through the person's keyboard. The acceptance Settings search now
+  uses the touch-first click plus this paste path.
 - `set_value`: replace an indexed editable field's entire value. Use click for
   a checkbox. The editor must actually expose `ACTION_SET_TEXT`.
 - `paste`: `format: "text"` only, using the editor's accessibility paste action.

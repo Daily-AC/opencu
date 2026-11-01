@@ -164,10 +164,9 @@ The measurements behind this section are in
   task reuse, permission activities and display lock transitions remain OEM risks.
 - Requires Android shell uid 2000 and API 34+. Unicode indexed editing, clicks,
   list scrolling, back, batch guards and idle EOF are covered by the fixture
-  suite. On the acceptance ColorOS Settings build, ASCII shell input leaves the
-  home list visible (`TEXT_INPUT_FAILED`) and Unicode shell input fails before
-  injection (`TEXT_INPUT_UNAVAILABLE`); keyboard behavior is not accepted on
-  OEM apps. The fixture rerun is still required. Custom editor clipboard policy,
+  suite. Settings on the acceptance ColorOS build requires a real touch to enter
+  search mode; the engine now uses touch-first clicks and direct shell clipboard
+  reads for paste. Custom editor clipboard policy,
   coordinate gestures and custom accessibility
   actions have not been verified on the owner's apps. Timings are in the evidence;
   no general app performance claim follows from these samples.
