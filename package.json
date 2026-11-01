@@ -11,7 +11,9 @@
     "build:win": "node scripts/build-win.mjs",
     "package:win": "python3 scripts/package-win.py",
     "build:linux": "node scripts/build-linux.mjs",
-    "package:linux": "python3 scripts/package-linux.py"
+    "package:linux": "python3 scripts/package-linux.py",
+    "build:android": "node scripts/build-android.mjs",
+    "test:android": "node --test tests/android.test.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.32.1",

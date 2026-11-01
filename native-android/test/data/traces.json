@@ -1,0 +1,59 @@
+[
+  {
+    "name": "AOSP documented two-finger getevent recording",
+    "source": "https://source.android.com/docs/core/interaction/input/getevent",
+    "adaptation": "Added /dev/input/event1 prefix used by getevent when monitoring all devices; timestamps and event payloads unchanged.",
+    "stopped": false,
+    "expectActivity": true,
+    "lines": [
+      "[   78826.389007] /dev/input/event1: EV_ABS       ABS_MT_TRACKING_ID   0000001f",
+      "[   78826.389038] /dev/input/event1: EV_ABS       ABS_MT_PRESSURE      000000ab",
+      "[   78826.389038] /dev/input/event1: EV_ABS       ABS_MT_POSITION_X    000000ab",
+      "[   78826.389068] /dev/input/event1: EV_ABS       ABS_MT_POSITION_Y    0000025b",
+      "[   78826.389068] /dev/input/event1: EV_ABS       ABS_MT_SLOT          00000001",
+      "[   78826.389068] /dev/input/event1: EV_ABS       ABS_MT_TRACKING_ID   00000020",
+      "[   78826.389068] /dev/input/event1: EV_ABS       ABS_MT_PRESSURE      000000b9",
+      "[   78826.389099] /dev/input/event1: EV_ABS       ABS_MT_POSITION_X    0000019e",
+      "[   78826.389099] /dev/input/event1: EV_ABS       ABS_MT_POSITION_Y    00000361",
+      "[   78826.389099] /dev/input/event1: EV_SYN       SYN_REPORT           00000000",
+      "[   78826.468688] /dev/input/event1: EV_ABS       ABS_MT_SLOT          00000000",
+      "[   78826.468688] /dev/input/event1: EV_ABS       ABS_MT_TRACKING_ID   ffffffff",
+      "[   78826.468719] /dev/input/event1: EV_ABS       ABS_MT_SLOT          00000001",
+      "[   78826.468719] /dev/input/event1: EV_ABS       ABS_MT_TRACKING_ID   ffffffff",
+      "[   78826.468719] /dev/input/event1: EV_SYN       SYN_REPORT           00000000"
+    ]
+  },
+  {
+    "name": "touch and ordinary key (generated evdev-format fixture)",
+    "stopped": false,
+    "lines": [
+      "[ 100.000000] /dev/input/event2: EV_ABS ABS_MT_TRACKING_ID 00000001",
+      "[ 100.000001] /dev/input/event2: EV_ABS ABS_MT_POSITION_X 000000ab",
+      "[ 100.000002] /dev/input/event2: EV_KEY BTN_TOUCH DOWN",
+      "[ 100.100000] /dev/input/event2: EV_KEY BTN_TOUCH UP",
+      "[ 100.100001] /dev/input/event2: EV_ABS ABS_MT_TRACKING_ID ffffffff"
+    ]
+  },
+  {
+    "name": "volume triple (generated; real gesture reserved for owner)",
+    "stopped": true,
+    "lines": [
+      "[ 200.000000] /dev/input/event1: EV_KEY KEY_VOLUMEDOWN DOWN",
+      "[ 200.020000] /dev/input/event1: EV_KEY KEY_VOLUMEDOWN UP",
+      "[ 200.500000] /dev/input/event1: EV_KEY KEY_VOLUMEDOWN DOWN",
+      "[ 200.520000] /dev/input/event1: EV_KEY KEY_VOLUMEDOWN UP",
+      "[ 201.200000] /dev/input/event1: EV_KEY KEY_VOLUMEDOWN DOWN",
+      "[ 201.220000] /dev/input/event1: EV_KEY KEY_VOLUMEDOWN UP"
+    ]
+  },
+  {
+    "name": "volume hold repeat (generated)",
+    "stopped": false,
+    "lines": [
+      "[ 200.000000] /dev/input/event1: EV_KEY KEY_VOLUMEDOWN DOWN",
+      "[ 200.300000] /dev/input/event1: EV_KEY KEY_VOLUMEDOWN REPEAT",
+      "[ 200.500000] /dev/input/event1: EV_KEY KEY_VOLUMEDOWN REPEAT",
+      "[ 200.800000] /dev/input/event1: EV_KEY KEY_VOLUMEDOWN UP"
+    ]
+  }
+]
