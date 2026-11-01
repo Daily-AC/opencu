@@ -162,6 +162,14 @@ public final class Core {
       return b.toString();
     }
 
+    public String waitContent() {
+      StringBuilder b = new StringBuilder();
+      for (Element e : elements.values())
+        if (!e.password && !(e.focused && e.editable))
+          b.append(e.text).append('\n').append(e.desc).append('\n');
+      return b.toString();
+    }
+
     public String text() {
       StringBuilder b =
           new StringBuilder("Foreground: ")
@@ -207,7 +215,7 @@ public final class Core {
    * A stable condition means unchanged observable state for 400 ms. All predicates are conjunctive.
    */
   public static boolean until(Map<String, Object> u, Screen s, long stableMs) {
-    String text = s.content();
+    String text = s.waitContent();
     return (!u.containsKey("text") || text.contains((String) u.get("text")))
         && (!u.containsKey("gone") || !text.contains((String) u.get("gone")))
         && (!u.containsKey("app") || s.foreground.equals(u.get("app")))

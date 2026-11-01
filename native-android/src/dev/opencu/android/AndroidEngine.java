@@ -1357,7 +1357,7 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
       if (args.containsKey("waitForText")) {
         long start = SystemClock.uptimeMillis(),
             limit = ((Number) args.getOrDefault("waitTimeoutMs", 5000)).longValue();
-        while (!s.content().contains((String) args.get("waitForText"))) {
+        while (!s.waitContent().contains((String) args.get("waitForText"))) {
           if (SystemClock.uptimeMillis() - start >= limit) {
             Map<String, Object> r = checkedResult(s, screenshot, inputCall, token);
             r.put("isError", true);

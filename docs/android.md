@@ -112,6 +112,8 @@ content is never bypassed. Screenshots can include covering windows.
   postcondition still has to match or the call returns `TEXT_INPUT_FAILED`. It
   never types through the person's keyboard. An app reaction can arrive after
   the text postcondition; use `waitForText` or an `until` condition to observe it.
+  These waits search visible non-editor content, so the editor's own newly typed
+  value does not satisfy a reaction wait by itself.
 - `set_value`: replace an indexed editable field's entire value. Use click for
   a checkbox. The editor must actually expose `ACTION_SET_TEXT`.
 - `paste`: `format: "text"` only, using the editor's accessibility paste action.
