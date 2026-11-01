@@ -244,6 +244,9 @@ public final class OfflineTests {
             "stable",
             true);
     check(!Core.until(until, loading, 1000), "loading fails conjunctive condition");
+    Screen focusedText = screen(app, "无线调试", 10);
+    focusedText.elements.get(1).focused = true;
+    check(!Core.until(obj("text", "无线调试"), focusedText, 0), "wait text ignores focused editor value");
     check(!Core.until(until, ready, 399), "not stable yet");
     check(Core.until(until, ready, 400), "all predicates hold");
     ready.windows.get(0).title = "needle";
