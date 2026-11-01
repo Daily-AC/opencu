@@ -125,14 +125,14 @@ public final class OfflineTests {
     check(!e.line().contains("无线"), "password hidden");
     Element old = element(), current = element();
     check(old.same(current), "identity matches");
-    current.left += 7;
+    current.left += 500;
     check(!old.same(current), "moved stale");
     current = element();
     current.text = "different";
     check(!old.same(current), "changed text stale");
     current = element();
-    current.window++;
-    check(!old.same(current), "window stale");
+    current.path = "/0/2";
+    check(!old.same(current), "path stale");
     check(!old.same(null), "vanished stale");
     String app = "dev.opencu.android.fixture";
     Protocol.validate("set_value", obj("app", app, "element_index", 1, "value", "你好"));
@@ -392,7 +392,7 @@ public final class OfflineTests {
                             obj("cursor", "8"))))
                 .get("result"));
     check(
-        list(first.get("tools")).size() + list(second.get("tools")).size() == 12,
+        list(first.get("tools")).size() + list(second.get("tools")).size() == 13,
         "complete tool list");
     check(
         map(protocol

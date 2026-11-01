@@ -157,11 +157,11 @@ The measurements behind this section are in
   when the connection ends unless a clipboard manager keeps it.
 - `scope` is not supported yet.
 
-## Android (milestone 1)
+## Android (milestones 1 and 2)
 
-- Main display only; no virtual-display `agent_desktop`. Foreground/input safety
-  is part of the engine. All nine fixture checks passed three consecutive rounds
-  on the OPPO PGBM10 after the owner completed OEM installation confirmation.
+- Android 14/API 34 main-display and virtual-display modes are implemented. The
+  fixture checks passed three consecutive rounds in each mode on the OPPO PGBM10;
+  task reuse, permission activities and display lock transitions remain OEM risks.
 - Requires Android shell uid 2000 and API 34+. Unicode indexed editing, clicks,
   list scrolling, back, batch guards and idle EOF are verified on the fixture.
   Clipboard behavior, focused typing, coordinate gestures and custom accessibility
@@ -179,8 +179,9 @@ The measurements behind this section are in
 - Unicode uses accessible editable fields; custom editors and opaque content
   may not expose enough information. There is no OCR or keyboard replacement.
   No scope/select_text, arbitrary keycodes, power/volume tool keys or rich paste.
-- Screenshots cover the full main display, including overlays, and use scaled
-  JPEG coordinates. Secure windows are not bypassed. Window polling can miss
+- Screenshots cover the full active display, including overlays, and use scaled
+  JPEG coordinates. The accepted virtual display uses local IME policy and
+  display-targeted input; external displays and other OEM builds are untested. Secure windows are not bypassed. Window polling can miss
   transient overlays entirely between reads; OEM permission activities may be
   reported as `app_switched` rather than `system_dialog`.
 

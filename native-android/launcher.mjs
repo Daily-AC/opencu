@@ -30,7 +30,10 @@ try{
     try {run(['push',jar,temp]);run(['shell','-T',`test "$(sha256sum '${temp}' | cut -d ' ' -f 1)" = '${digest}' && chmod 644 '${temp}' && mv '${temp}' '${remote}'`]);}
     finally{run(['shell','-T',`rm -f '${temp}'`]);}
   }
-  const child=spawn(adb,[...prefix,'shell','-T',`CLASSPATH='${remote}' exec app_process / dev.opencu.android.Main ${mode}`],{stdio:['pipe','inherit','inherit']});
+  const idleEnv = process.env.OPENCU_ANDROID_IDLE_MS
+    ? `OPENCU_ANDROID_IDLE_MS='${process.env.OPENCU_ANDROID_IDLE_MS.replace(/'/g, "'\\''")}' `
+    : '';
+  const child=spawn(adb,[...prefix,'shell','-T',`${idleEnv}CLASSPATH='${remote}' exec app_process / dev.opencu.android.Main ${mode}`],{stdio:['pipe','inherit','inherit']});
   process.stdin.pipe(child.stdin);
   child.stdin.on('error',e=>{if(e.code!=='EPIPE')console.error(e.message);});
   for(const signal of ['SIGINT','SIGTERM','SIGHUP'])process.on(signal,()=>{child.stdin.end();setTimeout(()=>child.kill(signal),1500).unref();});

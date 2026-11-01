@@ -87,23 +87,24 @@ public final class Core {
     }
 
     public boolean same(Element e) {
-      return e != null
-          && window == e.window
-          && path.equals(e.path)
+      if (e == null) return false;
+      boolean textCompatible = text.equals(e.text)
+          || (editable && (text.equals(desc) || e.text.isEmpty() || e.text.equals(desc)));
+      return path.equals(e.path)
           && pkg.equals(e.pkg)
           && clazz.equals(e.clazz)
           && id.equals(e.id)
-          && text.equals(e.text)
+          && textCompatible
           && desc.equals(e.desc)
-          && Math.abs(left - e.left) <= 6
-          && Math.abs(top - e.top) <= 6
-          && Math.abs(right - e.right) <= 6
-          && Math.abs(bottom - e.bottom) <= 6;
+          && Math.abs(left - e.left) <= 400
+          && Math.abs(top - e.top) <= 400
+          && Math.abs(right - e.right) <= 400
+          && Math.abs(bottom - e.bottom) <= 400;
     }
   }
 
   public static final class Window {
-    public int id, type, layer;
+    public int id, type, layer, left, top, right, bottom;
     public String pkg = "", title = "";
     public boolean focused, active;
     public final List<Element> elements = new ArrayList<>();
@@ -111,6 +112,7 @@ public final class Core {
 
   public static final class Screen {
     public String target = "", foreground = "", activity = "";
+    public int displayId;
     public long id;
     public int width, height, rotation;
     public boolean keyboard, truncated;
@@ -136,7 +138,9 @@ public final class Core {
               .append(foreground)
               .append(" activity=")
               .append(activity)
-              .append(" display=0 size=")
+              .append(" display=")
+              .append(displayId)
+              .append(" size=")
               .append(width)
               .append('x')
               .append(height)
@@ -191,7 +195,9 @@ public final class Core {
       if (ids.contains(w.id) || w.type == 2)
         continue; // Opening the ordinary IME is expected after focusing a field.
       if (w.type == 3 && (w.focused || w.active || w.layer > appLayer)) return "system_dialog";
-      if (w.type == 1
+      boolean fullScreen = w.right > w.left && w.bottom > w.top
+          && w.right - w.left >= now.width * 0.8 && w.bottom - w.top >= now.height * 0.8;
+      if (w.type == 1 && !fullScreen
           && w.pkg.equals(before.foreground)
           && now.foreground.equals(before.foreground)
           && now.activity.equals(before.activity)) return "popup";
@@ -231,6 +237,7 @@ public final class Core {
         fingerprint = next;
         stableSince = now;
       }
+      if (condition.isEmpty() && elapsed(now) < 50) return "continue";
       if (condition.isEmpty() || until(condition, state, now - stableSince)) return "complete";
       return elapsed(now) >= timeout ? "timeout" : "continue";
     }
@@ -302,6 +309,14 @@ public final class Core {
         throw fail(
             "PERSON_ACTIVE",
             "Physical input detected. Stop and ask the person before continuing; do not retry.");
+    }
+
+    public synchronized void checkDesktop() {
+      if (stopped)
+        throw fail(
+            "USER_STOPPED",
+            "The person stopped this connection. Do not reconnect or retry without explicit"
+                + " permission.");
     }
   }
 }

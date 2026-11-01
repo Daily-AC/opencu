@@ -11,9 +11,9 @@ import { fileURLToPath } from 'node:url';
 import { Client,text,index,ok } from '../native-android/test/client.mjs';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const pkg='dev.opencu.android.fixture';
-let serial,keep=false;
+let serial,keep=false,desktop=false,idleMs,idleMode=false;
 const args=process.argv.slice(2);
-for(let i=0;i<args.length;i++){if(args[i]==='--serial'&&args[i+1])serial=args[++i];else if(args[i]==='--keep')keep=true;else throw new Error('Usage: verify-android.mjs [--serial S] [--keep]');}
+for(let i=0;i<args.length;i++){if(args[i]==='--serial'&&args[i+1])serial=args[++i];else if(args[i]==='--keep')keep=true;else if(args[i]==='--desktop')desktop=true;else if(args[i]==='--idle-ms'&&args[i+1])idleMs=Number(args[++i]);else throw new Error('Usage: verify-android.mjs [--serial S] [--keep] [--desktop] [--idle-ms N]');}
 const sdk=process.env.ANDROID_HOME??process.env.ANDROID_SDK_ROOT??path.join(os.homedir(),'Library/Android/sdk');
 const adb=process.env.ADB??path.join(sdk,'platform-tools/adb');
 function adbRaw(args,timeout=30000){const r=spawnSync(adb,args,{encoding:'utf8',timeout,maxBuffer:4*1024*1024});if(r.error)throw r.error;if(r.status!==0)throw new Error(`adb failed: ${r.stderr||r.stdout}`);return r.stdout.trim();}
@@ -23,13 +23,13 @@ const shell=(...args)=>device('shell','-T',...args);
 const sha=file=>createHash('sha256').update(readFileSync(file)).digest('hex');
 function awake(){const power=shell('dumpsys power'),policy=shell('dumpsys window policy');assert.match(power,/mWakefulness=Awake\b/,'Phone screen is off. No wake/unlock attempted.');assert.match(policy,/\bshowing=false\b/,'Phone is locked or lock status is unknown.');}
 function foreground(){return shell('dumpsys activity activities').match(/topResumedActivity=ActivityRecord\{[^\n]*?\s([\w.]+)\//)?.[1];}
-function fixtureFront(){assert.equal(personStopped,false,'Physical stop latched; no further operation or reconnection');awake();assert.equal(foreground(),pkg,'A different app came forward; stop without reading or operating it.');}
+function fixtureFront(){assert.equal(personStopped,false,'Physical stop latched; no further operation or reconnection');awake();assert.equal(foreground(),desktop?'com.android.launcher':pkg,'A different app came forward; stop without reading or operating it.');}
 function enginePids(){return shell('ps -A -o PID,ARGS').split('\n').filter(l=>/^\s*\d+\s+(?:app_process(?:32|64)?\s|dev\.opencu\.android\.Main)/.test(l)&&l.includes('dev.opencu.android.Main')).map(l=>l.trim().split(/\s+/)[0]);}
 const truth=()=>JSON.parse(shell('run-as',pkg,'cat','files/truth.json'));
-const evidence={schema:1,date:new Date().toISOString(),milestone:1,device:{model:device('shell','getprop','ro.product.model'),sdk:Number(device('shell','getprop','ro.build.version.sdk'))},version:JSON.parse(readFileSync(path.join(root,'package.json'))).version,engineSha256:sha(path.join(root,'.build/android/opencu-android.jar')),fixtureSha256:sha(path.join(root,'.build/android/opencu-fixture.apk')),runs:[],timings:{},manual:{physicalTripleVolumeDown:'not performed; owner follow-up',physicalInterruption:'not performed; owner follow-up',lockRefusal:'logic checked; no lock/wake/unlock performed'},transcript:{},cleanup:{}};
+const evidence={schema:1,date:new Date().toISOString(),milestone:desktop?2:1,desktop,device:{model:device('shell','getprop','ro.product.model'),sdk:Number(device('shell','getprop','ro.build.version.sdk'))},milestone1Baseline:desktop?{textReadMedianMs:272,indexedClickMedianMs:481,screenshotMedianMs:763,batchPlainClickStepMedianMs:232}:null,version:JSON.parse(readFileSync(path.join(root,'package.json'))).version,engineSha256:sha(path.join(root,'.build/android/opencu-android.jar')),fixtureSha256:sha(path.join(root,'.build/android/opencu-fixture.apk')),runs:[],timings:{},manual:{physicalTripleVolumeDown:'not performed; owner follow-up',physicalInterruption:'not performed; owner follow-up',lockRefusal:'logic checked; no lock/wake/unlock performed'},transcript:{},cleanup:{}};
 let client,installed=false,personStopped=false;
 const originalPids=enginePids();
-function connect(){assert.equal(personStopped,false,'Do not reconnect after a person stop');const c=new Client(root,serial);c.onStop=()=>{personStopped=true;};return c;}
+function connect(){assert.equal(personStopped,false,'Do not reconnect after a person stop');const c=new Client(root,serial,{env:idleMode&&idleMs?{OPENCU_ANDROID_IDLE_MS:String(idleMs)}:{}});c.onStop=()=>{personStopped=true;};return c;}
 function guard(result){if(['PERSON_ACTIVE','USER_STOPPED'].includes(result?._meta?.['opencu/error']))personStopped=true;return result;}
 async function call(name,arguments_={}){fixtureFront();return guard(await client.call(name,{app:pkg,...arguments_}));}
 async function read(){return ok(await call('get_app_state'));}
@@ -51,11 +51,22 @@ try{
   assert.equal(foreground(),'com.android.launcher','Fresh launch check must begin on the launcher');
   for(let run=1;run<=3;run++){
     awake();assert.ok([pkg,'com.android.launcher'].includes(foreground()),'Unexpected app before fixture run');
-    client=connect();const init=await client.initialize();const tools=await client.tools();assert.equal(tools.length,12);
+    client=connect();const init=await client.initialize();const tools=await client.tools();assert.equal(tools.length,desktop?13:13);
+    let desktopStart=null;
+    if(desktop){
+      const mainBefore=foreground();
+      desktopStart=ok(await client.call('agent_desktop',{action:'start'}));
+      assert.equal(foreground(),mainBefore,'Agent display start changed display 0 focus');
+      evidence.desktopFlags=desktopStart;
+    }
     // The engine seeds its activity guard from PowerManager's last physical activity.
     // There is deliberately no connection-start sleep here.
     awake();
     let s=ok(guard(await client.call('get_app_state',{app:pkg})));fixtureFront();
+    if (desktop) {
+      await delay(1500);
+      s=ok(guard(await client.call('get_app_state',{app:pkg})));
+    }
     const checks=[];evidence.runs.push({run,checks});
     if(run===1){
       checks.push({name:'fresh_connection_open',pass:true,foreground:foreground(),elapsedMs:0});
@@ -115,7 +126,34 @@ try{
       const end=await client.close();client=null;assert.ok(end.elapsedMs<=2000);const left=enginePids();assert.ok(own.every(pid=>!left.includes(pid)));return {...end,leftoverEngineProcesses:0};
     },checks);
   }
+  if (desktop) {
+    evidence.desktopLifecycle=[];
+    for (let cycle=1; cycle<=3; cycle++) {
+      const stopClient=connect();
+      await stopClient.initialize();
+      const before=foreground();
+      await ok(await stopClient.call('agent_desktop',{action:'start'}));
+      assert.equal(foreground(),before);
+      await ok(await stopClient.call('agent_desktop',{action:'stop'}));
+      assert.equal(foreground(),before);
+      evidence.desktopLifecycle.push({cycle,stop:true,mainForeground:before});
+      await stopClient.close();
+      idleMode=true;
+      const idleClient=connect();
+      await idleClient.initialize();
+      await ok(await idleClient.call('agent_desktop',{action:'start'}));
+      await delay((idleMs||1000)+250);
+      const idleResult=guard(await idleClient.call('list_apps'));
+      assert.equal(idleResult._meta?.['opencu/error'],'AGENT_DESKTOP_IDLE_STOPPED');
+      assert.equal(foreground(),before);
+      evidence.desktopLifecycle[evidence.desktopLifecycle.length-1].idleStopped=true;
+      await idleClient.close();
+      idleMode=false;
+    }
+  }
+  if (desktop) await delay(1000);
   // Each metric has ten independent samples; startup includes launcher, cache hash, adb, initialize and first tools/list page.
+  if (!desktop) {
   const startSamples=[],reads=[],clicks=[],screenshots=[];
   for(let i=0;i<10;i++){
     fixtureFront();client=connect();await client.initialize();await client.request('tools/list');startSamples.push(performance.now()-client.started);
@@ -125,8 +163,20 @@ try{
     const image=s.content.find(c=>c.type==='image');assert.equal(image.mimeType,'image/jpeg');assert.ok(Math.max(s._meta['opencu/screenshot'].width,s._meta['opencu/screenshot'].height)<=1280);
     await client.close();client=null;
   }
-  const median=values=>{const a=[...values].sort((a,b)=>a-b);return(a[4]+a[5])/2;};
+  const median=values=>{const a=[...values].sort((a,b)=>a-b);const m=Math.floor(a.length/2);return a.length%2?a[m]:(a[m-1]+a[m])/2;};
   for(const [name,samples,targetMs]of[['startToFirstToolsList',startSamples,null],['textRead',reads,300],['indexedClickWithState',clicks,800],['screenshotRead',screenshots,800]])evidence.timings[name]={samplesMs:samples,medianMs:median(samples),targetMs,meetsTarget:targetMs===null?null:median(samples)<=targetMs};
+  const batchStepSamples=[];
+  for(let i=0;i<10;i++){
+    fixtureFront();client=connect();await client.initialize();let state=ok(await client.call('get_app_state',{app:pkg}));
+    const actions=Array.from({length:10},()=>({method:'click',element_index:index(state,'id=checkbox ')}));
+    const started=performance.now();const batch=ok(await client.call('run_actions',{app:pkg,actions}));
+    batchStepSamples.push((performance.now()-started)/10);assert.equal(batch._meta['opencu/batch'].completed,10);await client.close();client=null;
+  }
+  evidence.timings.batchPlainClickStep={samplesMs:batchStepSamples,medianMs:median(batchStepSamples),targetMs:250,meetsTarget:median(batchStepSamples)<=250};
+  evidence.settleBudgetMs={waitForIdle:{idleTimeoutMs:30,globalTimeoutMs:180},initialRead:{deadlineMs:700,unchangedWindowMs:150},normalRead:{deadlineMs:300,unchangedWindowMs:50},actionRead:{deadlineMs:450,unchangedWindowMs:50}};
+  const formSizes=evidence.runs.flatMap(run=>run.checks.filter(check=>check.name==='form_ascii_unicode_checkbox').map(check=>check.stateBytes));
+  evidence.stateSize={fixtureFormBytesAfter:formSizes,fixtureFormBytesBeforeLeanFilter:1213,medianAfter:formSizes.length?median(formSizes):null,deltaBytes:formSizes.length?median(formSizes)-1213:null};
+  }
   evidence.pass=true;
 }catch(error){evidence.pass=false;evidence.failure=error.message.split("\n")[0];mkdirSync(path.join(root,".cache/android"),{recursive:true});writeFileSync(path.join(root,".cache/android/verify-failure.log"),error.stack+"\n");console.error(error.stack);process.exitCode=1;}
 finally{

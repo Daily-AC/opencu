@@ -85,3 +85,15 @@ acceptance on real apps shows it is needed.
 - The shell identity can do much more than the tools expose. The engine opens
   no port and takes commands only from the process that started it; hosts keep
   their own approval rules.
+
+## Implementation findings from milestone 2
+
+On the accepted OPPO PGBM10 (Android 14), shell can create a trusted,
+own-focus virtual display with the main display's size and density. ColorOS
+allows only one registered `UiAutomation` service per shell process, so the
+engine disconnects its main-display automation while the agent desktop is
+active, binds a second connection to the owned display, and reconnects the main
+display on stop. This differs from the initial implementation assumption that
+one connection could query all displays reliably; the all-displays overload
+returned no virtual-display windows on this device. The desktop uses local IME
+policy and display-targeted input, and reports the flags actually obtained.

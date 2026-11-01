@@ -2,9 +2,9 @@ import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { performance } from 'node:perf_hooks';
 export class Client {
-  constructor(root,serial) {
+  constructor(root,serial,options={}) {
     this.started=performance.now();this.next=1;this.pending=new Map();this.stderr='';this.notifications=[];this.stopped=false;
-    this.process=spawn(`${root}/bin/opencu`,['android',...(serial?['--serial',serial]:[])],{cwd:root,stdio:['pipe','pipe','pipe']});
+    this.process=spawn(`${root}/bin/opencu`,['android',...(serial?['--serial',serial]:[])],{cwd:root,stdio:['pipe','pipe','pipe'],env:{...process.env,...(options.env||{})}});
     this.lines=createInterface({input:this.process.stdout});
     this.process.stderr.on('data',b=>{this.stderr+=b.toString();});
     this.lines.on('line',line=>{try{const r=JSON.parse(line);if(r.method){this.notifications.push(r);if(r.params?.data?.error?.code==='USER_STOPPED'){this.stopped=true;this.onStop?.();}return;}const p=this.pending.get(r.id);if(!p)throw new Error(`Unexpected response: ${line}`);this.pending.delete(r.id);clearTimeout(p.timer);if(r.error)p.reject(new Error(JSON.stringify(r.error)));else p.resolve(r.result);}catch(e){this.fail(e);}});

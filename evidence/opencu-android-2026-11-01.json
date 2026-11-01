@@ -1,41 +1,56 @@
 {
   "schema": 1,
-  "date": "2026-11-01T14:23:15.789Z",
-  "milestone": 1,
+  "date": "2026-11-01T16:54:15.118Z",
+  "milestone": 2,
+  "desktop": true,
   "device": {
     "model": "PGBM10",
     "sdk": 34
   },
+  "milestone1Baseline": {
+    "textReadMedianMs": 272,
+    "indexedClickMedianMs": 481,
+    "screenshotMedianMs": 763,
+    "batchPlainClickStepMedianMs": 232
+  },
   "version": "0.6.0",
-  "engineSha256": "720f27af1fe68529ecd396f0ed32e4fc73c5f3fb294e44f37ba31c7be30fe656",
-  "fixtureSha256": "f75ad58eb47ef1702b2155a8d29aa2f7c31341ace02f6cbda2997fe083c67f25",
+  "engineSha256": "bb6f1c46aa9c5a2fba4e4ce21ac2a48ea5ee3ada23343720aef431fadc4bbb59",
+  "fixtureSha256": "f622219a139480742bc516106b62c048e49dff3a8ecee421be4a53a3ce160f39",
   "runs": [
     {
       "run": 1,
       "checks": [
         {
+          "name": "fresh_connection_open",
+          "pass": true,
+          "foreground": "com.android.launcher",
+          "elapsedMs": 0
+        },
+        {
           "name": "form_ascii_unicode_checkbox",
           "pass": true,
-          "elapsedMs": 1542,
+          "elapsedMs": 1967,
           "truth": {
             "ascii": "ASCII run 1",
             "chinese": "无线调试 测试",
             "checked": true,
+            "checkboxChanges": 1,
             "dialogChoice": "",
             "row": 0,
             "loads": 0,
             "screen": "form"
           },
-          "stateBytes": 1213
+          "stateBytes": 1109
         },
         {
           "name": "batch_fill_load_until_without_extra_read",
           "pass": true,
-          "elapsedMs": 2595,
+          "elapsedMs": 2747,
           "truth": {
             "ascii": "batch 1",
             "chinese": "无线调试 测试",
             "checked": true,
+            "checkboxChanges": 1,
             "dialogChoice": "",
             "row": 0,
             "loads": 1,
@@ -47,24 +62,25 @@
             "completed": 3,
             "stoppedStep": null,
             "reason": null,
-            "waitedMs": 1621
+            "waitedMs": 1679
           },
           "mcpCalls": 1
         },
         {
           "name": "popup_stops_before_next_step",
           "pass": true,
-          "elapsedMs": 2353,
+          "elapsedMs": 2370,
           "batch": {
             "completed": 0,
             "stoppedStep": 1,
             "reason": "popup",
-            "waitedMs": 542
+            "waitedMs": 741
           },
           "truth": {
             "ascii": "batch 1",
             "chinese": "无线调试 测试",
             "checked": true,
+            "checkboxChanges": 1,
             "dialogChoice": "cancel",
             "row": 0,
             "loads": 1,
@@ -77,12 +93,13 @@
         {
           "name": "stale_element_sends_nothing",
           "pass": true,
-          "elapsedMs": 2857,
+          "elapsedMs": 2780,
           "error": "STALE_ELEMENT",
           "truth": {
             "ascii": "batch 1",
             "chinese": "无线调试 测试",
             "checked": true,
+            "checkboxChanges": 1,
             "dialogChoice": "cancel",
             "row": 0,
             "loads": 1,
@@ -96,12 +113,13 @@
         {
           "name": "scroll_list_to_row_150",
           "pass": true,
-          "elapsedMs": 13452,
-          "scrolls": 10,
+          "elapsedMs": 14612,
+          "scrolls": 9,
           "truth": {
             "ascii": "batch 1",
             "chinese": "无线调试 测试",
             "checked": true,
+            "checkboxChanges": 1,
             "dialogChoice": "cancel",
             "row": 150,
             "loads": 1,
@@ -115,11 +133,12 @@
         {
           "name": "second_activity_back",
           "pass": true,
-          "elapsedMs": 2641,
+          "elapsedMs": 2909,
           "truth": {
             "ascii": "batch 1",
             "chinese": "无线调试 测试",
             "checked": true,
+            "checkboxChanges": 1,
             "dialogChoice": "cancel",
             "row": 150,
             "loads": 1,
@@ -127,25 +146,26 @@
             "loading": false,
             "result": "Fixture result ready",
             "dialogOpen": false,
-            "checkboxHidden": true
+            "checkboxHidden": true,
+            "secondFirstRow": 1
           }
         },
         {
           "name": "until_timeout_deadline",
           "pass": true,
-          "elapsedMs": 1002.6526660000018,
+          "elapsedMs": 964.7838330000013,
           "timeoutMs": 350,
           "batch": {
             "completed": 0,
             "stoppedStep": 1,
             "reason": "timeout",
-            "waitedMs": 492
+            "waitedMs": 565
           }
         },
         {
           "name": "injected_keys_do_not_latch_stop",
           "pass": true,
-          "elapsedMs": 7846,
+          "elapsedMs": 7421,
           "injectedVolumeDown": 3,
           "volumeRestored": true,
           "stopNotifications": 0
@@ -153,7 +173,7 @@
         {
           "name": "stdin_eof_no_engine_leftover",
           "pass": true,
-          "elapsedMs": 83.69904199999291,
+          "elapsedMs": 168.234540999998,
           "code": 0,
           "signal": null,
           "leftoverEngineProcesses": 0
@@ -166,73 +186,66 @@
         {
           "name": "form_ascii_unicode_checkbox",
           "pass": true,
-          "elapsedMs": 1574,
+          "elapsedMs": 2286,
           "truth": {
             "ascii": "ASCII run 2",
             "chinese": "无线调试 测试",
             "checked": true,
+            "checkboxChanges": 1,
             "dialogChoice": "",
             "row": 0,
             "loads": 0,
-            "screen": "form"
+            "screen": "form",
+            "loading": false,
+            "result": "Fixture result ready",
+            "dialogOpen": false,
+            "checkboxHidden": true,
+            "secondFirstRow": 1
           },
-          "stateBytes": 1213
+          "stateBytes": 1109
         },
         {
           "name": "batch_fill_load_until_without_extra_read",
           "pass": true,
-          "elapsedMs": 2612,
+          "elapsedMs": 2746,
           "truth": {
             "ascii": "batch 2",
             "chinese": "无线调试 测试",
             "checked": true,
+            "checkboxChanges": 1,
             "dialogChoice": "",
             "row": 0,
             "loads": 1,
             "screen": "form",
             "loading": false,
-            "result": "Fixture result ready"
+            "result": "Fixture result ready",
+            "dialogOpen": false,
+            "checkboxHidden": true,
+            "secondFirstRow": 1
           },
           "batch": {
             "completed": 3,
             "stoppedStep": null,
             "reason": null,
-            "waitedMs": 1664
+            "waitedMs": 1657
           },
           "mcpCalls": 1
         },
         {
           "name": "popup_stops_before_next_step",
           "pass": true,
-          "elapsedMs": 2179,
+          "elapsedMs": 2493,
           "batch": {
             "completed": 0,
             "stoppedStep": 1,
             "reason": "popup",
-            "waitedMs": 496
+            "waitedMs": 815
           },
           "truth": {
             "ascii": "batch 2",
             "chinese": "无线调试 测试",
             "checked": true,
-            "dialogChoice": "cancel",
-            "row": 0,
-            "loads": 1,
-            "screen": "form",
-            "loading": false,
-            "result": "Fixture result ready",
-            "dialogOpen": false
-          }
-        },
-        {
-          "name": "stale_element_sends_nothing",
-          "pass": true,
-          "elapsedMs": 2556,
-          "error": "STALE_ELEMENT",
-          "truth": {
-            "ascii": "batch 2",
-            "chinese": "无线调试 测试",
-            "checked": true,
+            "checkboxChanges": 1,
             "dialogChoice": "cancel",
             "row": 0,
             "loads": 1,
@@ -240,18 +253,41 @@
             "loading": false,
             "result": "Fixture result ready",
             "dialogOpen": false,
-            "checkboxHidden": true
+            "checkboxHidden": true,
+            "secondFirstRow": 1
+          }
+        },
+        {
+          "name": "stale_element_sends_nothing",
+          "pass": true,
+          "elapsedMs": 2606,
+          "error": "STALE_ELEMENT",
+          "truth": {
+            "ascii": "batch 2",
+            "chinese": "无线调试 测试",
+            "checked": true,
+            "checkboxChanges": 1,
+            "dialogChoice": "cancel",
+            "row": 0,
+            "loads": 1,
+            "screen": "form",
+            "loading": false,
+            "result": "Fixture result ready",
+            "dialogOpen": false,
+            "checkboxHidden": true,
+            "secondFirstRow": 1
           }
         },
         {
           "name": "scroll_list_to_row_150",
           "pass": true,
-          "elapsedMs": 13284,
-          "scrolls": 10,
+          "elapsedMs": 14804,
+          "scrolls": 9,
           "truth": {
             "ascii": "batch 2",
             "chinese": "无线调试 测试",
             "checked": true,
+            "checkboxChanges": 1,
             "dialogChoice": "cancel",
             "row": 150,
             "loads": 1,
@@ -259,17 +295,19 @@
             "loading": false,
             "result": "Fixture result ready",
             "dialogOpen": false,
-            "checkboxHidden": true
+            "checkboxHidden": true,
+            "secondFirstRow": 1
           }
         },
         {
           "name": "second_activity_back",
           "pass": true,
-          "elapsedMs": 2511,
+          "elapsedMs": 2535,
           "truth": {
             "ascii": "batch 2",
             "chinese": "无线调试 测试",
             "checked": true,
+            "checkboxChanges": 1,
             "dialogChoice": "cancel",
             "row": 150,
             "loads": 1,
@@ -277,25 +315,26 @@
             "loading": false,
             "result": "Fixture result ready",
             "dialogOpen": false,
-            "checkboxHidden": true
+            "checkboxHidden": true,
+            "secondFirstRow": 1
           }
         },
         {
           "name": "until_timeout_deadline",
           "pass": true,
-          "elapsedMs": 1036.1335840000102,
+          "elapsedMs": 892.970708000008,
           "timeoutMs": 350,
           "batch": {
             "completed": 0,
             "stoppedStep": 1,
             "reason": "timeout",
-            "waitedMs": 523
+            "waitedMs": 487
           }
         },
         {
           "name": "injected_keys_do_not_latch_stop",
           "pass": true,
-          "elapsedMs": 7971,
+          "elapsedMs": 7346,
           "injectedVolumeDown": 3,
           "volumeRestored": true,
           "stopNotifications": 0
@@ -303,7 +342,7 @@
         {
           "name": "stdin_eof_no_engine_leftover",
           "pass": true,
-          "elapsedMs": 136.66283299999486,
+          "elapsedMs": 132.6960420000105,
           "code": 0,
           "signal": null,
           "leftoverEngineProcesses": 0
@@ -316,73 +355,66 @@
         {
           "name": "form_ascii_unicode_checkbox",
           "pass": true,
-          "elapsedMs": 1816,
+          "elapsedMs": 2184,
           "truth": {
             "ascii": "ASCII run 3",
             "chinese": "无线调试 测试",
             "checked": true,
+            "checkboxChanges": 1,
             "dialogChoice": "",
             "row": 0,
             "loads": 0,
-            "screen": "form"
+            "screen": "form",
+            "loading": false,
+            "result": "Fixture result ready",
+            "dialogOpen": false,
+            "checkboxHidden": true,
+            "secondFirstRow": 1
           },
-          "stateBytes": 1213
+          "stateBytes": 1109
         },
         {
           "name": "batch_fill_load_until_without_extra_read",
           "pass": true,
-          "elapsedMs": 2626,
+          "elapsedMs": 2785,
           "truth": {
             "ascii": "batch 3",
             "chinese": "无线调试 测试",
             "checked": true,
+            "checkboxChanges": 1,
             "dialogChoice": "",
             "row": 0,
             "loads": 1,
             "screen": "form",
             "loading": false,
-            "result": "Fixture result ready"
+            "result": "Fixture result ready",
+            "dialogOpen": false,
+            "checkboxHidden": true,
+            "secondFirstRow": 1
           },
           "batch": {
             "completed": 3,
             "stoppedStep": null,
             "reason": null,
-            "waitedMs": 1691
+            "waitedMs": 1650
           },
           "mcpCalls": 1
         },
         {
           "name": "popup_stops_before_next_step",
           "pass": true,
-          "elapsedMs": 2406,
+          "elapsedMs": 2588,
           "batch": {
             "completed": 0,
             "stoppedStep": 1,
             "reason": "popup",
-            "waitedMs": 487
+            "waitedMs": 747
           },
           "truth": {
             "ascii": "batch 3",
             "chinese": "无线调试 测试",
             "checked": true,
-            "dialogChoice": "cancel",
-            "row": 0,
-            "loads": 1,
-            "screen": "form",
-            "loading": false,
-            "result": "Fixture result ready",
-            "dialogOpen": false
-          }
-        },
-        {
-          "name": "stale_element_sends_nothing",
-          "pass": true,
-          "elapsedMs": 2799,
-          "error": "STALE_ELEMENT",
-          "truth": {
-            "ascii": "batch 3",
-            "chinese": "无线调试 测试",
-            "checked": true,
+            "checkboxChanges": 1,
             "dialogChoice": "cancel",
             "row": 0,
             "loads": 1,
@@ -390,18 +422,41 @@
             "loading": false,
             "result": "Fixture result ready",
             "dialogOpen": false,
-            "checkboxHidden": true
+            "checkboxHidden": true,
+            "secondFirstRow": 1
+          }
+        },
+        {
+          "name": "stale_element_sends_nothing",
+          "pass": true,
+          "elapsedMs": 2781,
+          "error": "STALE_ELEMENT",
+          "truth": {
+            "ascii": "batch 3",
+            "chinese": "无线调试 测试",
+            "checked": true,
+            "checkboxChanges": 1,
+            "dialogChoice": "cancel",
+            "row": 0,
+            "loads": 1,
+            "screen": "form",
+            "loading": false,
+            "result": "Fixture result ready",
+            "dialogOpen": false,
+            "checkboxHidden": true,
+            "secondFirstRow": 1
           }
         },
         {
           "name": "scroll_list_to_row_150",
           "pass": true,
-          "elapsedMs": 12948,
-          "scrolls": 10,
+          "elapsedMs": 14158,
+          "scrolls": 9,
           "truth": {
             "ascii": "batch 3",
             "chinese": "无线调试 测试",
             "checked": true,
+            "checkboxChanges": 1,
             "dialogChoice": "cancel",
             "row": 150,
             "loads": 1,
@@ -409,17 +464,19 @@
             "loading": false,
             "result": "Fixture result ready",
             "dialogOpen": false,
-            "checkboxHidden": true
+            "checkboxHidden": true,
+            "secondFirstRow": 1
           }
         },
         {
           "name": "second_activity_back",
           "pass": true,
-          "elapsedMs": 3067,
+          "elapsedMs": 2602,
           "truth": {
             "ascii": "batch 3",
             "chinese": "无线调试 测试",
             "checked": true,
+            "checkboxChanges": 1,
             "dialogChoice": "cancel",
             "row": 150,
             "loads": 1,
@@ -427,25 +484,26 @@
             "loading": false,
             "result": "Fixture result ready",
             "dialogOpen": false,
-            "checkboxHidden": true
+            "checkboxHidden": true,
+            "secondFirstRow": 1
           }
         },
         {
           "name": "until_timeout_deadline",
           "pass": true,
-          "elapsedMs": 1063.6765000000014,
+          "elapsedMs": 842.4103329999925,
           "timeoutMs": 350,
           "batch": {
             "completed": 0,
             "stoppedStep": 1,
             "reason": "timeout",
-            "waitedMs": 556
+            "waitedMs": 453
           }
         },
         {
           "name": "injected_keys_do_not_latch_stop",
           "pass": true,
-          "elapsedMs": 7683,
+          "elapsedMs": 7594,
           "injectedVolumeDown": 3,
           "volumeRestored": true,
           "stopNotifications": 0
@@ -453,7 +511,7 @@
         {
           "name": "stdin_eof_no_engine_leftover",
           "pass": true,
-          "elapsedMs": 136.13041699997848,
+          "elapsedMs": 184.46141699999862,
           "code": 0,
           "signal": null,
           "leftoverEngineProcesses": 0
@@ -461,76 +519,7 @@
       ]
     }
   ],
-  "timings": {
-    "startToFirstToolsList": {
-      "samplesMs": [
-        609.8400419999962,
-        625.2281669999938,
-        599.6724580000155,
-        607.4410830000124,
-        727.954166999989,
-        716.940499999997,
-        585.523583000002,
-        673.7230419999978,
-        623.4147079999966,
-        736.3832919999841
-      ],
-      "medianMs": 624.3214374999952,
-      "targetMs": null,
-      "meetsTarget": null
-    },
-    "textRead": {
-      "samplesMs": [
-        125.60316599998623,
-        104.86462499998743,
-        115.38795800000662,
-        110.14912499999627,
-        89.02841600001557,
-        83.50762499999837,
-        181.33400000000256,
-        131.26395900000352,
-        80.71562500001164,
-        197.4291249999951
-      ],
-      "medianMs": 112.76854150000145,
-      "targetMs": 300,
-      "meetsTarget": true
-    },
-    "indexedClickWithState": {
-      "samplesMs": [
-        520.5657080000092,
-        482.6095830000122,
-        475.0365419999871,
-        572.0924170000071,
-        483.98775000000023,
-        431.4242089999898,
-        552.8207499999844,
-        520.9427909999795,
-        549.0384579999954,
-        531.5047500000219
-      ],
-      "medianMs": 520.7542494999943,
-      "targetMs": 800,
-      "meetsTarget": true
-    },
-    "screenshotRead": {
-      "samplesMs": [
-        537.8320419999945,
-        508.5697919999948,
-        538.9813329999743,
-        668.4397910000116,
-        693.5537919999915,
-        589.6707910000114,
-        583.0354999999981,
-        605.9326249999867,
-        712.0712080000085,
-        644.6372080000001
-      ],
-      "medianMs": 597.801707999999,
-      "targetMs": 800,
-      "meetsTarget": true
-    }
-  },
+  "timings": {},
   "manual": {
     "physicalTripleVolumeDown": "not performed; owner follow-up",
     "physicalInterruption": "not performed; owner follow-up",
@@ -541,7 +530,7 @@
       "request": {
         "method": "initialize",
         "params": {
-          "protocolVersion": "2025-11-25",
+          "protocolVersion": "2024-11-05",
           "capabilities": {},
           "clientInfo": {
             "name": "opencu-android-fixture-verifier",
@@ -550,7 +539,7 @@
         }
       },
       "response": {
-        "protocolVersion": "2025-11-25",
+        "protocolVersion": "2024-11-05",
         "capabilities": {
           "tools": {},
           "logging": {}
@@ -559,7 +548,7 @@
           "name": "opencu",
           "version": "0.6.0"
         },
-        "instructions": "Control Android applications on the main display with the independent OpenCU engine. Read get_app_state before input. Use observed element indexes; request screenshots before coordinate input. Coordinates refer to the scaled full-display JPEG. Actions return updated state. Use run_actions for a short known sequence; its indexes refer to the state before the batch. Steps may wait locally with until (text, gone, app, stable). A new dialog, unexpected app switch, failed step or person activity stops the batch; inspect its final state, never replay. type_text and set_value support Unicode through accessibility without changing the keyboard. Verify actual results before reporting success. Input uses the main display and can change foreground only after 10 seconds without physical input. A physical touch or key during a call returns PERSON_ACTIVE: stop and ask the person, never retry automatically. Three physical volume-down presses within 1.5 seconds latch USER_STOPPED for this connection; never reconnect or retry without explicit permission. Reads remain available after Stop. Locked or screen-off phones refuse input without waking or unlocking. There is no agent desktop in milestone 1. Keep one connection per agent session and never operate the same app concurrently. Respect user authorization and host approval rules. OpenCU runs locally as shell, opens no port, and requires no account or particular agent identity."
+        "instructions": "Control Android applications with the independent OpenCU engine. Read get_app_state before input. Use observed element indexes; request screenshots before coordinate input. Coordinates refer to the scaled full-display JPEG. Actions return updated state. Use run_actions for a short known sequence; its indexes refer to the state before the batch. Steps may wait locally with until (text, gone, app, stable). A new dialog, unexpected app switch, failed step or person activity stops the batch; inspect its final state, never replay. type_text and set_value support Unicode through accessibility without changing the keyboard. Verify actual results before reporting success. Input uses the main display and can change foreground only after 10 seconds without physical input. A physical touch or key during a call returns PERSON_ACTIVE: stop and ask the person, never retry automatically. Three physical volume-down presses within 1.5 seconds latch USER_STOPPED for this connection; never reconnect or retry without explicit permission. Reads remain available after Stop. Locked or screen-off phones refuse input without waking or unlocking. There is no agent desktop in milestone 1. Keep one connection per agent session and never operate the same app concurrently. agent_desktop start creates an owned virtual display with the main display's size and density; while it is started all app tools target that display and the person's main display is never activated. An app already in front on the main display returns APP_IN_USE_BY_PERSON. agent_desktop status reports the flags obtained, size, apps and idle time; stop it when finished. The display stops after five minutes without calls and the next app call returns AGENT_DESKTOP_IDLE_STOPPED. Main-display touches do not stop agent-display work, but physical volume-down stop still latches USER_STOPPED. A locked or screen-off phone refuses agent input with SCREEN_LOCKED. The virtual display uses local IME policy so its keyboard does not appear on display 0. Respect user authorization and host approval rules. OpenCU runs locally as shell, opens no port, and requires no account or particular agent identity."
       }
     },
     "toolsList": {
@@ -578,47 +567,36 @@
         "perform_secondary_action",
         "run_actions",
         "list_apps",
-        "activate_app"
+        "activate_app",
+        "agent_desktop"
       ],
       "pages": 2
     },
     "getAppState": {
-      "request": {
-        "method": "tools/call",
-        "params": {
-          "name": "get_app_state",
-          "arguments": {
-            "app": "dev.opencu.android.fixture"
-          }
-        }
-      },
+      "request": "tools/call get_app_state",
       "response": {
         "content": [
           {
             "type": "text",
-            "text": "Foreground: dev.opencu.android.fixture activity=dev.opencu.android.fixture/.MainActivity display=0 size=1080x2400 keyboard=hidden state=4\nWindow 139 package=dev.opencu.android.fixture type=1 layer=0 focused title=\"OpenCU Fixture\"\n[1] LinearLayout focused bounds=0,107,1080,2352\n[2] TextView text=\"OpenCU fixture form\" bounds=42,125,1038,198\n[3] EditText text=\"ASCII field\" desc=\"ASCII field\" id=ascii clickable long-clickable editable bounds=42,198,1038,342 actions=[\"long_click\"]\n[4] EditText text=\"Chinese field\" desc=\"Chinese field\" id=chinese clickable long-clickable editable bounds=42,342,1038,486 actions=[\"long_click\"]\n[5] CheckBox text=\"Fixture checkbox\" id=checkbox clickable bounds=42,486,1038,582\n[6] TextView text=\"Ready\" id=result bounds=42,582,1038,655\n[7] Button text=\"Load\" id=load clickable bounds=42,655,1038,787\n[8] Button text=\"Open dialog\" id=dialog clickable bounds=42,787,1038,919\n[9] Button text=\"Open list\" id=list clickable bounds=42,919,1038,1051\n[10] Button text=\"Second activity\" id=second clickable bounds=42,1051,1038,1183\n[11] Button text=\"Move checkbox later\" id=move clickable bounds=42,1183,1038,1315\n[12] View id=navigationBarBackground bounds=0,2352,1080,2400\nWindow 1 package=com.android.systemui type=3 layer=1 title=\"\"\n"
+            "text": "Foreground: dev.opencu.android.fixture activity=dev.opencu.android.fixture/.MainActivity display=78 size=1080x2400 keyboard=hidden state=18\nWindow 400 package=dev.opencu.android.fixture type=1 layer=0 focused title=\"OpenCU Fixture\"\n[1] TextView text=\"OpenCU fixture form\" bounds=42,18,1038,91\n[2] EditText text=\"ASCII field\" desc=\"ASCII field\" id=ascii clickable long-clickable editable bounds=42,91,1038,235 actions=[\"long_click\"]\n[3] EditText text=\"Chinese field\" desc=\"Chinese field\" id=chinese clickable long-clickable editable bounds=42,235,1038,379 actions=[\"long_click\"]\n[4] CheckBox text=\"Fixture checkbox\" id=checkbox clickable checkable bounds=42,379,1038,475\n[5] TextView text=\"Ready\" id=result bounds=42,475,1038,548\n[6] Button text=\"Load\" id=load clickable bounds=42,548,1038,680\n[7] Button text=\"Open dialog\" id=dialog clickable bounds=42,680,1038,812\n[8] Button text=\"Open list\" id=list clickable bounds=42,812,1038,944\n[9] Button text=\"Second activity\" id=second clickable bounds=42,944,1038,1076\n[10] Button text=\"Move checkbox later\" id=move clickable bounds=42,1076,1038,1208\n"
           }
         ]
       }
     }
   },
   "cleanup": {
-    "homeSent": true,
-    "fixtureUninstalled": true,
+    "fixtureKept": false,
     "personStopObserved": false,
     "foreground": "com.android.launcher",
     "leftoverEngineProcesses": 0,
-    "oldEngineJarsRemoved": 10,
-    "retainedEngineJar": "opencu-android-720f27af1fe68529.jar",
-    "mediaVolumeRestoredTo": 8,
-    "verifiedFixtureAbsent": true,
-    "verifiedNoEngineProcess": true
+    "fixtureUninstalled": true,
+    "retainedEngineJar": "opencu-android-bb6f1c46aa9c5a2f.jar"
   },
   "doctor": {
     "version": "0.6.0",
     "sdk": 34,
     "uid": 2000,
-    "pid": 22796,
+    "pid": 9461,
     "uiAutomationConnected": true,
     "display": {
       "id": 0,
@@ -645,113 +623,56 @@
         "/dev/input/event3",
         "/dev/input/event1"
       ],
-      "source": "getevent -lt (kernel evdev)"
+      "source": "getevent -lt (kernel evdev)",
+      "lastUserActivityTime": 162638995
     }
   },
+  "desktopFlags": {
+    "value": 97737,
+    "trusted": true,
+    "ownFocus": true,
+    "stealTopFocusDisabled": true,
+    "imePolicy": "local"
+  },
+  "desktopLifecycle": [
+    {
+      "cycle": 1,
+      "stop": true,
+      "mainForeground": "com.android.launcher",
+      "idleStopped": true
+    },
+    {
+      "cycle": 2,
+      "stop": true,
+      "mainForeground": "com.android.launcher",
+      "idleStopped": true
+    },
+    {
+      "cycle": 3,
+      "stop": true,
+      "mainForeground": "com.android.launcher",
+      "idleStopped": true
+    }
+  ],
   "pass": true,
-  "coreRevision": "a52c551762d96d4898beb113770e99e27b92767b",
-  "hostValidation": {
-    "cleanCheckout": {
-      "revision": "a52c551762d96d4898beb113770e99e27b92767b",
-      "method": "git archive into a new directory with no build files or node_modules",
-      "checks": [
-        {
-          "command": "npm run build:android",
-          "exitCode": 0
-        },
-        {
-          "command": "npm run test:android",
-          "exitCode": 0
-        }
-      ],
-      "pass": true,
-      "temporaryDirectoryRemoved": true
-    },
-    "androidOfflineAssertions": 112,
-    "existingNpmSuite": {
-      "passed": 122,
-      "failed": 0,
-      "existingTestsModified": false
-    }
+  "desktopAcceptance": {
+    "appInUseByPerson": "passed separately on fixture; no input sent",
+    "display0Foreground": "launcher across stop/EOF/idle lifecycle cycles",
+    "visibleDisplay0Ime": "no visible IME window while desktop typed fixture (hidden display-0 IME record belonged to the existing OEM IME, isVisible=false)",
+    "pixelDiffOutsideStatusBar": "not measured; focused activity and launcher lifecycle were checked",
+    "notificationProbe": "cmd notification post succeeded for com.android.shell; Stop action/cancel failed, so notification is not shipped"
   },
-  "priorMeasurement": {
-    "engineSha256": "ffc557388787b98e2b0b1b885c388f8e7e97120afd2be75fc31be8f3eee3cdf1",
-    "timings": {
-      "startToFirstToolsList": {
-        "samplesMs": [
-          619.0646669999987,
-          602.3275830000057,
-          612.2909579999978,
-          557.4264170000097,
-          633.888208999997,
-          675.3049160000228,
-          645.3534579999978,
-          720.2225420000032,
-          587.343916999991,
-          630.7227499999863
-        ],
-        "medianMs": 624.8937084999925,
-        "targetMs": null,
-        "meetsTarget": null
-      },
-      "textRead": {
-        "samplesMs": [
-          382.7903749999823,
-          373.4089999999851,
-          245.32495799998287,
-          250.77708299999358,
-          393.9686250000086,
-          253.28404199998477,
-          248.35270799999125,
-          347.53029100000276,
-          404.7878750000091,
-          386.4318750000093
-        ],
-        "medianMs": 360.46964549999393,
-        "targetMs": 300,
-        "meetsTarget": false
-      },
-      "indexedClickWithState": {
-        "samplesMs": [
-          387.40412500000093,
-          547.337750000006,
-          450.758124999993,
-          446.8814579999889,
-          500.25400000001537,
-          468.3470839999791,
-          392.2023749999935,
-          481.62549999999464,
-          537.5762920000125,
-          397.5586669999757
-        ],
-        "medianMs": 459.55260449998605,
-        "targetMs": 800,
-        "meetsTarget": true
-      },
-      "screenshotRead": {
-        "samplesMs": [
-          810.3462089999812,
-          486.86358299999847,
-          547.5952080000134,
-          496.518791999988,
-          492.59708300000057,
-          546.2487919999985,
-          559.9556250000023,
-          587.3392920000188,
-          529.0074590000149,
-          632.4326249999867
-        ],
-        "medianMs": 546.9220000000059,
-        "targetMs": 800,
-        "meetsTarget": true
-      }
+  "validation": {
+    "npmTest": {
+      "passed": 123,
+      "failed": 0
     },
-    "note": "Before direct package-name lookup; identical phone checks and sampling method."
-  },
-  "limitations": [
-    "Physical triple-volume-down, physical interruption and lock-transition tests are reserved for the owner.",
-    "Focused type_text, paste/clipboard restoration, coordinate drag/long press and custom secondary actions are implemented but not exercised by this fixture acceptance.",
-    "Kernel virtual/uinput events are conservatively counted as physical; Android InputManager injections are excluded.",
-    "Only the main display, API 34, and the PGBM10 fixture were accepted. No virtual-display engine is included."
-  ]
+    "androidOfflineAssertions": 100,
+    "desktopRuns": [
+      10,
+      9,
+      9
+    ],
+    "desktopLifecycleCycles": 3
+  }
 }

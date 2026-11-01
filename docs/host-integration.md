@@ -7,7 +7,7 @@ it in the person's desktop session, keeps one connection per agent session and
 relays MCP messages without interpreting the tools. OpenCU can then add or change
 tools without a host release.
 
-Status: defined for Windows from v0.3.0, Linux from v0.6.0, and Android milestone 1. On macOS, local agents start
+Status: defined for Windows from v0.3.0, Linux from v0.6.0, and Android milestones 1–2. On macOS, local agents start
 `bin/opencu` directly; a macOS install manifest is not defined yet.
 
 ## Discovery
@@ -100,7 +100,7 @@ from the start only if the session environment has `GNOME_ACCESSIBILITY=1`.
 
 See the [Linux engine contract](linux-engine-contract.md) for behavior and limits.
 
-## Android (milestone 1)
+## Android (milestones 1–2)
 
 Build with `npm run build:android`. From a computer, launch
 `bin/opencu android [--serial SERIAL]` as the stdio MCP server; `doctor` prints
@@ -118,10 +118,13 @@ sent as `notifications/message`, whose `params.data` contains the Linux-style
 while no tool is returning. Images are JPEG. Relay Android's tool list,
 instructions, errors, batch metadata and all content without translation.
 
-This milestone uses the main display, requires an unlocked/screen-on phone,
-and follows `PERSON_ACTIVE` foreground/interruption rules. `agent_desktop` is
-absent. wanctl Android integration is **planned**, not implemented in this
-repository. See [Android](android.md) for build prerequisites, conditions and
+Milestone 1 uses the main display. Milestone 2 also relays
+`agent_desktop({action:"start"|"stop"|"status"})`; while started, all app tools
+use its owned display, display-targeted screenshots/input and local IME policy.
+Display-0 app ownership returns `APP_IN_USE_BY_PERSON`, stop/EOF release the
+owned display, and idle expiry returns `AGENT_DESKTOP_IDLE_STOPPED`. Both modes
+require an unlocked/screen-on phone and follow the Android person rules. wanctl
+Android integration remains **planned**, not implemented in this repository. See [Android](android.md) for build prerequisites, conditions and
 fixture evidence and remaining manual checks.
 
 ## Session lifetime

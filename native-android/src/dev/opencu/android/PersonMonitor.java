@@ -69,8 +69,9 @@ final class PersonMonitor implements AutoCloseable {
     }
   }
 
-  void check(long token, boolean changingForeground) {
-    person.check(token, android.os.SystemClock.uptimeMillis(), changingForeground);
+  void check(long token, boolean changingForeground, boolean desktop) {
+    if (desktop) person.checkDesktop();
+    else person.check(token, android.os.SystemClock.uptimeMillis(), changingForeground);
     if (!alive || !process.isAlive())
       throw fail("PERSON_MONITOR_UNAVAILABLE", problem + "; no input sent");
   }

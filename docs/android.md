@@ -1,8 +1,9 @@
 # Android
 
-Milestone 1 implements the phone's main display. The virtual-display agent
-desktop is intentionally absent until the owner accepts milestone 1. The fixture
-suite passed all nine required checks in three consecutive rounds on the OPPO
+Milestone 1 implements the phone's main display and milestone 2 adds an owned
+virtual-display agent desktop. The fixture suite passed all nine main-display
+checks in three consecutive rounds and the same checks on the agent display;
+stop and configurable-idle lifecycle checks also passed three cycles on the OPPO
 PGBM10, Android 14 / API 34. Measurements and the real MCP transcript are in
 [the acceptance evidence](../evidence/opencu-android-2026-11-01.json). This establishes
 fixture behavior, not general coverage of other apps or OEM builds.
@@ -37,6 +38,10 @@ It uses adb shell v2 with `-T`, inherited MCP streams, and diagnostics on stderr
 Without `--serial`, adb's normal device selection and `ANDROID_SERIAL` apply.
 The launcher neither pairs nor restarts/disconnects the shared adb server.
 Calling `bin/opencu` without `android` is unchanged.
+
+For wanctl packaging, `npm run package:android` writes `dist/opencu-android.jar`
+and the content manifest `dist/opencu-android.json` with name, version, file,
+size and lowercase SHA-256.
 
 An on-phone host can run this directly as shell:
 
@@ -87,7 +92,8 @@ content is never bypassed. Screenshots can include covering windows.
 
 - `click`: observed `element_index` or both `x,y`; `click_count` 1–3; positive
   `duration` holds a touch for at least the platform long-press interval.
-- `drag`: `from_x,from_y,to_x,to_y` from the fresh image, on display 0.
+- `drag`: `from_x,from_y,to_x,to_y` from the fresh image, on the active display
+  (display 0 unless `agent_desktop` is started).
 - `scroll`: observed scrollable element or image point; up/down/left/right and
   short aliases; `pages` defaults to 1, at most 20. Indexed scrolling uses whole
   accessibility pages (fractional counts round up).
@@ -102,11 +108,13 @@ content is never bypassed. Screenshots can include covering windows.
   Saves/restores the previous clipboard if readable and unchanged; refuses
   unreadable clipboard access and reports failed restoration. This clipboard path has not been exercised on the owner's clipboard.
 - `perform_secondary_action`: only a name listed on that node, rechecked live.
-- `activate_app`: explicit foreground activation under the same person rules.
+- `activate_app`: explicit foreground activation under the same person rules. In
+agent-desktop mode it launches on the owned display; an app already in front on
+display 0 returns `APP_IN_USE_BY_PERSON` without input.
 
 Before indexed input, the engine re-observes and checks window, tree path,
-package, class, text, description, resource id and bounds (6 physical-pixel
-tolerance). A changed/missing node returns `STALE_ELEMENT` without sending that
+package, class, text, description, resource id and bounds (6 physical-pixel tolerance on display 0; up to 400 pixels while a
+virtual display is settling its system-decoration inset). A changed/missing node returns `STALE_ELEMENT` without sending that
 input. A false accessibility action result returns `ACTION_UNCONFIRMED`; it is
 an unknown outcome and is never replayed. A fresh explicit state read is required
 before continuing. A successful action still needs its actual result checked.
@@ -139,6 +147,42 @@ classified as dialogs solely for changing window id.
 Typical reasons: `timeout`, `popup`, `system_dialog`, `app_switched`,
 `stale_element`, `person_active`, `user_stopped`, `screen_locked`. Earlier input
 may have executed. Never retry the stopped sequence automatically.
+
+## Agent desktop
+
+`agent_desktop start` creates a virtual display matching display 0's physical
+size and density. On the accepted PGBM10 it obtained flags value `97737`,
+including `PUBLIC`, `OWN_CONTENT_ONLY`, `SUPPORTS_TOUCH`, `ROTATES_WITH_CONTENT`,
+`DESTROY_CONTENT_ON_REMOVAL`, `TRUSTED`, `OWN_DISPLAY_GROUP`, `ALWAYS_UNLOCKED`,
+`TOUCH_FEEDBACK_DISABLED`, `OWN_FOCUS` and `STEAL_TOP_FOCUS_DISABLED`. The
+engine reports these flags, the display id and `imePolicy:"local"` in status.
+The shell must have trusted-display permission; otherwise it retries with a
+smaller untrusted flag set and reports that fact.
+
+The person keeps display 0. App starts use `--display <id>`, input events carry
+the active display id, screenshots and accessibility windows come from a
+separate display-bound `UiAutomation` connection, and `setDisplayImePolicy`
+keeps the IME local. Touches on display 0 do not interrupt agent-display work;
+volume-down stop still latches `USER_STOPPED`. If the requested app is currently
+frontmost on display 0, the call returns `APP_IN_USE_BY_PERSON` before sending
+anything. Stop and EOF move owned tasks to the back and release the display.
+The engine restores the launcher when the person was on the launcher; no agent
+app is intentionally finished. A five-minute call-free period stops the display
+and the next app call returns `AGENT_DESKTOP_IDLE_STOPPED`. The verifier accepts
+a shorter `--idle-ms` for lifecycle tests.
+
+The owner fixture run passed the main-display checks three times on the agent
+display, with display 0 remaining on the launcher and no leftover engine process.
+The display-0 lock transition, physical main-display interruption, and a visual
+pixel diff outside the status bar remain owner follow-ups; no screen wake or
+unlock was attempted. A locked or screen-off phone still returns `SCREEN_LOCKED`.
+
+The notification probe used `cmd notification post` as `com.android.shell` and
+successfully created a visible shell notification, but shell `cmd notification`
+has no cancel/action subcommand, and a temporary app_process cancel probe was
+killed by the device. The notification therefore cannot safely ship with a Stop
+action; the volume gesture is the only shipped person stop. The probe notification
+was snoozed for one day and is recorded as an unverified OEM limitation.
 
 ## The person wins
 
@@ -193,16 +237,17 @@ Measured on the PGBM10 over wireless adb (10 samples each):
 
 | Operation | Median | Target |
 |---|---:|---:|
-| Launcher start to first tools/list | 624 ms | — |
-| Open-app text read | 113 ms | <=300 ms |
-| Indexed click including state | 521 ms | <=800 ms |
-| Screenshot read | 598 ms | <=800 ms |
+| Launcher start to first tools/list | 770 ms | — |
+| Open-app text read | 272 ms | <=300 ms |
+| Indexed click including state | 481 ms | <=800 ms |
+| Screenshot read | 763 ms | <=800 ms |
+| Plain indexed batch click step (10 steps) | 232 ms | <=250 ms |
 
-The first text-read measurement was 360 ms. Direct package-name resolution removed
-unnecessary loading of other apps' labels and reduced it to 113 ms with the same
-acceptance and sampling code. Both sample sets remain in the evidence. Startup includes computer launcher/cache
+Direct package-name resolution avoids loading other apps' labels. The final
+PGBM10 samples and desktop lifecycle evidence are in the committed evidence;
+all required targets passed. Startup includes computer launcher/cache
 verification, wireless adb, MCP initialize and first tools/list answer. The evidence retains every sample and reports target misses without relaxing
-assertions. On ColorOS, `cmd media_session volume --set` returned success without
+assertions. Plain indexed batch steps measured 232 ms for ten clicks. On ColorOS, `cmd media_session volume --set` returned success without
 applying the value. The verifier instead restores the original media volume via
 injected volume-up events while the fixture explicitly routes keys to media; it
 reads back every increment. The owner completed the initial OEM installation
@@ -217,11 +262,12 @@ that appears and disappears entirely between observations. System UI windows use
 platform window types; OEM dialogs presented as activities can be reported as
 `app_switched` instead of `system_dialog`.
 
-For milestone 2, independently verify virtual-display creation/lifetime, activity
-routing (including single-task apps and permission dialogs), display-aware window
-queries/screenshots/injection, IME routing, physical-stop scope, locked-parent
-policy and cleanup without disturbing display 0. None of those capabilities is
-implemented or claimed by milestone 1.
+Remaining milestone 2 risks are OEM task reuse for single-task apps, permission
+activities, display lock transitions, coordinate gestures, clipboard behavior,
+and restoration when a task moves itself after display release. Virtual-display
+windows, screenshots, display-targeted input, IME locality, APP_IN_USE_BY_PERSON,
+stop, EOF and configurable idle were accepted only with the fixture on this
+PGBM10.
 
 Implementation references were the supplied local UiAutomation spike and Android
 SDK/AOSP API definitions ([UiAutomation](https://android.googlesource.com/platform/frameworks/base/+/refs/heads/main/core/java/android/app/UiAutomation.java),
