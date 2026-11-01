@@ -7,7 +7,7 @@ it in the person's desktop session, keeps one connection per agent session and
 relays MCP messages without interpreting the tools. OpenCU can then add or change
 tools without a host release.
 
-Status: defined for Windows from v0.3.0 and Linux from v0.6.0. On macOS, local agents start
+Status: defined for Windows from v0.3.0, Linux from v0.6.0, and Android milestone 1. On macOS, local agents start
 `bin/opencu` directly; a macOS install manifest is not defined yet.
 
 ## Discovery
@@ -99,6 +99,30 @@ Apps the agent or the desktop starts outside OpenCU expose accessibility trees
 from the start only if the session environment has `GNOME_ACCESSIBILITY=1`.
 
 See the [Linux engine contract](linux-engine-contract.md) for behavior and limits.
+
+## Android (milestone 1)
+
+Build with `npm run build:android`. From a computer, launch
+`bin/opencu android [--serial SERIAL]` as the stdio MCP server; `doctor` prints
+one diagnostic JSON object. The launcher caches the content-addressed dex jar
+and starts it as Android shell uid 2000 with adb shell v2 and no PTY. Android
+14/API 34+ is required. There is no Android install manifest yet.
+
+An on-phone elevation host can execute
+`CLASSPATH=<jar> app_process / dev.opencu.android.Main mcp` as shell and relay MCP
+unchanged. Stdin EOF exits the engine; stdout contains only MCP JSON lines and
+stderr carries diagnostics. Keep one connection per agent session; never
+reconnect to clear `USER_STOPPED`. The physical triple-volume-down stop is also
+sent as `notifications/message`, whose `params.data` contains the Linux-style
+`{event:"stop",error:{code:"USER_STOPPED",...}}` payload. Hosts must latch it even
+while no tool is returning. Images are JPEG. Relay Android's tool list,
+instructions, errors, batch metadata and all content without translation.
+
+This milestone uses the main display, requires an unlocked/screen-on phone,
+and follows `PERSON_ACTIVE` foreground/interruption rules. `agent_desktop` is
+absent. wanctl Android integration is **planned**, not implemented in this
+repository. See [Android](android.md) for build prerequisites, conditions and
+fixture evidence and remaining manual checks.
 
 ## Session lifetime
 

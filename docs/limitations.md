@@ -157,6 +157,36 @@ The measurements behind this section are in
   when the connection ends unless a clipboard manager keeps it.
 - `scope` is not supported yet.
 
+## Android (milestone 1)
+
+- Main display only; no virtual-display `agent_desktop`. Foreground/input safety
+  is part of the engine. All nine fixture checks passed three consecutive rounds
+  on the OPPO PGBM10 after the owner completed OEM installation confirmation.
+- Requires Android shell uid 2000 and API 34+. Unicode indexed editing, clicks,
+  list scrolling, back, batch guards and idle EOF are verified on the fixture.
+  Clipboard behavior, focused typing, coordinate gestures and custom accessibility
+  actions have not been verified on the owner's apps. Timings are in the evidence;
+  no general app performance claim follows from these samples.
+- The connection uses hidden UiAutomation construction/connection and system
+  context/task-display APIs. These are checked at startup, reported by doctor,
+  and can break on an OEM build or future Android version.
+- Physical monitoring needs readable `/dev/input/event*` through `getevent`;
+  failure refuses input. Android-injected events bypass evdev; kernel virtual
+  input devices are conservatively treated as physical. Real interruption and
+  the three-volume-down stop gesture await owner testing.
+- Screen-off or locked input is refused without wake/unlock. The first ten
+  seconds of a new connection conservatively forbid changing foreground.
+- Unicode uses accessible editable fields; custom editors and opaque content
+  may not expose enough information. There is no OCR or keyboard replacement.
+  No scope/select_text, arbitrary keycodes, power/volume tool keys or rich paste.
+- Screenshots cover the full main display, including overlays, and use scaled
+  JPEG coordinates. Secure windows are not bypassed. Window polling can miss
+  transient overlays entirely between reads; OEM permission activities may be
+  reported as `app_switched` rather than `system_dialog`.
+
+See [Android behavior and validation](android.md). Fixture acceptance
+does not establish reliable general app coverage.
+
 ## Virtual display compatibility
 
 The macOS virtual display is exposed through the consented `agent_desktop` product
