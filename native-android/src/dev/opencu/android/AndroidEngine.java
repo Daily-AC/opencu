@@ -974,10 +974,10 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
         return false;
       }
       changed = true;
-      if (!n.refresh()
-          || n.getActionList().stream()
-              .noneMatch(a -> a.getId() == AccessibilityNodeInfo.ACTION_PASTE)) return false;
-      accessibility(n, AccessibilityNodeInfo.ACTION_PASTE, null, pkg, token);
+      if (!n.refresh()) return false;
+      checkTarget(token, pkg);
+      if (!n.performAction(AccessibilityNodeInfo.ACTION_PASTE)) return false;
+      check(token, false);
       pause(80, token);
       return true;
     } finally {
@@ -998,6 +998,44 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
   private void paste(AccessibilityNodeInfo n, String text, String pkg, long token) {
     if (!tryPaste(n, text, pkg, token))
       throw fail("PASTE_UNSUPPORTED", "Focused editor does not expose paste");
+  }
+
+  private boolean tryKeyText(AccessibilityNodeInfo n, String value, String pkg, long token) {
+    if (!n.isEditable()) return false;
+    String before = n.isShowingHintText() ? "" : str(n.getText());
+    int a = n.getTextSelectionStart(), b = n.getTextSelectionEnd();
+    if (a < 0 || b < 0 || a > before.length() || b > before.length()) a = b = before.length();
+    String expected =
+        before.substring(0, Math.min(a, b))
+            + value
+            + before.substring(Math.max(a, b));
+    KeyEvent event =
+        new KeyEvent(
+            SystemClock.uptimeMillis(),
+            value,
+            KeyCharacterMap.VIRTUAL_KEYBOARD,
+            KeyEvent.FLAG_FROM_SYSTEM | KeyEvent.FLAG_SOFT_KEYBOARD);
+    event.setSource(InputDevice.SOURCE_KEYBOARD);
+    setEventDisplay(event);
+    checkTarget(token, pkg);
+    boolean injected = automation.injectInputEvent(event, true);
+    check(token, false);
+    if (!injected) return false;
+    pause(100, token);
+    Screen after = observe(pkg);
+    AccessibilityNodeInfo updated;
+    try {
+      updated = focused(after);
+    } catch (Failure e) {
+      return false;
+    }
+    String actual = updated.isShowingHintText() ? "" : str(updated.getText());
+    if (expected.equals(actual)) return true;
+    if (!before.equals(actual))
+      throw fail(
+          "ACTION_UNCONFIRMED",
+          "Keyboard input was sent but the editor value changed unexpectedly; read state before continuing");
+    return false;
   }
 
   private void perform(
@@ -1129,7 +1167,7 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
         {
           n = focused(now);
           String value = (String) args.get("text");
-          if (!tryPaste(n, value, pkg, token)) {
+          if (!tryKeyText(n, value, pkg, token) && !tryPaste(n, value, pkg, token)) {
             String before = n.isShowingHintText() ? "" : str(n.getText());
             int a = n.getTextSelectionStart(), b = n.getTextSelectionEnd();
             if (a < 0 || b < 0 || a > before.length() || b > before.length())
