@@ -105,8 +105,8 @@ content is never bypassed. Screenshots can include covering windows.
 - `type_text`: insert Unicode at the focused editor through its input path,
   preserving the selected range. It does not install or switch a keyboard. If an
   editor cannot expose that path, it falls back to accessibility set-text and
-  says so in the result. The fixture verifies ASCII and Chinese input through an
-  editor that ignores direct set-text.
+  says so in the result. The fixture check exercises ASCII and Chinese input
+  through an editor that ignores direct set-text.
 - `set_value`: replace an indexed editable field's entire value. Use click for
   a checkbox. The editor must actually expose `ACTION_SET_TEXT`.
 - `paste`: `format: "text"` only, using the editor's accessibility paste action.
@@ -262,7 +262,7 @@ Known unverified boundaries include OEM clipboard policy for unrelated custom
 editors, coordinate drag/long press, custom secondary actions, custom/WebView
 trees, secure
 screenshot behavior, orientation changes, physical stop and EOF during blocked
-Binder calls. The fixture suite verifies Unicode set_value, keyboard-path
+Binder calls. The fixture suite covers Unicode set_value, keyboard-path
 `type_text` with ASCII and Chinese text, indexed clicks and
 scrolls, back, popup/stale guards, local waits, injected-volume exclusion and idle EOF. Polling cannot detect a window
 that appears and disappears entirely between observations. System UI windows use

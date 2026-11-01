@@ -163,8 +163,10 @@ The measurements behind this section are in
   fixture checks passed three consecutive rounds in each mode on the OPPO PGBM10;
   task reuse, permission activities and display lock transitions remain OEM risks.
 - Requires Android shell uid 2000 and API 34+. Unicode indexed editing, keyboard-path
-  typing, clicks, list scrolling, back, batch guards and idle EOF are verified on
-  the fixture. Custom editor clipboard policy, coordinate gestures and custom accessibility
+  typing, clicks, list scrolling, back, batch guards and idle EOF are covered by
+  the fixture suite. The milestone 3 device rerun is required before treating
+  keyboard behavior as accepted on OEM apps. Custom editor clipboard policy,
+  coordinate gestures and custom accessibility
   actions have not been verified on the owner's apps. Timings are in the evidence;
   no general app performance claim follows from these samples.
 - The connection uses hidden UiAutomation construction/connection and system
