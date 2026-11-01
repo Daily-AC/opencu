@@ -50,6 +50,7 @@ try{
   shell('am','force-stop',pkg);
   assert.equal(foreground(),'com.android.launcher','Fresh launch check must begin on the launcher');
   for(let run=1;run<=3;run++){
+    if(run>1){shell('am','force-stop',pkg);assert.equal(foreground(),'com.android.launcher','Each fixture run starts from the launcher');}
     awake();assert.ok([pkg,'com.android.launcher'].includes(foreground()),'Unexpected app before fixture run');
     client=connect();const init=await client.initialize();const tools=await client.tools();assert.equal(tools.length,desktop?13:13);
     let desktopStart=null;
@@ -78,6 +79,14 @@ try{
       s=ok(await call('set_value',{element_index:index(s,'id=chinese '),value:'无线调试 测试'}));
       if(!text(s).split('\n').some(line=>line.includes('id=checkbox ')&&line.includes(' checked')))s=await click(s,'checkbox');
       const t=truth();assert.equal(t.ascii,`ASCII run ${run}`);assert.equal(t.chinese,'无线调试 测试');assert.equal(t.checked,true);return {truth:t,stateBytes:Buffer.byteLength(text(s))};
+    },checks);
+    await check('keyboard_style_type_text',async()=>{
+      s=ok(await call('click',{element_index:index(s,'id=keyboard ')}));
+      s=ok(await call('type_text',{text:`typed ${run} `}));
+      s=ok(await call('type_text',{text:'无线调试'}));
+      assert.equal(truth().keyboard,`typed ${run} 无线调试`,'Keyboard-only field did not receive input connection text');
+      assert.doesNotMatch(text(s),/set-text fallback/,'type_text unexpectedly used direct fallback');
+      return {truth:truth(),keyboardPath:true};
     },checks);
     await check('batch_fill_load_until_without_extra_read',async()=>{
       const before=client.next;

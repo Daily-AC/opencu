@@ -23,6 +23,25 @@ public final class Core {
     return new Failure(code, message);
   }
 
+  public static String scrollNotice(int moved, int requested) {
+    if (moved == 0) return "Nothing scrolled; already at the end";
+    if (moved < requested)
+      return "Scrolled " + moved + " of " + requested + " pages; reached the end";
+    return "Scrolled " + moved + " of " + requested + " pages";
+  }
+
+  public static String screenshotNotice(int imageWidth, int imageHeight, int displayWidth, int displayHeight) {
+    return "Screenshot: "
+        + imageWidth
+        + "x"
+        + imageHeight
+        + " JPEG of the "
+        + displayWidth
+        + "x"
+        + displayHeight
+        + " display; coordinates in later calls use this image";
+  }
+
   public static final class Element {
     public int index, window, left, top, right, bottom;
     public String path = "", clazz = "", text = "", desc = "", id = "", pkg = "";

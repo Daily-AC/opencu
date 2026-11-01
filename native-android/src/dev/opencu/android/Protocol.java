@@ -18,8 +18,9 @@ public final class Protocol {
           + " updated state. Use run_actions for a short known sequence; its indexes refer to the"
           + " state before the batch. Steps may wait locally with until (text, gone, app, stable)."
           + " A new dialog, unexpected app switch, failed step or person activity stops the batch;"
-          + " inspect its final state, never replay. type_text and set_value support Unicode"
-          + " through accessibility without changing the keyboard. Verify actual results before"
+          + " inspect its final state, never replay. type_text and set_value support Unicode."
+          + " type_text uses the focused editor input path without changing the keyboard and says"
+          + " when it must use an accessibility fallback. Verify actual results before"
           + " reporting success. Input uses the main display and can change foreground only after"
           + " 10 seconds without physical input. A physical touch or key during a call returns"
           + " PERSON_ACTIVE: stop and ask the person, never retry automatically. Three physical"
@@ -170,7 +171,9 @@ public final class Protocol {
     add(
         "scroll",
         "Scroll an indexed Android scrollable element or a fresh screenshot coordinate. pages"
-            + " defaults to 1, maximum 20. Returns updated state (and JPEG for coordinates).",
+            + " defaults to 1, maximum 20. Indexed scrolling stops at the end and returns a notice"
+            + " such as 'Scrolled 3 of 5 pages; reached the end'; a first page at the end says"
+            + " 'Nothing scrolled; already at the end'. Returns updated state (and JPEG for coordinates).",
         false,
         p,
         "app",
@@ -187,9 +190,10 @@ public final class Protocol {
         "key");
     add(
         "type_text",
-        "Insert Unicode text into the currently focused Android editable node via accessibility,"
-            + " replacing its selected range (append if no selection is exposed). Does not change"
-            + " the keyboard. Returns updated state; unsupported editors fail explicitly.",
+        "Insert Unicode text into the currently focused Android editable node through its input"
+            + " path (clipboard paste/commit semantics), replacing its selected range. It does not"
+            + " install or switch keyboards. If that path is unavailable, the result says it used"
+            + " the accessibility set-text fallback. Returns updated state.",
         false,
         props("text", string()),
         "app",

@@ -116,7 +116,9 @@ reconnect to clear `USER_STOPPED`. The physical triple-volume-down stop is also
 sent as `notifications/message`, whose `params.data` contains the Linux-style
 `{event:"stop",error:{code:"USER_STOPPED",...}}` payload. Hosts must latch it even
 while no tool is returning. Images are JPEG. Relay Android's tool list,
-instructions, errors, batch metadata and all content without translation.
+instructions, errors, batch metadata and all content without translation. When
+an image is included, its preceding text header states the JPEG dimensions and
+source display size; coordinate arguments use the image dimensions.
 
 Milestone 1 uses the main display. Milestone 2 also relays
 `agent_desktop({action:"start"|"stop"|"status"})`; while started, all app tools

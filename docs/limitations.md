@@ -162,9 +162,9 @@ The measurements behind this section are in
 - Android 14/API 34 main-display and virtual-display modes are implemented. The
   fixture checks passed three consecutive rounds in each mode on the OPPO PGBM10;
   task reuse, permission activities and display lock transitions remain OEM risks.
-- Requires Android shell uid 2000 and API 34+. Unicode indexed editing, clicks,
-  list scrolling, back, batch guards and idle EOF are verified on the fixture.
-  Clipboard behavior, focused typing, coordinate gestures and custom accessibility
+- Requires Android shell uid 2000 and API 34+. Unicode indexed editing, keyboard-path
+  typing, clicks, list scrolling, back, batch guards and idle EOF are verified on
+  the fixture. Custom editor clipboard policy, coordinate gestures and custom accessibility
   actions have not been verified on the owner's apps. Timings are in the evidence;
   no general app performance claim follows from these samples.
 - The connection uses hidden UiAutomation construction/connection and system

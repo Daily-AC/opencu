@@ -83,9 +83,11 @@ and a truncated tree is labelled. Arbitrarily large apps can exceed 4 KB; 4 KB i
 a typical-screen target, not silent truncation of every response.
 
 Use `includeScreenshot: true` only when needed. Images are full-display JPEG,
-quality 80, long side at most 1280 px; screenshot dimensions are also in
-`_meta["opencu/screenshot"]`. Coordinate input uses these image pixels, not the
-physical display coordinates printed in element bounds. A screenshot grant is
+quality 80, long side at most 1280 px. The text result starts with a line such as
+`Screenshot: 576x1280 JPEG of the 1080x2400 display; coordinates in later calls
+use this image`; screenshot dimensions are also in `_meta["opencu/screenshot"]`.
+Coordinate input uses these image pixels, not the physical display coordinates
+printed in element bounds. A screenshot grant is
 consumed on any app state/action attempt; only a successful new image renews it.
 Changed display geometry/rotation or window identity invalidates it. Secure
 content is never bypassed. Screenshots can include covering windows.
@@ -96,12 +98,15 @@ content is never bypassed. Screenshots can include covering windows.
   (display 0 unless `agent_desktop` is started).
 - `scroll`: observed scrollable element or image point; up/down/left/right and
   short aliases; `pages` defaults to 1, at most 20. Indexed scrolling uses whole
-  accessibility pages (fractional counts round up).
+  accessibility pages (fractional counts round up). At the end of a list it
+  returns the current state and a notice instead of `ACTION_UNCONFIRMED`.
 - `press_key`: back, home, enter/Return, delete/backspace, tab, recents/app_switch,
   search. No volume, power, arbitrary keycodes or modifier chords.
-- `type_text`: insert Unicode at the focused accessible editor's selection;
-  append if the editor exposes no selection. Uses accessibility set-text, not a
-  keyboard swap or `input text`. Custom editors can refuse it.
+- `type_text`: insert Unicode at the focused editor through its input path,
+  preserving the selected range. It does not install or switch a keyboard. If an
+  editor cannot expose that path, it falls back to accessibility set-text and
+  says so in the result. The fixture verifies ASCII and Chinese input through an
+  editor that ignores direct set-text.
 - `set_value`: replace an indexed editable field's entire value. Use click for
   a checkbox. The editor must actually expose `ACTION_SET_TEXT`.
 - `paste`: `format: "text"` only, using the editor's accessibility paste action.
@@ -253,10 +258,12 @@ injected volume-up events while the fixture explicitly routes keys to media; it
 reads back every increment. The owner completed the initial OEM installation
 confirmation; subsequent streamed fixture installs succeeded without UI input.
 
-Known unverified boundaries include OEM clipboard policy, focused `type_text`,
-coordinate drag/long press, custom secondary actions, custom/WebView trees, secure
+Known unverified boundaries include OEM clipboard policy for unrelated custom
+editors, coordinate drag/long press, custom secondary actions, custom/WebView
+trees, secure
 screenshot behavior, orientation changes, physical stop and EOF during blocked
-Binder calls. The fixture suite verifies Unicode set_value, indexed clicks and
+Binder calls. The fixture suite verifies Unicode set_value, keyboard-path
+`type_text` with ASCII and Chinese text, indexed clicks and
 scrolls, back, popup/stale guards, local waits, injected-volume exclusion and idle EOF. Polling cannot detect a window
 that appears and disappears entirely between observations. System UI windows use
 platform window types; OEM dialogs presented as activities can be reported as

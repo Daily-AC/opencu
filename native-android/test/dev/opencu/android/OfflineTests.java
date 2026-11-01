@@ -259,6 +259,18 @@ public final class OfflineTests {
     Screen switched = screen("another.package", "Other", 12);
     check(Core.stopReason(loading, switched, "").equals("app_switched"), "unexpected app stops");
     check(Core.stopReason(loading, switched, "another.package") == null, "expected app allowed");
+    check(
+        Core.scrollNotice(0, 1).equals("Nothing scrolled; already at the end"),
+        "scroll at end notice");
+    check(
+        Core.scrollNotice(3, 5).equals("Scrolled 3 of 5 pages; reached the end"),
+        "partial scroll notice");
+    check(Core.scrollNotice(5, 5).equals("Scrolled 5 of 5 pages"), "complete scroll notice");
+    check(
+        Core.screenshotNotice(576, 1280, 1080, 2400)
+            .equals(
+                "Screenshot: 576x1280 JPEG of the 1080x2400 display; coordinates in later calls use this image"),
+        "screenshot scale notice");
     Await deadline = new Await(loading, obj("text", "never", "timeoutMs", 350), "", 0);
     check(deadline.poll(loading, 349).equals("continue"), "wait before deadline");
     check(deadline.poll(loading, 350).equals("timeout"), "wait at deadline");

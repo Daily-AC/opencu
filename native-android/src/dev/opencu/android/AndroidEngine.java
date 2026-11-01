@@ -734,6 +734,12 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
       }
       double scale = Math.min(1, 1280.0 / Math.max(ow, oh));
       int w = (int) Math.round(ow * scale), h = (int) Math.round(oh * scale);
+      Map<String, Object> text = map(list(r.get("content")).get(0));
+      text.put(
+          "text",
+          Core.screenshotNotice(w, h, s.width, s.height)
+              + "\n"
+              + text.get("text"));
       Bitmap scaled = Bitmap.createScaledBitmap(bitmap, w, h, true);
       ByteArrayOutputStream data = new ByteArrayOutputStream();
       scaled.compress(Bitmap.CompressFormat.JPEG, 80, data);
@@ -946,8 +952,8 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
     }
   }
 
-  private void paste(AccessibilityNodeInfo n, String text, String pkg, long token) {
-    if (!n.isEditable()) throw fail("PASTE_UNSUPPORTED", "Focused node is not editable");
+  private boolean tryPaste(AccessibilityNodeInfo n, String text, String pkg, long token) {
+    if (!n.isEditable()) return false;
     ClipboardManager clipboard =
         (ClipboardManager) context.getSystemService(Context.CLIPBOARD_SERVICE);
     checkTarget(token, pkg);
@@ -955,22 +961,25 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
     try {
       old = clipboard.getPrimaryClip();
     } catch (Exception e) {
-      throw fail(
-          "CLIPBOARD_UNAVAILABLE", "Cannot read clipboard safely; use type_text or set_value");
+      return false;
     }
     String marker = "OpenCU-" + UUID.randomUUID();
     ClipData clip = ClipData.newPlainText(marker, text);
     boolean changed = false;
     try {
       checkTarget(token, pkg);
-      clipboard.setPrimaryClip(clip);
+      try {
+        clipboard.setPrimaryClip(clip);
+      } catch (Exception e) {
+        return false;
+      }
       changed = true;
       if (!n.refresh()
           || n.getActionList().stream()
-              .noneMatch(a -> a.getId() == AccessibilityNodeInfo.ACTION_PASTE))
-        throw fail("PASTE_UNSUPPORTED", "Focused editor does not expose paste");
+              .noneMatch(a -> a.getId() == AccessibilityNodeInfo.ACTION_PASTE)) return false;
       accessibility(n, AccessibilityNodeInfo.ACTION_PASTE, null, pkg, token);
       pause(80, token);
+      return true;
     } finally {
       if (changed)
         try {
@@ -984,6 +993,11 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
           notice = "Previous clipboard could not be restored.";
         }
     }
+  }
+
+  private void paste(AccessibilityNodeInfo n, String text, String pkg, long token) {
+    if (!tryPaste(n, text, pkg, token))
+      throw fail("PASTE_UNSUPPORTED", "Focused editor does not expose paste");
   }
 
   private void perform(
@@ -1054,7 +1068,8 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
         {
           String d = ((String) args.get("direction")).substring(0, 1);
           double pages = ((Number) args.getOrDefault("pages", 1)).doubleValue();
-          for (int page = 0; page < Math.ceil(pages); page++) {
+          int requested = (int) Math.ceil(pages), moved = 0;
+          for (int page = 0; page < requested; page++) {
             if (page > 0) {
               Screen current = observe(pkg);
               String changed = Core.stopReason(fence, current, pkg);
@@ -1080,7 +1095,12 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
                     d.equals("d") || d.equals("r")
                         ? AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
                         : AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD;
-              accessibility(n, action, null, pkg, token);
+              checkTarget(token, pkg);
+              if (!n.performAction(action, null)) {
+                notice = Core.scrollNotice(moved, requested);
+                break;
+              }
+              check(token, false);
             } else {
               float[] p = point(args, "x", "y", cap, now);
               float dx = d.equals("l") ? now.width * .55f : d.equals("r") ? -now.width * .55f : 0,
@@ -1089,8 +1109,10 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
                   ty = Math.max(1, Math.min(now.height - 2, p[1] + dy));
               touch(p[0], p[1], tx, ty, 350, pkg, token);
             }
+            moved++;
             pause(80, token);
           }
+          if (notice.isEmpty() && moved < requested) notice = Core.scrollNotice(moved, requested);
           break;
         }
       case "press_key":
@@ -1106,16 +1128,22 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
       case "type_text":
         {
           n = focused(now);
-          String before = n.isShowingHintText() ? "" : str(n.getText());
-          int a = n.getTextSelectionStart(), b = n.getTextSelectionEnd();
-          if (a < 0 || b < 0 || a > before.length() || b > before.length()) a = b = before.length();
-          setText(
-              n,
-              before.substring(0, Math.min(a, b))
-                  + args.get("text")
-                  + before.substring(Math.max(a, b)),
-              pkg,
-              token);
+          String value = (String) args.get("text");
+          if (!tryPaste(n, value, pkg, token)) {
+            String before = n.isShowingHintText() ? "" : str(n.getText());
+            int a = n.getTextSelectionStart(), b = n.getTextSelectionEnd();
+            if (a < 0 || b < 0 || a > before.length() || b > before.length())
+              a = b = before.length();
+            setText(
+                n,
+                before.substring(0, Math.min(a, b))
+                    + value
+                    + before.substring(Math.max(a, b)),
+                pkg,
+                token);
+            notice =
+                "Keyboard-style text input unavailable; used accessibility set-text fallback.";
+          }
           break;
         }
       case "paste":
