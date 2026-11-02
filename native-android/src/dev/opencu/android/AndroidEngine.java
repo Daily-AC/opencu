@@ -1810,9 +1810,9 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
                   path = "a touch swipe inside the element (it offers no scroll-" + direction(d) + " action)";
                 }
               }
-              if (action != 0 && acted == scope && isWheel(scope, nodes.get(scope.index))) {
+              if (action != 0 && acted == scope && isWheel(scope, current)) {
                 // A wheel's page is one step, and only its selected value says whether it moved.
-                String value = Core.wheelValue(scope);
+                String value = Core.selectedValue(current, scope);
                 WheelStep step =
                     stepWheel(scope, current, action, fence, pkg, token,
                         batchDeadline > 0 ? batchDeadline : Long.MAX_VALUE);
@@ -1902,7 +1902,8 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
             token);
         break;
       case "set_value":
-        if (isWheel(target, n)) setWheel(target, now, (String) args.get("value"), fence, pkg, token);
+        Element wheel = enclosingWheel(target, now);
+        if (wheel != null) setWheel(wheel, now, (String) args.get("value"), fence, pkg, token);
         else setValue(n, target, (String) args.get("value"), pkg, token);
         break;
       case "type_text":
@@ -1976,18 +1977,30 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
   static final long WHEEL_STEP_MS = 1_000, WHEEL_SETTLED_MS = 80;
 
   /**
-   * A wheel picker: a focusable single-value element, neither an editor nor a set-progress range,
-   * that shows its selected value as its own text (or a range value) and offers its own generic
-   * scroll actions to step it.
+   * A wheel picker: a single-value element, neither an editor nor a set-progress range, that shows
+   * its selected value as its own text (or a range value), offers its own generic scroll actions
+   * to step it, and is focusable or has a row inside it showing that same text (the selected row
+   * of a ColorOS picker, between the rows before and after it).
    */
-  private boolean isWheel(Element e, AccessibilityNodeInfo n) {
-    return e != null
-        && n != null
-        && e.focusable
-        && !e.editable
-        && Core.wheelValue(e) != null
-        && (hasAction(n, FORWARD) || hasAction(n, BACKWARD))
-        && !hasAction(n, android.R.id.accessibilityActionSetProgress);
+  private boolean isWheel(Element e, Screen s) {
+    AccessibilityNodeInfo n = e == null ? null : nodes.get(e.index);
+    if (n == null
+        || e.editable
+        || Core.wheelValue(e) == null
+        || !(hasAction(n, FORWARD) || hasAction(n, BACKWARD))
+        || hasAction(n, android.R.id.accessibilityActionSetProgress)) return false;
+    if (e.focusable) return true;
+    for (Element c : s.elements.values())
+      if (c.window == e.window && c.path.startsWith(e.path + "/") && c.text.equals(e.text)) return true;
+    return false;
+  }
+
+  /** {@code e} when it is a wheel picker, else the wheel picker enclosing it (a row of it), or null. */
+  private Element enclosingWheel(Element e, Screen s) {
+    if (isWheel(e, s)) return e;
+    for (Element c : s.elements.values())
+      if (c.window == e.window && e.path.startsWith(c.path + "/") && isWheel(c, s)) return c;
+    return null;
   }
 
   /** A wheel step's outcome: the screen read after it, the wheel in it, whether its value changed. */
@@ -2012,7 +2025,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
   private WheelStep stepWheel(
       Element w, Screen seen, int action, Screen fence, String pkg, long token, long deadline) {
     AccessibilityNodeInfo node = nodes.get(w.index);
-    String was = Core.wheelValue(w);
+    String was = Core.wheelKey(seen, w);
     checkTarget(token, pkg);
     ensureOpen();
     sent = true;
@@ -2036,7 +2049,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
       followed = Core.follow(seen, w, after);
       if (followed == null)
         throw fail("STALE_ELEMENT", "The wheel was not found after a step; read state before continuing");
-      String value = String.valueOf(Core.wheelValue(followed));
+      String value = Core.wheelKey(after, followed);
       long now = SystemClock.uptimeMillis();
       if (!value.equals(last)) {
         last = value;
@@ -2059,9 +2072,9 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
   private void setWheel(Element wheel, Screen now, String value, Screen fence, String pkg, long token) {
     String goal = value.trim();
     if (goal.isEmpty()) throw fail("INVALID_ARGUMENT", "A wheel takes one of its values; nothing sent");
-    String shown = Core.wheelValue(wheel);
+    String shown = Core.selectedValue(now, wheel);
     if (Core.sameWheelValue(shown, goal)) {
-      addNotice("The wheel already shows " + shown + "; nothing sent.");
+      addNotice("The wheel already shows " + Core.wheelShort(shown) + "; nothing sent.");
       return;
     }
     long deadline = SystemClock.uptimeMillis() + WHEEL_MAX_MS;
@@ -2102,7 +2115,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
         }
         throw wheelNotReached(shown, goal, steps, "a step did not change it (an end of the wheel?)");
       }
-      String next = Core.wheelValue(w);
+      String next = Core.selectedValue(seen, w);
       if (!learned) {
         // The first change shows which way scroll-forward turns: away from the goal means down.
         Long before = Core.wheelNumber(shown), after = Core.wheelNumber(next);
@@ -2117,13 +2130,14 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
       if (!numeric && !met.add(shown))
         throw wheelNotReached(shown, goal, steps, "the wheel came round without showing it");
     }
-    addNotice("Set the wheel to " + shown + " in " + steps + (steps == 1 ? " step." : " steps."));
+    addNotice(
+        "Set the wheel to " + Core.wheelShort(shown) + " in " + steps + (steps == 1 ? " step." : " steps."));
   }
 
   private Failure wheelNotReached(String shown, String goal, int steps, String why) {
     return fail(
         "VALUE_NOT_REACHED",
-        "The wheel shows " + shown + " after " + steps + (steps == 1 ? " step; " : " steps; ") + goal
+        "The wheel shows " + Core.wheelShort(shown) + " after " + steps + (steps == 1 ? " step; " : " steps; ") + goal
             + " was not reached: "
             + why + ". Read state before continuing");
   }
@@ -2182,8 +2196,13 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     return nearest;
   }
 
-  /** What an indexed scroll moves: the element when it scrolls, else the nearest scrolling ancestor. */
+  /**
+   * What an indexed scroll moves: the wheel picker the element is or is a row of, else the element
+   * when it scrolls, else the nearest scrolling ancestor.
+   */
   private Element scrollScope(Element e, Screen s) {
+    Element wheel = enclosingWheel(e, s);
+    if (wheel != null) return wheel;
     return scrolls(nodes.get(e.index)) ? e : scrollingAncestor(e, s);
   }
 

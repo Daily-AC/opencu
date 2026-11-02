@@ -245,10 +245,17 @@ captured in their place.
   offer only scroll forward/backward, and AOSP `NumberPicker`'s editable centre
   takes typed text only when it loses focus), so `set_value` steps it with its
   own scroll actions and reads its value after every step, until it shows the
-  requested value. A wheel here is a focusable element that is neither an editor
-  nor a set-progress range, shows its selected value as its own text (or a range
-  value) and offers scroll forward or backward. Values are compared as text, or
-  as numbers when both name one (`7` matches `07`). Numbers go toward the
+  requested value. A wheel here is an element that is neither an editor nor a
+  set-progress range, shows its selected value as its own text (or a range value),
+  offers scroll forward or backward, and is focusable or has a row inside it
+  showing that same text. The PGBM10's ColorOS time picker is such a wheel: each
+  `COUINumberPicker` shows the value followed by a unit and spoken instructions
+  (`23小时选择器项目 使用两指 上下滑动选择`) and holds three class-less virtual rows
+  (previous, selected, next). A row of a wheel names the wheel too, for `set_value`
+  and `scroll`. The selected value is the text of the one row marked selected,
+  if any, else the wheel's own text; it is read as its leading integer when it has
+  one (`23`), and a requested number matches that number (`7` matches `07…`),
+  while other text matches a value that starts with it. Numbers go toward the
   requested number, or the short way round when the wheel's range is known;
   scroll-forward is taken to increase, as on AOSP wheels, until the first step
   shows otherwise. Other values go forward, and back once from an end. Each step

@@ -139,9 +139,19 @@ public final class Core {
       Element a = entry.getValue(), b = now.get(entry.getKey());
       if (a == null || b == null) continue;
       String from = value(a), to = value(b);
-      if (!from.equals(to)) changes.add(label(b) + " " + from + " -> " + to);
+      if (from.equals(to)) continue;
+      // A wheel's value as its leading number: its text can carry a unit and spoken hints.
+      boolean wheel = !b.ranged && !b.editable && !b.checkable;
+      changes.add(label(b) + " " + (wheel ? wheelShort(from) : from) + " -> " + (wheel ? wheelShort(to) : to));
     }
     return changes;
+  }
+
+  /** Whether {@code o} is inside an element that holds a value, such as a row of a wheel. */
+  private static boolean insideValue(Element o, Screen s) {
+    for (Element v : s.elements.values())
+      if (v.window == o.window && o.path.startsWith(v.path + "/") && value(v) != null) return true;
+    return false;
   }
 
   /** The value-holding elements of {@code s} by identity; an identity found twice maps to null. */
@@ -153,7 +163,11 @@ public final class Core {
       String parent = e.path.substring(0, Math.max(0, e.path.lastIndexOf('/'))) + "/";
       StringBuilder around = new StringBuilder();
       for (Element o : s.elements.values())
-        if (o != e && o.window == e.window && o.path.startsWith(parent) && value(o) == null)
+        if (o != e
+            && o.window == e.window
+            && o.path.startsWith(parent)
+            && value(o) == null
+            && !insideValue(o, s))
           around.append(o.text).append('\u0001').append(o.desc).append('\u0002');
       String key =
           e.display + "|" + e.window + "|" + e.path + "|" + e.clazz + "|" + e.id + "|" + around;
@@ -171,14 +185,17 @@ public final class Core {
 
   private static final Pattern DIGITS = Pattern.compile("[0-9]+");
 
+  private static final Pattern LEADING = Pattern.compile("-?[0-9]{1,15}");
+
   /**
-   * The number a wheel value names: the value itself, or its only run of digits (as in "35 min");
-   * null for anything else.
+   * The number a wheel value names: its leading integer, as in "07" or a ColorOS picker's "23"
+   * followed by a unit and spoken instructions; else its only run of digits; else null.
    */
   public static Long wheelNumber(String value) {
     if (value == null) return null;
     String v = value.trim();
-    if (v.matches("-?[0-9]{1,15}")) return Long.parseLong(v);
+    Matcher lead = LEADING.matcher(v);
+    if (lead.lookingAt()) return Long.parseLong(lead.group());
     Matcher m = DIGITS.matcher(v);
     if (!m.find()) return null;
     String digits = m.group();
@@ -186,12 +203,46 @@ public final class Core {
     return Long.parseLong(digits);
   }
 
-  /** Whether a wheel showing {@code shown} shows {@code goal}: the same text, or the same number. */
+  /** A wheel value as a message shows it: its leading integer as written ("07"), else the value. */
+  public static String wheelShort(String value) {
+    if (value == null) return "";
+    Matcher lead = LEADING.matcher(value.trim());
+    return lead.lookingAt() ? lead.group() : value.trim();
+  }
+
+  /**
+   * The selected value of the wheel {@code w} in {@code s}: the text of the one row inside it that
+   * is marked selected, else what the wheel shows itself ({@link #wheelValue}).
+   */
+  public static String selectedValue(Screen s, Element w) {
+    Element selected = null;
+    int count = 0;
+    for (Element c : s.elements.values())
+      if (c.window == w.window && c.path.startsWith(w.path + "/") && c.selected && !c.text.isEmpty()) {
+        selected = c;
+        count++;
+      }
+    return count == 1 ? selected.text : wheelValue(w);
+  }
+
+  /** What tells a wheel's selected values apart: the number it names, else its whole value. */
+  public static String wheelKey(Screen s, Element e) {
+    String value = selectedValue(s, e);
+    Long number = wheelNumber(value);
+    return number != null ? "#" + number : String.valueOf(value);
+  }
+
+  /**
+   * Whether a wheel showing {@code shown} shows {@code goal}: the same number when the goal names
+   * one, else the same text or text that starts with it (a value followed by a unit or a hint).
+   */
   public static boolean sameWheelValue(String shown, String goal) {
     if (shown == null) return false;
-    if (shown.trim().equals(goal.trim())) return true;
-    Long a = wheelNumber(shown), b = wheelNumber(goal);
-    return a != null && a.equals(b);
+    String s = shown.trim(), g = goal.trim();
+    if (s.equals(g)) return true;
+    Long a = wheelNumber(s), b = wheelNumber(g);
+    if (b != null && LEADING.matcher(g).matches()) return b.equals(a);
+    return !g.isEmpty() && s.startsWith(g);
   }
 
   /** How many steps {@code from} is from {@code to}: round the wheel when its span is known. */

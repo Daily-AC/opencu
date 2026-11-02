@@ -3246,6 +3246,145 @@ public final class EngineTests {
       require(Boolean.FALSE.equals(callStatic("drawnAbove", types, b, a, s)), "drawn first is below");
       require(Boolean.TRUE.equals(callStatic("drawnAbove", types, a, b, s)), "drawn last is above");
     });
+
+    // Item 2d: the PGBM10's ColorOS time picker, as its nodes were read on the device.
+    test("one batch sets the ColorOS time picker from 23:45 to 07:35 with set_value", () -> {
+      ColorOsTime time = new ColorOsTime(23, 45);
+      ScriptedEngine engine = time.engine();
+      engine.read();
+      Map<String, Object> result = engine.call("run_actions", args("actions", List.of(
+          obj("method", "set_value", "element_index", time.hour.index(), "value", "7"),
+          obj("method", "set_value", "element_index", time.minute.index(), "value", "35"))));
+      Map<String, Object> batch = map(map(result.get("_meta")).get("opencu/batch"));
+      require(Integer.valueOf(2).equals(batch.get("completed")) && batch.get("reason") == null,
+          "batch " + batch + ": " + text(result).split("\n")[0]);
+      require(time.hour.value == 7 && time.minute.value == 35, "time " + time.hour.value + ":" + time.minute.value);
+      require(time.hour.element.text.startsWith("07") && time.minute.element.text.startsWith("35"), "text " + time.hour.element.text);
+    });
+
+    test("set_value on the selected row of a ColorOS picker sets the picker", () -> {
+      ColorOsTime time = new ColorOsTime(23, 45);
+      ScriptedEngine engine = time.engine();
+      engine.read();
+      String out = text(engine.call("set_value", args("element_index", time.minute.index() + 2, "value", "48")));
+      require(time.minute.value == 48, "minute " + time.minute.value);
+      require(out.startsWith("Set the wheel to 48 in 3 steps."), "notice: " + out.split("\n")[0]);
+    });
+
+    test("scroll by the selected row of a ColorOS picker steps the picker one value per page", () -> {
+      ColorOsTime time = new ColorOsTime(23, 45);
+      ScriptedEngine engine = time.engine();
+      engine.read();
+      String out = text(engine.call("scroll", args("element_index", time.minute.index() + 2, "direction", "down", "pages", 2)));
+      require(time.minute.node.performed.equals(List.of(FORWARD, FORWARD)), "steps " + time.minute.node.performed + ": " + out.split("\n")[0]);
+      require(time.minute.value == 47, "minute " + time.minute.value);
+    });
+
+    test("a ColorOS picker that a swipe turned is named with its old and new number", () -> {
+      ColorOsTime time = new ColorOsTime(7, 35);
+      ScriptedEngine engine = time.engine();
+      engine.mainShot = android.graphics.Bitmap.of(1080, 2400, "display 0");
+      Screen state = engine.read();
+      set(engine, "coordinates", grant(state, 576, 1280));
+      int[] lifts = {0};
+      IntConsumer wheels = engine.onObserve;
+      engine.onObserve = n -> {
+        wheels.accept(n);
+        long ups = engine.events.stream().filter(e -> e.action == 1).count();
+        for (; lifts[0] < ups; lifts[0]++) time.minute.show(33);
+      };
+      String out = text(engine.call("scroll", args("x", 400, "y", 300, "direction", "up")));
+      require(out.contains("WARNING: the swipe also changed COUINumberPicker 35 -> 33"), "notice: " + out.split("\n")[1]);
+    });
+  }
+
+  /**
+   * The new-alarm page's time picker on the PGBM10 (ColorOS, Android 14), node for node as read on
+   * the device: two COUINumberPickers that list scroll forward/backward, are scrollable but not
+   * focusable, have no RangeInfo and no id, and show the selected value followed by a unit and
+   * spoken instructions as their text ("23小时选择器项目 使用两指 上下滑动选择"). Each has three virtual
+   * rows without a class for the previous, selected and next value; the selected row is
+   * scrollable and repeats the picker's text. Hours wrap 23 to 00, minutes 59 to 00. A step's new
+   * value shows 150 ms after the action.
+   */
+  static final class ColorOsTime {
+    static final String HINT = "选择器项目 使用两指 上下滑动选择";
+
+    final class Picker {
+      final Element element;
+      final Element[] rows = new Element[3];
+      final FakeNode node;
+      final String unit;
+      final int span;
+      int value;
+      Integer pending;
+      long pendingAt;
+
+      Picker(String path, int left, String unit, int span, int value) {
+        this.unit = unit;
+        this.span = span;
+        element = scene.add(path, "com.coui.appcompat.picker.COUINumberPicker", "", "", left, 427, left + 444, 832);
+        element.scrollable = true;
+        element.actions.put("scroll_forward", FORWARD);
+        element.actions.put("scroll_backward", BACKWARD);
+        node = scene.node(element).with(FORWARD, BACKWARD);
+        node.scrollable = true;
+        int[] tops = {427, 562, 696, 832};
+        for (int i = 0; i < 3; i++) {
+          rows[i] = scene.add(path + "/" + i, "", "", "", left, tops[i], left + 444, tops[i + 1]);
+          rows[i].clickable = rows[i].longClickable = true;
+        }
+        rows[1].scrollable = true;
+        scene.node(rows[1]).scrollable = true;
+        node.effects.put(FORWARD, () -> later(this.value + 1));
+        node.effects.put(BACKWARD, () -> later(this.value - 1));
+        show(value);
+      }
+
+      int index() {
+        return scene.specs.indexOf(element) + 1;
+      }
+
+      String text(int v) {
+        return String.format(Locale.ROOT, "%02d", Math.floorMod(v, span)) + unit + HINT;
+      }
+
+      void later(int v) {
+        pending = Math.floorMod(v, span);
+        pendingAt = android.os.SystemClock.uptimeMillis() + 150;
+      }
+
+      void show(int v) {
+        value = v;
+        element.text = text(v);
+        for (int i = 0; i < 3; i++) rows[i].text = text(v + i - 1);
+      }
+
+      void tick() {
+        if (pending != null && android.os.SystemClock.uptimeMillis() >= pendingAt) {
+          show(pending);
+          pending = null;
+        }
+      }
+    }
+
+    final Scene scene = new Scene();
+    final Picker hour, minute;
+
+    ColorOsTime(int h, int m) {
+      scene.add("/0", "android.widget.LinearLayout", "", "", 0, 300, 1080, 900);
+      hour = new Picker("/0/0", 96, "小时", 24, h);
+      minute = new Picker("/0/1", 540, "分钟", 60, m);
+    }
+
+    ScriptedEngine engine() {
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      engine.onObserve = n -> {
+        hour.tick();
+        minute.tick();
+      };
+      return engine;
+    }
   }
 
   /**
