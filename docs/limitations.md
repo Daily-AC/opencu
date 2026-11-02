@@ -167,7 +167,8 @@ The measurements behind this section are in
   suite. Settings on the acceptance ColorOS build requires a real touch to enter
   search mode; the engine uses touch-first clicks. `type_text` and `paste` set the
   focused editor's text through accessibility and never use the clipboard or the
-  keyboard, so a field that acts only on typed keys may not react. Coordinate
+  keyboard, so a field that acts only on typed keys may not react. Editors that
+  ignore accessibility set-text do not receive type_text. Coordinate
   gestures and custom accessibility
   actions have not been verified on the owner's apps. Timings are in the evidence;
   no general app performance claim follows from these samples.

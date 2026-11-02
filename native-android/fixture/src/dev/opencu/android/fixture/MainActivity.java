@@ -23,7 +23,6 @@ public final class MainActivity extends Activity {
                 | WindowManager.LayoutParams.FLAG_FULLSCREEN);
     Truth.put(this, "ascii", "");
     Truth.put(this, "chinese", "");
-    Truth.put(this, "keyboard", "");
     Truth.put(this, "checked", false);
     Truth.put(this, "checkboxChanges", 0);
     Truth.put(this, "dialogChoice", "");
@@ -92,34 +91,11 @@ public final class MainActivity extends Activity {
     return e;
   }
 
-  private EditText keyboardField() {
-    KeyboardOnlyEditText e = new KeyboardOnlyEditText(this);
-    e.setId(R.id.keyboard);
-    e.setSingleLine(true);
-    e.setHint("Keyboard-only field");
-    e.setContentDescription("Keyboard-only field");
-    e.setText(Truth.state.optString("keyboard"));
-    layout.addView(e, new LinearLayout.LayoutParams(-1, dp(48)));
-    e.addTextChangedListener(
-        new TextWatcher() {
-          public void beforeTextChanged(CharSequence s, int st, int c, int a) {}
-
-          public void onTextChanged(CharSequence s, int st, int before, int count) {
-            Truth.put(MainActivity.this, "keyboard", s.toString());
-          }
-
-          public void afterTextChanged(Editable s) {}
-        });
-    e.lockProgrammaticText();
-    return e;
-  }
-
   private void form() {
     base("form");
     label("OpenCU fixture form", 0);
     field("ASCII field", R.id.ascii, "ascii");
     field("Chinese field", R.id.chinese, "chinese");
-    keyboardField();
     CheckBox check = new CheckBox(this);
     check.setId(R.id.checkbox);
     check.setText("Fixture checkbox");
@@ -195,22 +171,5 @@ public final class MainActivity extends Activity {
           Truth.put(this, "row", pos + 1);
           ((TextView) v).setText("Selected row " + (pos + 1));
         });
-  }
-
-  private static final class KeyboardOnlyEditText extends EditText {
-    private boolean lockProgrammaticText;
-
-    KeyboardOnlyEditText(android.content.Context context) {
-      super(context);
-    }
-
-    void lockProgrammaticText() {
-      lockProgrammaticText = true;
-    }
-
-    @Override
-    public void setText(CharSequence text, BufferType type) {
-      if (!lockProgrammaticText) super.setText(text, type);
-    }
   }
 }

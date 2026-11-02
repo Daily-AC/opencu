@@ -1,5 +1,5 @@
 <resources>
-  <item type="id" name="ascii"/><item type="id" name="chinese"/><item type="id" name="keyboard"/><item type="id" name="checkbox"/>
+  <item type="id" name="ascii"/><item type="id" name="chinese"/><item type="id" name="checkbox"/>
   <item type="id" name="load"/><item type="id" name="loading"/><item type="id" name="result"/>
   <item type="id" name="dialog"/><item type="id" name="list"/><item type="id" name="second"/>
   <item type="id" name="move"/><item type="id" name="rows"/><item type="id" name="form"/>

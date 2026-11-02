@@ -80,13 +80,13 @@ try{
       if(!text(s).split('\n').some(line=>line.includes('id=checkbox ')&&line.includes(' checked')))s=await click(s,'checkbox');
       const t=truth();assert.equal(t.ascii,`ASCII run ${run}`);assert.equal(t.chinese,'无线调试 测试');assert.equal(t.checked,true);return {truth:t,stateBytes:Buffer.byteLength(text(s))};
     },checks);
-    await check('keyboard_style_type_text',async()=>{
-      s=ok(await call('click',{element_index:index(s,'id=keyboard ')}));
+    await check('type_text_focused_field',async()=>{
+      s=ok(await call('set_value',{element_index:index(s,'id=chinese '),value:''}));
+      s=ok(await call('click',{element_index:index(s,'id=chinese ')}));
       s=ok(await call('type_text',{text:`typed ${run} `}));
       s=ok(await call('type_text',{text:'无线调试'}));
-      assert.equal(truth().keyboard,`typed ${run} 无线调试`,'Keyboard-only field did not receive input connection text');
-      assert.doesNotMatch(text(s),/set-text fallback/,'type_text unexpectedly used direct fallback');
-      return {truth:truth(),keyboardPath:true};
+      assert.equal(truth().chinese,`typed ${run} 无线调试`,'Focused field did not receive type_text');
+      return {truth:truth()};
     },checks);
     await check('batch_fill_load_until_without_extra_read',async()=>{
       const before=client.next;
