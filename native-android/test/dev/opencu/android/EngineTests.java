@@ -3108,6 +3108,90 @@ public final class EngineTests {
       require("stale_element".equals(batch.get("reason")), "batch " + batch);
       require(minute.node.performed.isEmpty(), "actions " + minute.node.performed);
     });
+
+    // Item 6c: scrolling up listed whole rows mixed with parts of rows cut by the list's edge.
+    for (String way : List.of("down", "up"))
+      test("passed-over rows are whole rows, top to bottom, when scrolling " + way, () -> {
+        boolean down = way.equals("down");
+        CutListScene alarms = new CutListScene(12, down ? 0 : 1500);
+        ScriptedEngine engine = ScriptedEngine.create(alarms.scene);
+        engine.read();
+        String out = text(engine.call("scroll", args("element_index", 1, "direction", way, "pages", 3)));
+        int header = out.indexOf("Passed over while scrolling (9 distinct rows, top to bottom;");
+        require(header >= 0, "header: " + out.substring(0, Math.min(out.length(), 400)));
+        List<String> rows = new ArrayList<>();
+        for (String line : out.substring(header).split("\n"))
+          if (line.startsWith("- ")) rows.add(line.substring(2));
+        List<String> expected = new ArrayList<>();
+        for (int i = down ? 0 : 3; i <= (down ? 8 : 11); i++) expected.add(alarms.time(i) + " | " + alarms.label(i));
+        require(rows.equals(expected), "rows " + rows + " expected " + expected);
+      });
+  }
+
+  /**
+   * A recycled list of {@code count} alarm rows, 200 px each, in a viewport from y=100 to y=1000.
+   * Each visible row is a clickable layout at "/0/k" holding a time (upper half) and a label
+   * (lower half); a row the viewport's edge cuts has clipped bounds and keeps its own size, and a
+   * half outside the viewport is absent, as Android reports them. Scroll-down/up move exactly one
+   * viewport, as RecyclerView's accessibility scroll does.
+   */
+  static final class CutListScene {
+    final Scene scene = new Scene();
+    final Element list;
+    final FakeNode node;
+    final int count, top = 100, bottom = 1000, height = 200;
+    int offset;
+
+    CutListScene(int count, int offset) {
+      this.count = count;
+      list = scene.add("/0", "androidx.recyclerview.widget.RecyclerView", "alarms", "", 0, top, 1080, bottom);
+      list.scrollable = true;
+      node = scene.node(list).with(DOWN, UP);
+      node.scrollable = true;
+      int end = count * height - (bottom - top);
+      node.effects.put(DOWN, () -> layout(Math.min(this.offset + (bottom - top), end)));
+      node.effects.put(UP, () -> layout(Math.max(this.offset - (bottom - top), 0)));
+      layout(offset);
+    }
+
+    String time(int i) {
+      return String.format(Locale.ROOT, "%02d:%02d", 6 + i / 4, i % 4 * 15);
+    }
+
+    String label(int i) {
+      return i % 2 == 0 ? "Daily" : "Once";
+    }
+
+    void layout(int offset) {
+      this.offset = offset;
+      while (scene.specs.size() > 1) {
+        scene.specs.remove(1);
+        scene.nodes.remove(1);
+      }
+      int child = 0;
+      for (int i = 0; i < count; i++) {
+        int y0 = top + i * height - offset, y1 = y0 + height;
+        if (y1 <= top || y0 >= bottom) continue;
+        String path = "/0/" + child++;
+        Element row = scene.add(path, "android.widget.LinearLayout", "row", "", 0, Math.max(y0, top), 1080, Math.min(y1, bottom));
+        row.clickable = true;
+        own(row, 1080, height);
+        int[][] halves = {{y0, y0 + height / 2}, {y0 + height / 2, y1}};
+        String[] texts = {time(i), label(i)};
+        for (int h = 0; h < 2; h++) {
+          int a = halves[h][0], b = halves[h][1];
+          if (b <= top || a >= bottom) continue;
+          Element t = scene.add(path + "/" + h, "android.widget.TextView", h == 0 ? "time" : "label", texts[h], 0, Math.max(a, top), 800, Math.min(b, bottom));
+          own(t, 800, height / 2);
+        }
+      }
+    }
+
+    static void own(Element e, int width, int height) {
+      if (!hasField(Element.class, "fullHeight")) return; // older engines did not read a node's own size
+      set(e, "fullWidth", width);
+      set(e, "fullHeight", height);
+    }
   }
 
   /**

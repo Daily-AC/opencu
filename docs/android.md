@@ -190,11 +190,19 @@ captured in their place.
   not found on the new screen, so the rest were not sent`.
   When more than one page was requested, the result lists the rows on the pages
   scrolled past, after the notice and before the state, under `Passed over while
-  scrolling (N distinct rows, in order; the final page is the state below):`.
-  Each row joins the text, descriptions and checked state inside one child of the
-  scrolled element (a wheel's own value is a row); rows are distinct and in the
-  order met, at most 200 rows of at most 200 characters, and password fields are
-  left out. One call can therefore read a long list.
+  scrolling (N distinct rows, top to bottom; the final page is the state below):`
+  (`left to right` for a horizontal list), in list order whichever way the pages
+  went. Each row joins the text, descriptions and checked state inside one child
+  of the scrolled element; only whole rows are listed. A row that the scrolled
+  element's edge cuts (Android reports its bounds clipped, while its bounds in its
+  parent keep its own size) is a fragment: an accessibility page moves exactly one
+  viewport, so a row across the page boundary is cut on both pages, and its two
+  parts are joined into one row when their visible parts add up to its size. A
+  fragment of a row shown whole on the neighbouring page is dropped, as is the
+  part the first page shows of the row before it. A wheel lists the values it
+  passed, one per page. Rows are distinct, at most 200 rows of at most 200
+  characters, and password fields are left out. One call can therefore read a
+  long list.
 - `press_key`: back, home, enter/Return, delete/backspace, tab, recents/app_switch,
   search. No volume, power, arbitrary keycodes or modifier chords.
 - `type_text`: types into the focused editable only. Without one it returns

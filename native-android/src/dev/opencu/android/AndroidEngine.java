@@ -902,6 +902,8 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     }
     Element e = element(n, path, w.id);
     if (e.right <= 0 || e.left >= s.width || e.bottom <= 0 || e.top >= s.height) e.visible = false;
+    if (e.visible && e.right > e.left && e.bottom > e.top && e.clipped())
+      s.clipped.put(path, new int[] {e.fullWidth, e.fullHeight});
     if (e.useful()) {
       e.index = s.elements.size() + 1;
       s.elements.put(e.index, e);
@@ -930,6 +932,11 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     e.top = b.top;
     e.right = b.right;
     e.bottom = b.bottom;
+    // Screen bounds are clipped to the parents; bounds in the parent keep the node's own size.
+    Rect own = new Rect();
+    n.getBoundsInParent(own);
+    e.fullWidth = Math.max(0, own.right - own.left);
+    e.fullHeight = Math.max(0, own.bottom - own.top);
     e.visible = n.isVisibleToUser();
     e.clickable = n.isClickable();
     e.longClickable = n.isLongClickable();
@@ -1675,8 +1682,10 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
           String stopped = null;
           // How the pages were sent when not by the element's own scroll action.
           String path = null;
-          // Rows on the pages scrolled past, in order and distinct.
-          Set<String> passed = new LinkedHashSet<>();
+          // Rows on the pages scrolled past, whole, in list order and distinct.
+          Core.Passed passed = new Core.Passed(d);
+          // A wheel's pages pass over its values, one per page.
+          Set<String> wheelValues = new LinkedHashSet<>();
           Screen current = now;
           // What an indexed scroll moves, as found in current: the element when it scrolls,
           // otherwise the nearest scrolling element enclosing it. It is followed from page to
@@ -1752,13 +1761,14 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
                       batchDeadline > 0 ? batchDeadline : Long.MAX_VALUE);
               if (!step.changed) break;
               moved++;
-              passed.add(value);
+              wheelValues.add(value);
               current = step.after;
               scope = step.wheel;
               continue;
             }
             String before = Core.scrollContent(current, scope);
-            List<String> rows = Core.rows(current, scope);
+            Screen pageScreen = current;
+            Element pageScope = scope;
             checkTarget(token, pkg);
             if (action != 0) {
               ensureOpen();
@@ -1789,7 +1799,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
                         + ". Check these values and correct them if they were not meant to change.");
                 if (result.moved) {
                   moved++;
-                  passed.addAll(rows);
+                  passed.page(pageScreen, pageScope);
                 }
                 stopped = "the swipe changed a value outside the scrolled content, so the rest were not sent";
                 break;
@@ -1797,7 +1807,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
             }
             if (!result.moved) break;
             moved++;
-            passed.addAll(rows);
+            passed.page(pageScreen, pageScope);
             if (scope != null) {
               current = result.after;
               scope = result.scope;
@@ -1813,7 +1823,11 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
                     ? "Scrolled " + moved + " of " + requested + " pages; " + stopped
                     : Core.scrollNotice(moved, requested));
           if (path != null) addNotice("Scrolled with " + path + ".");
-          if (requested > 1) passedOver += Core.passedOver(passed);
+          if (requested > 1)
+            passedOver +=
+                wheelValues.isEmpty()
+                    ? Core.passedOver(passed.finish(current, scope), passed.order())
+                    : Core.passedOver(wheelValues, "in order");
           break;
         }
       case "press_key":
