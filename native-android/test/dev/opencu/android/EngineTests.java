@@ -46,6 +46,7 @@ public final class EngineTests {
       passed++;
       System.out.println("ok - " + name);
     } catch (Throwable t) {
+      if (System.getenv("OPENCU_TEST_TRACE") != null) t.printStackTrace(System.out);
       failures.add(name);
       System.out.println("not ok - " + name + ": " + describe(t));
     }
@@ -362,6 +363,8 @@ public final class EngineTests {
       e.log = Collections.synchronizedList(new ArrayList<>());
       e.events = Collections.synchronizedList(new ArrayList<>());
       e.trace = Collections.synchronizedList(new ArrayList<>());
+      e.requestedFlags = new ArrayList<>();
+      e.disconnected = new ArrayList<>();
       return e;
     }
 
@@ -454,6 +457,48 @@ public final class EngineTests {
     void sendKey(UiAutomation via, int display, long down, long time, int action, int code, int flags) {
       events.add(new Event("key", via, display, action));
       log.add("key " + action + " code " + code + " flags " + flags + " display " + display);
+    }
+
+    interface DisplayScript {
+      AndroidEngine.OwnedDisplay create(int requested);
+    }
+
+    interface ConnectScript {
+      UiAutomation connect(int displayId) throws Exception;
+    }
+
+    DisplayScript displayScript;
+    ConnectScript connectScript;
+    Body imeScript;
+    List<Integer> requestedFlags;
+    List<UiAutomation> disconnected;
+
+    @Override
+    AndroidEngine.OwnedDisplay createOwnedDisplay(int requested) {
+      requestedFlags.add(requested);
+      return displayScript.create(requested);
+    }
+
+    @Override
+    UiAutomation createDisplayAutomation(int displayId) throws Exception {
+      return connectScript.connect(displayId);
+    }
+
+    @Override
+    void disconnectAutomation(UiAutomation target) {
+      disconnected.add(target);
+    }
+
+    // Not annotated: older engines set the policy without reading it back.
+    void requireLocalIme(int displayId) {
+      if (imeScript != null)
+        try {
+          imeScript.run();
+        } catch (RuntimeException e) {
+          throw e;
+        } catch (Exception e) {
+          throw new RuntimeException(e);
+        }
     }
 
     // Not annotated: the platform release is replaced by the stop the test records.
@@ -594,6 +639,34 @@ public final class EngineTests {
     set(engine, "desktopDisplay", 5);
     set(engine, "lastCallAt", android.os.SystemClock.uptimeMillis());
     return engine;
+  }
+
+  static final int ISOLATED = (1 << 7) | (1 << 11) | (1 << 12); // trusted, own focus, no stealing
+
+  static final class TestDisplay extends AndroidEngine.OwnedDisplay {
+    boolean released;
+
+    TestDisplay(int id, int flags) {
+      super(null, null, null, id, flags);
+    }
+
+    @Override
+    void release() {
+      released = true;
+    }
+  }
+
+  /** An engine on display 0 whose agent display start is scripted. */
+  static ScriptedEngine desktopEngine() {
+    ScriptedEngine engine = ScriptedEngine.create(new Scene());
+    set(engine, "mainAutomation", allocate(UiAutomation.class));
+    set(engine, "automation", get(engine, "mainAutomation"));
+    engine.connectScript = id -> allocate(UiAutomation.class);
+    return engine;
+  }
+
+  static void startDesktop(ScriptedEngine engine) throws Exception {
+    invoke(engine, "startDesktop", new Class<?>[0]);
   }
 
   static Map<String, Object> args(Object... pairs) {
@@ -1264,6 +1337,92 @@ public final class EngineTests {
       } finally {
         worker.shutdownNow();
       }
+    });
+
+    test("agent display start succeeds only with every isolation requirement", () -> {
+      ScriptedEngine engine = desktopEngine();
+      UiAutomation main = (UiAutomation) get(engine, "mainAutomation");
+      TestDisplay display = new TestDisplay(5, ISOLATED);
+      engine.displayScript = requested -> display;
+      startDesktop(engine);
+      require((Integer) get(engine, "desktopDisplay") == 5 && (Integer) get(engine, "activeDisplay") == 5, "not started");
+      require(engine.disconnected.equals(List.of(main)) && !display.released, "disconnected " + engine.disconnected.size() + " connections");
+    });
+
+    test("agent display never falls back to an untrusted display", () -> {
+      ScriptedEngine engine = desktopEngine();
+      engine.displayScript = requested -> {
+        if ((requested & (1 << 10)) != 0) throw new SecurityException("ADD_TRUSTED_DISPLAY");
+        return new TestDisplay(5, 0);
+      };
+      Failure f = failure(() -> startDesktop(engine));
+      require(f.code.equals("AGENT_DESKTOP_UNAVAILABLE"), f.code);
+      require(engine.requestedFlags.size() == 1, "retried with flags " + engine.requestedFlags);
+      require((Integer) get(engine, "desktopDisplay") == -1 && engine.disconnected.isEmpty(), "route changed");
+    });
+
+    test("agent display without own focus or focus-steal protection is released", () -> {
+      ScriptedEngine engine = desktopEngine();
+      TestDisplay display = new TestDisplay(5, 1 << 7);
+      engine.displayScript = requested -> display;
+      Failure f = failure(() -> startDesktop(engine));
+      require(f.code.equals("AGENT_DESKTOP_UNAVAILABLE"), f.code);
+      require(f.getMessage().contains("own focus") && f.getMessage().contains("top-focus"), f.getMessage());
+      require(display.released && (Integer) get(engine, "desktopDisplay") == -1, "display kept");
+      require(engine.disconnected.isEmpty(), "main connection dropped");
+    });
+
+    test("agent display whose keyboard policy is not local is released", () -> {
+      ScriptedEngine engine = desktopEngine();
+      TestDisplay display = new TestDisplay(5, ISOLATED);
+      engine.displayScript = requested -> display;
+      engine.imeScript = () -> {
+        throw Core.fail("AGENT_DESKTOP_UNAVAILABLE", "keyboard policy is 1, not local");
+      };
+      Failure f = failure(() -> startDesktop(engine));
+      require(f.code.equals("AGENT_DESKTOP_UNAVAILABLE"), f.code);
+      require(display.released && (Integer) get(engine, "desktopDisplay") == -1, "display kept");
+    });
+
+    test("a failed agent connection rolls back the display and restores the main connection", () -> {
+      ScriptedEngine engine = desktopEngine();
+      UiAutomation restored = allocate(UiAutomation.class);
+      TestDisplay display = new TestDisplay(5, ISOLATED);
+      engine.displayScript = requested -> display;
+      engine.connectScript = id -> {
+        if (id == 5) throw new IllegalStateException("connect timed out");
+        return restored;
+      };
+      failure(() -> {
+        try {
+          startDesktop(engine);
+        } catch (IllegalStateException e) {
+          throw Core.fail("AGENT_DESKTOP_UNAVAILABLE", e.getMessage());
+        }
+      });
+      require((Integer) get(engine, "desktopDisplay") == -1, "desktop pretends to run on " + get(engine, "desktopDisplay"));
+      require(display.released, "display leaked");
+      require(get(engine, "automation") == restored && (Integer) get(engine, "activeDisplay") == 0,
+          "main connection not restored");
+    });
+
+    test("a main connection that cannot be restored latches the route", () -> {
+      ScriptedEngine engine = desktopEngine();
+      engine.displayScript = requested -> new TestDisplay(5, ISOLATED);
+      engine.connectScript = id -> {
+        throw new IllegalStateException("no UiAutomation");
+      };
+      failure(() -> {
+        try {
+          startDesktop(engine);
+        } catch (IllegalStateException e) {
+          throw Core.fail("AGENT_DESKTOP_UNAVAILABLE", e.getMessage());
+        }
+      });
+      Failure again = failure(() -> startDesktop(engine));
+      require(again.code.equals("DISPLAY_UNAVAILABLE"), "second start: " + again.code);
+      Failure read = failure(() -> engine.call("get_app_state", args()));
+      require(read.code.equals("DISPLAY_UNAVAILABLE"), "read: " + read.code);
     });
 
     if (!failures.isEmpty()) {

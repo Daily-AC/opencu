@@ -56,7 +56,6 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
   private int activeDisplay = Display.DEFAULT_DISPLAY;
   private int desktopDisplay = -1;
   private int desktopFlags;
-  private boolean desktopTrusted;
   private long desktopStartedAt;
   private long lastCallAt;
   private String mainForegroundBeforeDesktop;
@@ -226,7 +225,9 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     return target;
   }
 
-  void setImePolicy(int displayId) {
+  /** Keeps the agent display's keyboard on that display and reads the policy back. */
+  void requireLocalIme(int displayId) {
+    int policy;
     try {
       Object manager =
           Class.forName("android.view.WindowManagerGlobal")
@@ -236,13 +237,34 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
           .getClass()
           .getMethod("setDisplayImePolicy", int.class, int.class)
           .invoke(manager, displayId, 0); // DISPLAY_IME_POLICY_LOCAL
+      policy =
+          (Integer)
+              manager.getClass().getMethod("getDisplayImePolicy", int.class).invoke(manager, displayId);
     } catch (Exception e) {
-      hidden.put("WindowManager.setDisplayImePolicy", e.getClass().getSimpleName());
+      Throwable cause = e instanceof InvocationTargetException ? e.getCause() : e;
+      throw fail(
+          "AGENT_DESKTOP_UNAVAILABLE",
+          "Could not keep the agent keyboard on its display: " + cause.getClass().getSimpleName());
     }
+    if (policy != 0)
+      throw fail(
+          "AGENT_DESKTOP_UNAVAILABLE",
+          "The agent display's keyboard policy is " + policy + ", not local; it could appear on display 0");
   }
 
+  // Display.FLAG_* values (hidden) that isolate the person's focus from the agent display.
+  private static final int DISPLAY_TRUSTED = 1 << 7;
+  private static final int DISPLAY_OWN_FOCUS = 1 << 11;
+  private static final int DISPLAY_STEAL_TOP_FOCUS_DISABLED = 1 << 12;
+
+  /**
+   * Starts the agent display as one transaction: a trusted display with its own focus that cannot
+   * take the top focus, a verified local keyboard and its own UiAutomation connection, or nothing.
+   * Every partial acquisition is released on failure and the main connection is restored.
+   */
   private void startDesktop() throws Exception {
     if (desktopDisplay >= 0) return;
+    if (routeLost != null) throw fail("DISPLAY_UNAVAILABLE", routeLost);
     String mainBefore = foregroundOnDisplay(Display.DEFAULT_DISPLAY);
     int requested =
         FLAG_PUBLIC
@@ -256,33 +278,62 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
             | FLAG_ALWAYS_UNLOCKED
             | FLAG_OWN_FOCUS
             | FLAG_STEAL_TOP_FOCUS_DISABLED;
+    OwnedDisplay owned = null;
+    UiAutomation agent = null;
+    boolean mainDisconnected = false;
     try {
-      ownedDisplay = createOwnedDisplay(requested);
-      desktopTrusted = true;
-      desktopFlags = requested;
-    } catch (SecurityException denied) {
-      int fallback =
-          FLAG_PUBLIC
-              | FLAG_OWN_CONTENT_ONLY
-              | FLAG_SUPPORTS_TOUCH
-              | FLAG_ROTATES_WITH_CONTENT
-              | FLAG_DESTROY_CONTENT_ON_REMOVAL;
-      ownedDisplay = createOwnedDisplay(fallback);
-      desktopTrusted = false;
-      desktopFlags = fallback;
+      try {
+        owned = createOwnedDisplay(requested);
+      } catch (SecurityException denied) {
+        throw fail(
+            "AGENT_DESKTOP_UNAVAILABLE",
+            "Android refused a trusted virtual display (" + denied.getClass().getSimpleName() + ")");
+      }
+      List<String> missing = new ArrayList<>();
+      if ((owned.displayFlags & DISPLAY_TRUSTED) == 0) missing.add("trusted");
+      if ((owned.displayFlags & DISPLAY_OWN_FOCUS) == 0) missing.add("own focus");
+      if ((owned.displayFlags & DISPLAY_STEAL_TOP_FOCUS_DISABLED) == 0) missing.add("no top-focus stealing");
+      if (!missing.isEmpty())
+        throw fail(
+            "AGENT_DESKTOP_UNAVAILABLE",
+            "The virtual display was created without " + String.join(", ", missing)
+                + ", so it could take the person's focus");
+      requireLocalIme(owned.id);
+      disconnectAutomation(mainAutomation);
+      mainDisconnected = true;
+      agent = createDisplayAutomation(owned.id);
+    } catch (Exception e) {
+      if (agent != null) disconnectAutomation(agent);
+      if (owned != null) owned.release();
+      if (mainDisconnected) restoreMainRoute();
+      throw e;
     }
-    desktopDisplay = ownedDisplay.id;
-    setImePolicy(desktopDisplay);
-    disconnectAutomation(mainAutomation);
-    desktopAutomation = createDisplayAutomation(desktopDisplay);
-    automation = desktopAutomation;
-    activeDisplay = desktopDisplay;
+    ownedDisplay = owned;
+    desktopDisplay = owned.id;
+    desktopAutomation = agent;
+    automation = agent;
+    activeDisplay = owned.id;
+    desktopFlags = requested;
     mainForegroundBeforeDesktop = mainBefore;
     desktopStartedAt = SystemClock.uptimeMillis();
     lastCallAt = desktopStartedAt;
     hidden.put("virtualDisplayFlags", desktopFlags);
-    hidden.put("virtualDisplayTrusted", desktopTrusted);
-    hidden.put("virtualDisplayOwnFocus", (desktopFlags & FLAG_OWN_FOCUS) != 0);
+    hidden.put("virtualDisplayDisplayFlags", owned.displayFlags);
+  }
+
+  /** Why this connection can no longer read or act: its main connection could not be restored. */
+  private String routeLost;
+
+  private void restoreMainRoute() {
+    try {
+      mainAutomation = createDisplayAutomation(Display.DEFAULT_DISPLAY);
+      automation = mainAutomation;
+    } catch (Exception e) {
+      routeLost =
+          "Main-display UiAutomation could not be restored ("
+              + e.getClass().getSimpleName()
+              + "); start a new connection";
+    }
   }
 
   /** A virtual display owned by this engine, with the display flags Android actually granted. */
@@ -354,15 +405,14 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     ownedDisplay = null;
     if (desktopAutomation != null) disconnectAutomation(desktopAutomation);
     desktopAutomation = null;
-    try { mainAutomation = createDisplayAutomation(Display.DEFAULT_DISPLAY); }
-    catch (Exception e) { throw fail("DISPLAY_UNAVAILABLE", "Could not restore main-display UiAutomation: " + e.getMessage()); }
     desktopDisplay = -1;
     activeDisplay = Display.DEFAULT_DISPLAY;
-    automation = mainAutomation;
     mainForegroundBeforeDesktop = null;
     latest = null;
     coordinates = null;
     observationRequired = false;
+    restoreMainRoute();
+    if (routeLost != null) throw fail("DISPLAY_UNAVAILABLE", routeLost);
   }
 
   private static final Set<Process> children = new HashSet<>();
@@ -1570,6 +1620,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
 
   private Map<String, Object> dispatch(String name, Map<String, Object> args) throws Exception {
     if (name.equals("agent_desktop")) return desktopCall(args);
+    if (routeLost != null) throw fail("DISPLAY_UNAVAILABLE", routeLost);
     if (name.equals("list_apps")) return apps();
     Capture cap = coordinates;
     coordinates = null;
@@ -1637,6 +1688,8 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     if (action.equals("start")) {
       try {
         startDesktop();
+      } catch (Failure e) {
+        throw e;
       } catch (SecurityException e) {
         throw fail(
             "AGENT_DESKTOP_UNAVAILABLE",
@@ -1667,12 +1720,14 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
           obj(
               "value",
               desktopFlags,
+              "displayFlags",
+              ownedDisplay.displayFlags,
               "trusted",
-              desktopTrusted,
+              (ownedDisplay.displayFlags & DISPLAY_TRUSTED) != 0,
               "ownFocus",
-              (desktopFlags & FLAG_OWN_FOCUS) != 0,
+              (ownedDisplay.displayFlags & DISPLAY_OWN_FOCUS) != 0,
               "stealTopFocusDisabled",
-              (desktopFlags & FLAG_STEAL_TOP_FOCUS_DISABLED) != 0,
+              (ownedDisplay.displayFlags & DISPLAY_STEAL_TOP_FOCUS_DISABLED) != 0,
               "imePolicy",
               "local"));
     }
