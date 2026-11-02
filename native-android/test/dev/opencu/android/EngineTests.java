@@ -191,6 +191,10 @@ public final class EngineTests {
     public boolean performAction(int action, Bundle arguments) {
       performed.add(action);
       if (!offers(action)) return false; // Android ignores actions a node does not list.
+      if (action == ACTION_SET_SELECTION && arguments != null && results.getOrDefault(action, true)) {
+        selectionStart = arguments.getInt(ACTION_ARGUMENT_SELECTION_START_INT);
+        selectionEnd = arguments.getInt(ACTION_ARGUMENT_SELECTION_END_INT);
+      }
       if (action == ACTION_SET_TEXT && arguments != null) {
         CharSequence value = arguments.getCharSequence(ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE);
         setTexts.add(String.valueOf(value));
@@ -1636,6 +1640,35 @@ public final class EngineTests {
       engine.read();
       engine.call("type_text", args("text", "letmein"));
       require(node.setTexts.equals(List.of("letmein")), "setTexts=" + node.setTexts);
+    });
+
+    test("a second type_text after a mid-text insert continues after the insert", () -> {
+      Scene scene = new Scene();
+      FakeNode node = focusedEditor(scene, AccessibilityNodeInfo.ACTION_SET_TEXT, AccessibilityNodeInfo.ACTION_SET_SELECTION);
+      node.text = "abcdef";
+      scene.specs.get(0).text = "abcdef";
+      node.selectionStart = 2;
+      node.selectionEnd = 4;
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      engine.read();
+      engine.call("type_text", args("text", "XY"));
+      engine.call("type_text", args("text", "Z"));
+      require(node.text.equals("abXYZef"), "editor: " + node.text + " after " + node.setTexts);
+    });
+
+    test("an unconfirmed caret move is reported and not repeated", () -> {
+      Scene scene = new Scene();
+      FakeNode node = focusedEditor(scene, AccessibilityNodeInfo.ACTION_SET_TEXT, AccessibilityNodeInfo.ACTION_SET_SELECTION);
+      node.text = "abcdef";
+      scene.specs.get(0).text = "abcdef";
+      node.selectionStart = node.selectionEnd = 3;
+      node.results.put(AccessibilityNodeInfo.ACTION_SET_SELECTION, false);
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      engine.read();
+      Map<String, Object> result = engine.call("type_text", args("text", "X"));
+      require(node.performed.equals(List.of(AccessibilityNodeInfo.ACTION_SET_TEXT, AccessibilityNodeInfo.ACTION_SET_SELECTION)),
+          "actions " + node.performed);
+      require(text(result).contains("caret could not be placed"), "notice: " + text(result).split("\n")[0]);
     });
 
     test("a set-text that is not confirmed is never repeated", () -> {

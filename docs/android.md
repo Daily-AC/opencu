@@ -139,7 +139,10 @@ content is never bypassed. Screenshots can include covering windows.
 - `type_text`: types into the focused editable only. Without one it returns
   `NO_FOCUSED_ELEMENT` and sends nothing; click the intended field first. It
   replaces the editor's selected range through accessibility set-text, Unicode
-  included. It never uses the clipboard or the person's keyboard, and never sends
+  included. Set-text rewrites the whole field, so spans such as mentions or links
+  become plain text. The caret is then placed after the inserted text, so a further
+  `type_text` continues there; if the editor does not confirm that, the result
+  says so and it is not retried. It never uses the clipboard or the person's keyboard, and never sends
   the text another way; an unconfirmed set-text returns `ACTION_UNCONFIRMED`. The
   editor's resulting text must match or the call returns `TEXT_INPUT_FAILED`. A
   field that acts only on typed keys may not react. Android reports password text

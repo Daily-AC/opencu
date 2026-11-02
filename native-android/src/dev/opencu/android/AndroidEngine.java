@@ -1295,8 +1295,18 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
       replacePassword(n, value, pkg, token);
       return;
     }
-    String expected = expectedText(n, value);
+    String before = n.isShowingHintText() ? "" : str(n.getText());
+    int a = n.getTextSelectionStart(), b = n.getTextSelectionEnd();
+    if (a < 0 || b < 0 || a > before.length() || b > before.length()) a = b = before.length();
+    int start = Math.min(a, b);
+    String expected = before.substring(0, start) + value + before.substring(Math.max(a, b));
     setText(n, expected, pkg, token);
+    // Set-text leaves the caret at the end; put it after the insertion so typing continues there.
+    int caret = start + value.length();
+    if (caret != expected.length() && !placeCaret(n, caret, pkg, token))
+      addNotice(
+          "The caret could not be placed after the inserted text; it may be at the end of the"
+              + " field.");
     Screen after = observe(pkg);
     String actual = focusedText(after);
     boolean reacted = actual == null && after.content().contains(value);
@@ -1330,6 +1340,20 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     addNotice("Password field: its whole value was set and checked by length only.");
   }
 
+  /** Moves the caret to {@code at}; an unconfirmed move is reported by the caller, never repeated. */
+  private boolean placeCaret(AccessibilityNodeInfo n, int at, String pkg, long token) {
+    if (!hasAction(n, AccessibilityNodeInfo.ACTION_SET_SELECTION)) return false;
+    Bundle b = new Bundle();
+    b.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, at);
+    b.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, at);
+    checkTarget(token, pkg);
+    ensureOpen();
+    sent = true;
+    boolean placed = n.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, b);
+    check(token, false);
+    return placed;
+  }
+
   private String focusedText(Screen s) {
     try {
       AccessibilityNodeInfo n = focused(s);
@@ -1337,15 +1361,6 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     } catch (Failure e) {
       return null;
     }
-  }
-
-  private String expectedText(AccessibilityNodeInfo n, String value) {
-    String before = n.isShowingHintText() ? "" : str(n.getText());
-    int a = n.getTextSelectionStart(), b = n.getTextSelectionEnd();
-    if (a < 0 || b < 0 || a > before.length() || b > before.length()) a = b = before.length();
-    return before.substring(0, Math.min(a, b))
-        + value
-        + before.substring(Math.max(a, b));
   }
 
   private void perform(
