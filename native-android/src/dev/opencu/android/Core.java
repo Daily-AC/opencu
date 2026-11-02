@@ -139,9 +139,10 @@ public final class Core {
 
   /**
    * The values that changed from {@code before} to {@code after}, as "Class id=… old -> new",
-   * other than {@code scope}'s own. A control is the same one when its window, tree path, class
-   * and resource id match and so does the text around it (the other non-value text under its
-   * parent), so a recycled list row that now shows another item is not taken for it.
+   * outside {@code scope}, the container that scrolled: it and everything inside it are left out,
+   * since its rows come, go and are recycled (every alarm row's switch has the same id). A control
+   * is the same one when its window, tree path, class and resource id match and so does the text
+   * around it (the other non-value text under its parent).
    */
   public static List<String> valueChanges(Screen before, Screen after, Element scope) {
     Map<String, Element> was = controls(before, scope), now = controls(after, scope);
@@ -170,7 +171,9 @@ public final class Core {
     Map<String, Element> out = new LinkedHashMap<>();
     for (Element e : s.elements.values()) {
       if (value(e) == null) continue;
-      if (scope != null && e.window == scope.window && e.path.equals(scope.path)) continue;
+      if (scope != null
+          && e.window == scope.window
+          && (e.path.equals(scope.path) || e.path.startsWith(scope.path + "/"))) continue;
       String parent = e.path.substring(0, Math.max(0, e.path.lastIndexOf('/'))) + "/";
       StringBuilder around = new StringBuilder();
       for (Element o : s.elements.values())

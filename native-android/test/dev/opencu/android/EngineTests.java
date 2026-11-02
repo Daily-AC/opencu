@@ -2877,6 +2877,7 @@ public final class EngineTests {
 
     secondDeviceRound();
     thirdDeviceRound();
+    fourthDeviceRound();
 
     if (!failures.isEmpty()) {
       System.out.println("Android engine host checks failed: " + failures);
@@ -2976,8 +2977,9 @@ public final class EngineTests {
 
     test("a swipe that changed a switch it crossed says so with the old and new value and stops", () -> {
       ListScene rows = new ListScene(FORWARD);
-      Element label = rows.scene.add("/0/2/0", "android.widget.TextView", "", "Vibrate", 0, 1100, 800, 1200);
-      Element toggle = rows.scene.add("/0/2/1", "android.widget.Switch", "vibrate", "", 800, 1100, 1080, 1200);
+      // Round 4: only values outside the scrolled list count, so the switch is on a bar drawn over it.
+      Element label = rows.scene.add("/1/0", "android.widget.TextView", "", "Vibrate", 0, 1100, 800, 1200);
+      Element toggle = rows.scene.add("/1/1", "android.widget.Switch", "vibrate", "", 800, 1100, 1080, 1200);
       toggle.checkable = toggle.clickable = true;
       ScriptedEngine engine = ScriptedEngine.create(rows.scene);
       int[] lifts = {0};
@@ -3847,5 +3849,52 @@ public final class EngineTests {
       }
       require(rows.equals(expected), "rows " + rows + "\nexpected " + expected + "\nfinal " + last);
     }
+  }
+
+  /** Checks for what the fourth device round (OPPO PGBM10, 2026-11-03) found. */
+  static void fourthDeviceRound() {
+    // Item 1: "the swipe also changed Switch id=alarm_switch not checked -> checked" when an
+    // already-on alarm scrolled into view: every row's switch has the same id.
+    test("a swipe through a recycled list of switches with one id gives no value warning", () -> {
+      boolean[] on = {false, true, false, false, true, false, true, false, false, true, false, false};
+      Scene scene = new Scene();
+      Element list = scene.add("/0", "androidx.recyclerview.widget.COUIRecyclerView", "list", "", 0, 300, 1080, 2200);
+      list.scrollable = true;
+      list.actions.put("scroll_forward", FORWARD);
+      FakeNode node = scene.node(list).with(FORWARD);
+      node.scrollable = true;
+      int[] offset = {6};
+      Runnable layout = () -> {
+        while (scene.specs.size() > 1) {
+          scene.specs.remove(1);
+          scene.nodes.remove(1);
+        }
+        for (int k = 0; k < 6; k++) {
+          int i = offset[0] + k, y = 300 + k * 300;
+          String path = "/0/" + k;
+          scene.add(path, "android.widget.LinearLayout", "content_layout", "", 48, y, 1032, y + 280).clickable = true;
+          scene.add(path + "/0", "android.widget.TextView", "timeDisplay", String.format(Locale.ROOT, "%02d:35", 5 + i), 90, y + 30, 380, y + 110);
+          scene.add(path + "/1", "android.widget.LinearLayout", "layout_switch", "", 870, y + 100, 1032, y + 180);
+          Element toggle = scene.add(path + "/1/0", "android.widget.Switch", "alarm_switch", "", 870, y + 110, 984, y + 170);
+          toggle.checkable = toggle.clickable = true;
+          toggle.checked = on[i];
+        }
+      };
+      layout.run();
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      int[] lifts = {0};
+      engine.onObserve = n -> {
+        long ups = engine.events.stream().filter(e -> e.action == 1).count();
+        for (; lifts[0] < ups; lifts[0]++) {
+          offset[0] -= 3; // half a page up: recycled rows now show other alarms
+          layout.run();
+        }
+      };
+      engine.read();
+      String out = text(engine.call("scroll", args("element_index", 1, "direction", "up", "pages", 0.5)));
+      require(lifts[0] == 1, "swipes " + lifts[0]);
+      require(!out.contains("WARNING"), "false warning: " + out.split("\n")[0]);
+    });
+
   }
 }

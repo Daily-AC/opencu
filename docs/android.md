@@ -180,9 +180,14 @@ captured in their place.
   `ACTION_UNSUPPORTED` naming that element, with nothing sent (or, after earlier
   pages, ends with a notice). After any swipe, a value that changed outside the
   scrolled element (a checked state, a range value, an editor's text or a wheel's
-  selected value, matched by place and the text around it) is reported first in
-  the result, such as `WARNING: the swipe also changed Switch id=vibrate not
-  checked -> checked`, and no further pages are sent.
+  selected value) is reported first in the result, such as `WARNING: the swipe
+  also changed Switch id=vibrate not checked -> checked`, and no further pages are
+  sent. The scrolled element and everything inside it are left out of that check,
+  since its rows come, go and are recycled (every alarm row's switch on the
+  PGBM10 has the same id, so an alarm that was on scrolling into a row once
+  produced a false warning); for a coordinate swipe that is the innermost list
+  under the finger that is not a wheel. A control is the same one only when its
+  window, tree path, class, resource id and the text around it match.
   The swipe is ordinary touch input on the active display under the person rules.
   ColorOS lists were seen offering only scroll-forward part-way down, so scrolling
   up such a list swipes. The Clock alarm list's enclosing coordinator then lists a

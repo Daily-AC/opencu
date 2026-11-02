@@ -1897,6 +1897,8 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
               Screen pageScreen = current;
               Element pageScope = scope;
               checkTarget(token, pkg);
+              // What the page scrolls: the element, or for coordinates the list under the finger.
+              Element container = scope;
               if (action != 0) {
                 ensureOpen();
                 sent = true;
@@ -1907,6 +1909,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
                 touch(swipe[0], swipe[1], swipe[2], swipe[3], SWIPE_MS, SWIPE_HOLD_MS, pkg, token);
               } else {
                 float[] p = point(args, "x", "y", cap, now);
+                container = scrollerAt(p[0], p[1], current);
                 float dx = d.equals("l") ? now.width * .55f : d.equals("r") ? -now.width * .55f : 0,
                     dy = d.equals("u") ? now.height * .55f : d.equals("d") ? -now.height * .55f : 0;
                 float tx = Math.max(1, Math.min(now.width - 2, p[0] + dx)),
@@ -1920,7 +1923,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
                       swipe != null, deadline);
               if (action == 0) {
                 // A finger can set what it crosses; say so first, with the old and new values.
-                List<String> changes = Core.valueChanges(current, result.after, scope);
+                List<String> changes = Core.valueChanges(current, result.after, container);
                 if (!changes.isEmpty()) {
                   addNotice(
                       "WARNING: the swipe also changed " + String.join("; ", changes)
@@ -2215,6 +2218,20 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
         "The wheel shows " + Core.wheelShort(shown) + " after " + steps + (steps == 1 ? " step; " : " steps; ") + goal
             + " was not reached: "
             + why + ". Read state before continuing");
+  }
+
+  /**
+   * The list a coordinate swipe from (x, y) scrolls: the innermost element there that scrolls and
+   * is not a wheel picker; null when there is none.
+   */
+  private Element scrollerAt(float x, float y, Screen s) {
+    Element inner = null;
+    for (Element e : s.elements.values())
+      if (e.left <= x && x < e.right && e.top <= y && y < e.bottom
+          && scrolls(nodes.get(e.index))
+          && !isWheel(e, s)
+          && (inner == null || e.path.length() > inner.path.length())) inner = e;
+    return inner;
   }
 
   /** The element of {@code base} at {@code e}'s place: same window, tree path, class and id. */
