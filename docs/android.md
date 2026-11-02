@@ -496,6 +496,13 @@ Known unverified boundaries include custom editors that ignore accessibility
 set-text, coordinate drag/long press, custom secondary actions, the scroll
 fallbacks (an enclosing element's action and the touch swipe), wheel-picker
 paging, the stable final-state wait and set-progress (host checks only so far),
+and from the second PGBM10 round (host checks modelled on the device's nodes,
+not yet run on the phone): `set_value` stepping a wheel, the swipe lanes that
+avoid settable elements and the value-change warning, whole rows in the
+passed-over list (which relies on a node's bounds in its parent keeping its own
+size), taps that avoid covering elements (which use the reported drawing order),
+the launcher's `DEVICE_UNAVAILABLE`, the label cache's effect on memory and the
+agent display's portrait size while display 0 is turned,
 custom/WebView trees, secure
 screenshot behavior, orientation changes, physical stop and EOF during blocked
 Binder calls. The fixture suite covers Unicode set_value, `type_text` with ASCII
