@@ -42,6 +42,9 @@ public final class Protocol {
           + " identity.";
   public static final Map<String, Map<String, Object>> DEFINITIONS = new LinkedHashMap<>();
 
+  /** A whole run_actions batch ends within this, inside a host's two-minute call limit. */
+  public static final long BATCH_LIMIT_MS = 100_000;
+
   static Map<String, Object> string() {
     return obj("type", "string");
   }
@@ -271,7 +274,9 @@ public final class Protocol {
             + " Stops before further input on timeout, new popup/system dialog, unexpected"
             + " foreground app, stale element, failure, lock or person activity. Reports stopped"
             + " step, reason and waitedMs plus final state. Coordinates must be first. A batch is"
-            + " limited to 100 s: it stops before a step whose holds, waits, pages and until timeout"
+            + " limited to "
+            + BATCH_LIMIT_MS / 1000
+            + " s: it stops before a step whose holds, waits, pages and until timeout"
             + " could run past that, with reason time_limit (BATCH_TIME_LIMIT). Never replay a"
             + " stopped batch.",
         false,

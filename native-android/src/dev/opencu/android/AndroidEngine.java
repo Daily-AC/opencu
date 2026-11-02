@@ -1729,8 +1729,10 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     return original;
   }
 
-  /** A whole batch ends well inside a host's two-minute call limit. */
-  private long batchBudgetMs = 100_000;
+  /** The time a whole batch may take; the run_actions description states the same limit. */
+  long batchLimitMs() {
+    return Protocol.BATCH_LIMIT_MS;
+  }
 
   private Map<String, Object> batch(
       Map<String, Object> args, String pkg, Screen base, Capture cap, long token) {
@@ -1748,7 +1750,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
         step++;
         Map<String, Object> a = map(raw);
         String method = (String) a.get("method");
-        if (SystemClock.uptimeMillis() - batchStart + Core.stepMaxMs(a) > batchBudgetMs) {
+        if (SystemClock.uptimeMillis() - batchStart + Core.stepMaxMs(a) > batchLimitMs()) {
           // Nothing of this step is sent: it could run past the batch's time limit.
           reason = "time_limit";
           waited = 0;
@@ -1839,7 +1841,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
                             : reason.equals("popup") ? "POPUP" : "APP_SWITCHED",
                 reason.equals("time_limit")
                     ? "Batch stopped before step " + step + ", which could run past the "
-                        + batchBudgetMs / 1000 + " s batch limit; remaining steps were not sent"
+                        + batchLimitMs() / 1000 + " s batch limit; remaining steps were not sent"
                     : "Batch stopped; remaining steps were not sent");
     }
     Map<String, Object> r =

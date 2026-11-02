@@ -354,7 +354,6 @@ public final class EngineTests {
       set(e, "notice", "");
       // Field initialisers do not run for an allocated instance; mirror the ones the engine has.
       if (hasField(AndroidEngine.class, "keyboardInputFailure")) set(e, "keyboardInputFailure", "");
-      if (hasField(AndroidEngine.class, "batchBudgetMs")) set(e, "batchBudgetMs", 100_000L);
       if (hasField(AndroidEngine.class, "callLock"))
         set(e, "callLock", new java.util.concurrent.locks.ReentrantLock());
       set(e, "desktopDisplay", -1);
@@ -439,6 +438,14 @@ public final class EngineTests {
       log.add("shell " + String.join(" ", args));
       trace.add("shell");
       return shellHook == null ? "" : shellHook.run(args);
+    }
+
+    /** A shorter batch limit for one check; zero keeps the engine's own. */
+    long batchLimit;
+
+    // Not annotated: older engines kept the limit in a field instead.
+    long batchLimitMs() {
+      return batchLimit > 0 ? batchLimit : super.batchLimitMs();
     }
 
     // Not annotated: older engines lack this hook and simply never call it.
@@ -1113,7 +1120,7 @@ public final class EngineTests {
       Scene scene = new Scene();
       scene.add("/0", "android.widget.TextView", "", "Ready", 0, 100, 1080, 200);
       ScriptedEngine engine = ScriptedEngine.create(scene);
-      if (hasField(AndroidEngine.class, "batchBudgetMs")) set(engine, "batchBudgetMs", 3_000L);
+      engine.batchLimit = 3_000L;
       engine.read();
       Map<String, Object> result =
           engine.call("run_actions", args("actions", List.of(
@@ -1126,6 +1133,14 @@ public final class EngineTests {
     test("run_actions description states the batch time limit", () -> {
       String description = (String) Protocol.DEFINITIONS.get("run_actions").get("description");
       require(description.contains("100 s") && description.contains("time_limit"), description);
+    });
+
+    test("a batch is limited to 100 s, inside a host's two-minute call", () -> {
+      // The engine's own limit, as an unconfigured engine applies it.
+      long limit = ScriptedEngine.create(new Scene()).batchLimitMs();
+      require(limit == 100_000, "engine batch limit " + limit + " ms");
+      String description = (String) Protocol.DEFINITIONS.get("run_actions").get("description");
+      require(description.contains("limited to " + limit / 1000 + " s:"), "description: " + description);
     });
 
     test("indexed click settles before its final read", () -> {
