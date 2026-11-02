@@ -633,7 +633,64 @@ public final class EngineTests {
   }
 
   static final int FORWARD = AccessibilityNodeInfo.ACTION_SCROLL_FORWARD,
-      BACKWARD = AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD;
+      BACKWARD = AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD,
+      UP = android.R.id.accessibilityActionScrollUp,
+      RIGHT = android.R.id.accessibilityActionScrollRight;
+
+  /**
+   * A list that offers only scroll-forward, as ColorOS lists were seen to do even part-way down,
+   * inside an enclosing element at "/0" that does not say it scrolls; the check decides which
+   * actions the enclosing element offers. The list starts at row 5.
+   */
+  static final class NestedListScene {
+    final ListScene rows;
+    final Element outer;
+    final FakeNode outerNode;
+
+    NestedListScene() {
+      ListScene inner = new ListScene();
+      // Re-root the list under an enclosing element: the enclosing element comes first.
+      Scene scene = inner.scene;
+      outer = new Element();
+      outer.window = scene.window;
+      outer.path = "/0";
+      outer.pkg = PKG;
+      outer.clazz = "androidx.coordinatorlayout.widget.CoordinatorLayout";
+      outer.left = 0;
+      outer.top = 0;
+      outer.right = 1080;
+      outer.bottom = 2000;
+      outer.actions.put("scroll_backward", BACKWARD);
+      scene.specs.add(0, outer);
+      outerNode = FakeNode.create();
+      scene.nodes.add(0, outerNode);
+      inner.list.path = "/0/0";
+      inner.list.top = 300;
+      inner.first.path = "/0/0/0";
+      inner.second.path = "/0/0/1";
+      inner.first.top = 300;
+      inner.first.bottom = 500;
+      inner.second.top = 500;
+      inner.second.bottom = 700;
+      inner.node.with(FORWARD);
+      inner.list.actions.put("scroll_forward", FORWARD);
+      inner.show(4);
+      rows = inner;
+    }
+  }
+
+  /** The touch points sent so far: {action, x, y, display}. */
+  static List<int[]> motions(ScriptedEngine engine) {
+    List<int[]> points = new ArrayList<>();
+    synchronized (engine.log) {
+      for (String line : engine.log) {
+        if (!line.startsWith("motion ")) continue;
+        String[] parts = line.split(" "), xy = parts[2].split(",");
+        points.add(new int[] {Integer.parseInt(parts[1]), Integer.parseInt(xy[0]), Integer.parseInt(xy[1]), Integer.parseInt(parts[4])});
+      }
+    }
+    return points;
+  }
 
   /**
    * A wheel picker that shows its value as its own text, as time pickers do, with a decoration
@@ -1373,6 +1430,98 @@ public final class EngineTests {
           engine.call("scroll", args("element_index", 1, "direction", "down", "pages", 3));
       require(rows.node.performed.size() == 1, "pages sent: " + rows.node.performed.size());
       require(text(result).startsWith("Nothing moved"), "notice: " + text(result).split("\n")[0]);
+    });
+
+    test("scroll up uses an enclosing element's scroll-up action when the list offers only forward", () -> {
+      NestedListScene nested = new NestedListScene();
+      nested.outerNode.with(BACKWARD, UP);
+      nested.outerNode.effects.put(UP, () -> nested.rows.show(nested.rows.offset - 2));
+      ScriptedEngine engine = ScriptedEngine.create(nested.rows.scene);
+      engine.read();
+      Map<String, Object> result = engine.call("scroll", args("element_index", 2, "direction", "up"));
+      require(nested.outerNode.performed.equals(List.of(UP)), "enclosing element got " + nested.outerNode.performed);
+      require(nested.rows.node.performed.isEmpty(), "list got " + nested.rows.node.performed);
+      require(nested.rows.offset == 2, "list offset " + nested.rows.offset);
+      require(!text(result).startsWith("Nothing moved"), "notice: " + text(result).split("\n")[0]);
+      require(text(result).contains("enclosing element"), "path not reported: " + text(result).split("\n")[0]);
+    });
+
+    test("an enclosing pager's generic backward is never taken as up; a still swipe inside the list is", () -> {
+      NestedListScene nested = new NestedListScene();
+      nested.outer.clazz = "androidx.viewpager.widget.ViewPager";
+      nested.outerNode.with(FORWARD, BACKWARD); // a horizontal pager: backward is the previous tab
+      ScriptedEngine engine = ScriptedEngine.create(nested.rows.scene);
+      int[] lifts = {0};
+      engine.onObserve = n -> {
+        long ups = engine.events.stream().filter(e -> e.action == 1).count();
+        for (; lifts[0] < ups; lifts[0]++) nested.rows.show(nested.rows.offset - 2);
+      };
+      engine.read();
+      Map<String, Object> result = engine.call("scroll", args("element_index", 2, "direction", "up"));
+      require(nested.outerNode.performed.isEmpty() && nested.rows.node.performed.isEmpty(),
+          "actions: pager " + nested.outerNode.performed + " list " + nested.rows.node.performed);
+      List<int[]> points = motions(engine);
+      require(!points.isEmpty(), "no swipe sent; notice: " + text(result).split("\n")[0]);
+      int[] first = points.get(0), last = points.get(points.size() - 1);
+      require(first[0] == 0 && last[0] == 1, "gesture " + engine.log);
+      for (int[] p : points)
+        require(p[1] == 540 && p[2] > 300 && p[2] < 2000 && p[3] == 0, "point outside the list: " + engine.log);
+      require(last[2] > first[2] + 600, "finger did not move down for up: " + first[2] + " to " + last[2]);
+      int still = 0;
+      for (int i = points.size() - 2; i >= 0 && points.get(i)[2] == last[2]; i--) still++;
+      require(still >= 4, "lifted without holding still: " + still + " moves at the end");
+      require(nested.rows.offset == 2, "list offset " + nested.rows.offset);
+      require(!text(result).startsWith("Nothing moved"), "notice: " + text(result).split("\n")[0]);
+      require(text(result).contains("swipe"), "path not reported: " + text(result).split("\n")[0]);
+    });
+
+    test("scroll by the index of a row moves the list that holds it", () -> {
+      ListScene rows = new ListScene(DOWN);
+      rows.node.effects.put(DOWN, () -> rows.show(rows.offset + 2));
+      ScriptedEngine engine = ScriptedEngine.create(rows.scene);
+      engine.read();
+      Map<String, Object> result = engine.call("scroll", args("element_index", 2, "direction", "down"));
+      require(rows.node.performed.equals(List.of(DOWN)), "list got " + rows.node.performed);
+      require(rows.offset == 2 && !text(result).startsWith("Nothing moved"), "notice: " + text(result).split("\n")[0]);
+    });
+
+    test("a horizontal list's forward is not taken as down", () -> {
+      ListScene rows = new ListScene(FORWARD, RIGHT);
+      rows.list.clazz = "android.widget.HorizontalScrollView";
+      ScriptedEngine engine = ScriptedEngine.create(rows.scene);
+      engine.read();
+      engine.call("scroll", args("element_index", 1, "direction", "down"));
+      require(rows.node.performed.isEmpty(), "scrolled sideways with " + rows.node.performed);
+    });
+
+    test("a scroll swipe stays above the keyboard", () -> {
+      ListScene rows = new ListScene(BACKWARD);
+      rows.list.bottom = 2300;
+      Window keyboard = new Window();
+      keyboard.id = 11;
+      keyboard.type = 2;
+      keyboard.layer = 9;
+      keyboard.left = 0;
+      keyboard.top = 1500;
+      keyboard.right = 1080;
+      keyboard.bottom = 2400;
+      rows.scene.extraWindows.add(keyboard);
+      ScriptedEngine engine = ScriptedEngine.create(rows.scene);
+      engine.read();
+      engine.call("scroll", args("element_index", 1, "direction", "down"));
+      List<int[]> points = motions(engine);
+      require(!points.isEmpty(), "no swipe sent: " + engine.log);
+      for (int[] p : points) require(p[2] > 100 && p[2] < 1500, "touch on the keyboard or outside the list: " + engine.log);
+    });
+
+    test("an element that nothing around scrolls gets nothing sent", () -> {
+      Scene scene = new Scene();
+      scene.add("/0", "android.widget.TextView", "", "Title", 0, 100, 1080, 300);
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      engine.read();
+      Failure f = failure(() -> engine.call("scroll", args("element_index", 1, "direction", "down")));
+      require(f.code.equals("ACTION_UNSUPPORTED"), f.code + ": " + f.getMessage());
+      require(engine.events.isEmpty() && engine.log.isEmpty(), "input sent: " + engine.log);
     });
 
     test("scroll description explains pages up to 20", () -> {

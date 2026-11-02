@@ -1120,6 +1120,15 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
   }
 
   private void touch(float x, float y, float tx, float ty, long duration, String pkg, long token) {
+    touch(x, y, tx, ty, duration, 0, pkg, token);
+  }
+
+  /**
+   * A touch that moves from (x, y) to (tx, ty) over {@code duration} ms, then stays at (tx, ty) for
+   * {@code hold} ms before it lifts, so a list stops where the finger stopped instead of flinging.
+   */
+  private void touch(
+      float x, float y, float tx, float ty, long duration, long hold, String pkg, long token) {
     checkTarget(token, pkg);
     if (!displayInputAvailable())
       throw fail("INPUT_UNAVAILABLE", "display-targeted touch injection is unavailable");
@@ -1132,7 +1141,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     try {
       pressed = true;
       motion(via, display, down, MotionEvent.ACTION_DOWN, x, y);
-      long end = down + duration;
+      long end = down + duration + hold;
       while (SystemClock.uptimeMillis() < end) {
         pause(Math.min(16, end - SystemClock.uptimeMillis()), token);
         checkTarget(token, pkg);
@@ -1585,6 +1594,8 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
           double pages = ((Number) args.getOrDefault("pages", 1)).doubleValue();
           int requested = (int) Math.ceil(pages), moved = 0;
           boolean listChanged = false, atBatchLimit = false;
+          // How the pages were sent when not by the element's own scroll action.
+          String path = null;
           Screen current = now;
           for (int page = 0; page < requested; page++) {
             if (page > 0
@@ -1602,31 +1613,44 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
                 n = nodes.get(target.index);
               }
             }
-            String before = Core.scrollContent(current, target);
+            // Indexed: the element's own scroll action that way, else that of the nearest
+            // scrolling element enclosing it, else a swipe inside its visible part.
+            Element scope = null, acted = null;
+            int action = 0;
+            float[] swipe = null;
             if (n != null) {
-              if (!n.isScrollable()) throw fail("ACTION_UNSUPPORTED", "Element is not scrollable");
-              // AccessibilityAction.ACTION_SCROLL_* ids are these platform resource ids.
-              int action =
-                  d.equals("d")
-                      ? android.R.id.accessibilityActionScrollDown
-                      : d.equals("u")
-                          ? android.R.id.accessibilityActionScrollUp
-                          : d.equals("l")
-                              ? android.R.id.accessibilityActionScrollLeft
-                              : android.R.id.accessibilityActionScrollRight;
-              if (!hasAction(n, action))
-                action =
-                    d.equals("d") || d.equals("r")
-                        ? AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
-                        : AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD;
-              // A list at its end usually stops offering the action: nothing to send.
-              if (!hasAction(n, action)) break;
-              checkTarget(token, pkg);
+              scope = scrollScope(target, current);
+              if (scope == null)
+                throw fail(
+                    "ACTION_UNSUPPORTED",
+                    "Neither the element nor an element enclosing it scrolls; nothing sent");
+              action = scrollAction(nodes.get(scope.index), d, false);
+              acted = scope;
+              if (action == 0) {
+                acted = scrollingAncestor(scope, current);
+                if (acted != null) action = scrollAction(nodes.get(acted.index), d, true);
+                if (action != 0) path = "the scroll-" + direction(d) + " action of an enclosing element";
+              }
+              if (action == 0) {
+                swipe = swipe(scope, current, d);
+                if (swipe == null)
+                  throw fail(
+                      "ACTION_UNSUPPORTED",
+                      "The element offers no scroll-" + direction(d) + " action and too little of it is"
+                          + " visible to swipe; nothing sent");
+                path = "a touch swipe inside the element (it offers no scroll-" + direction(d) + " action)";
+              }
+            }
+            String before = Core.scrollContent(current, scope);
+            checkTarget(token, pkg);
+            if (action != 0) {
               ensureOpen();
               sent = true;
               // The result is not evidence either way; the list's content decides below.
-              n.performAction(action, null);
+              nodes.get(acted.index).performAction(action, null);
               check(token, false);
+            } else if (swipe != null) {
+              touch(swipe[0], swipe[1], swipe[2], swipe[3], SWIPE_MS, SWIPE_HOLD_MS, pkg, token);
             } else {
               float[] p = point(args, "x", "y", cap, now);
               float dx = d.equals("l") ? now.width * .55f : d.equals("r") ? -now.width * .55f : 0,
@@ -1638,7 +1662,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
             int outcome =
                 scrolled(
                     before, old, base, pkg, token,
-                    n != null ? Core.SCROLL_QUIET_ACTION_MS : Core.SCROLL_QUIET_TOUCH_MS);
+                    action != 0 ? Core.SCROLL_QUIET_ACTION_MS : Core.SCROLL_QUIET_TOUCH_MS);
             if (outcome == 0) break;
             moved++;
             if (outcome == 2) {
@@ -1653,6 +1677,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
                     : atBatchLimit
                         ? "Scrolled " + moved + " of " + requested + " pages; stopped at the batch time limit"
                         : Core.scrollNotice(moved, requested));
+          if (path != null) addNotice("Scrolled with " + path + ".");
           break;
         }
       case "press_key":
@@ -1692,6 +1717,121 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     // to avoid paying a second idle wait for every quickly settling step.
   }
 
+  /** Platform ids of the generic and direction-specific accessibility scroll actions. */
+  private static final int FORWARD = AccessibilityNodeInfo.ACTION_SCROLL_FORWARD,
+      BACKWARD = AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD,
+      UP = android.R.id.accessibilityActionScrollUp,
+      DOWN = android.R.id.accessibilityActionScrollDown,
+      LEFT = android.R.id.accessibilityActionScrollLeft,
+      RIGHT = android.R.id.accessibilityActionScrollRight;
+
+  /** A scroll swipe moves for this long, then holds still before lifting so the list does not fling. */
+  static final long SWIPE_MS = 300, SWIPE_HOLD_MS = 120;
+
+  /** A swipe needs at least this many visible pixels along its axis. */
+  static final int SWIPE_MIN_PX = 150;
+
+  private static String direction(String d) {
+    return d.equals("d") ? "down" : d.equals("u") ? "up" : d.equals("l") ? "left" : "right";
+  }
+
+  /** Whether {@code n} scrolls: it says so, or it offers a scroll action. */
+  private boolean scrolls(AccessibilityNodeInfo n) {
+    if (n == null) return false;
+    if (n.isScrollable()) return true;
+    for (int id : new int[] {FORWARD, BACKWARD, UP, DOWN, LEFT, RIGHT}) if (hasAction(n, id)) return true;
+    return false;
+  }
+
+  /** The nearest element of {@code s} that encloses {@code e} in its window and scrolls, or null. */
+  private Element scrollingAncestor(Element e, Screen s) {
+    Element nearest = null;
+    for (Element c : s.elements.values())
+      if (c.window == e.window
+          && e.path.startsWith(c.path + "/")
+          && scrolls(nodes.get(c.index))
+          && (nearest == null || c.path.length() > nearest.path.length())) nearest = c;
+    return nearest;
+  }
+
+  /** What an indexed scroll moves: the element when it scrolls, else the nearest scrolling ancestor. */
+  private Element scrollScope(Element e, Screen s) {
+    return scrolls(nodes.get(e.index)) ? e : scrollingAncestor(e, s);
+  }
+
+  /**
+   * The accessibility action that scrolls {@code n} in direction {@code d}, or 0. The
+   * direction-specific action always matches. Generic forward/backward is taken as down/right and
+   * up/left only on the element itself ({@code directionalOnly} false), and not when it offers
+   * direction-specific actions on the other axis alone: on an enclosing element it is ambiguous,
+   * since a horizontal pager's backward is left.
+   */
+  private int scrollAction(AccessibilityNodeInfo n, String d, boolean directionalOnly) {
+    int wanted = d.equals("d") ? DOWN : d.equals("u") ? UP : d.equals("l") ? LEFT : RIGHT;
+    if (hasAction(n, wanted)) return wanted;
+    if (directionalOnly) return 0;
+    boolean vertical = d.equals("d") || d.equals("u");
+    boolean thisAxis = vertical ? hasAction(n, UP) || hasAction(n, DOWN) : hasAction(n, LEFT) || hasAction(n, RIGHT);
+    boolean otherAxis = vertical ? hasAction(n, LEFT) || hasAction(n, RIGHT) : hasAction(n, UP) || hasAction(n, DOWN);
+    if (otherAxis && !thisAxis) return 0;
+    int generic = d.equals("d") || d.equals("r") ? FORWARD : BACKWARD;
+    return hasAction(n, generic) ? generic : 0;
+  }
+
+  /**
+   * A swipe {x0, y0, x1, y1} from 80% to 20% of the visible, uncovered part of {@code e} along the
+   * direction's axis, through its centre, that scrolls it in direction {@code d}; or null when too
+   * little of it is visible. Windows above it (keyboard, dialogs) are cut away, and the display's
+   * outer strips, where system gestures start, are avoided.
+   */
+  private float[] swipe(Element e, Screen s, String d) {
+    Window owner = null;
+    for (Window w : s.windows) if (w.id == e.window) owner = w;
+    if (owner == null) return null;
+    int left = Math.max(Math.max(e.left, 0), owner.left),
+        top = Math.max(Math.max(e.top, 0), owner.top),
+        right = Math.min(Math.min(e.right, s.width), owner.right),
+        bottom = Math.min(Math.min(e.bottom, s.height), owner.bottom);
+    List<Window> above = new ArrayList<>();
+    for (Window w : s.windows)
+      if (w.layer > owner.layer
+          && w.id != owner.id
+          && (w.active || w.focused || w.type != AccessibilityWindowInfo.TYPE_SYSTEM)) above.add(w);
+    for (Window w : above) {
+      if (w.right <= left || w.left >= right || w.bottom <= top || w.top >= bottom) continue;
+      if (w.left <= left && w.right >= right) {
+        if (w.top > top) bottom = Math.min(bottom, w.top);
+        else top = Math.max(top, w.bottom);
+      } else if (w.top <= top && w.bottom >= bottom) {
+        if (w.left > left) right = Math.min(right, w.left);
+        else left = Math.max(left, w.right);
+      }
+    }
+    boolean vertical = d.equals("d") || d.equals("u");
+    if (vertical) {
+      top = Math.max(top, Math.round(s.height * .06f));
+      bottom = Math.min(bottom, Math.round(s.height * .94f));
+    } else {
+      left = Math.max(left, Math.round(s.width * .1f));
+      right = Math.min(right, Math.round(s.width * .9f));
+    }
+    if (right <= left || bottom <= top || (vertical ? bottom - top : right - left) < SWIPE_MIN_PX)
+      return null;
+    float cx = (left + right) / 2f, cy = (top + bottom) / 2f;
+    float near = vertical ? top + (bottom - top) * .2f : left + (right - left) * .2f,
+        far = vertical ? top + (bottom - top) * .8f : left + (right - left) * .8f;
+    // Down and right move the finger toward the start of the axis, revealing what follows.
+    boolean onward = d.equals("d") || d.equals("r");
+    float from = onward ? far : near, to = onward ? near : far;
+    float[] p = vertical ? new float[] {cx, from, cx, to} : new float[] {from, cy, to, cy};
+    for (Window w : above)
+      for (int i = 0; i <= 2; i++) {
+        float x = p[0] + (p[2] - p[0]) * i / 2, y = p[1] + (p[3] - p[1]) * i / 2;
+        if (w.left <= x && x < w.right && w.top <= y && y < w.bottom) return null;
+      }
+    return p;
+  }
+
   /**
    * Waits for a scroll page to show and settle, and compares the settled content with {@code
    * before}. Returns 0 when the scrolled content (or, for coordinates, the screen) ends as it was,
@@ -1716,7 +1856,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
       }
       Element live = old == null ? null : Core.live(base, old, after);
       if (old != null && live == null) return 2;
-      String content = Core.scrollContent(after, live);
+      String content = Core.scrollContent(after, live == null ? null : scrollScope(live, after));
       long now = SystemClock.uptimeMillis();
       if (!content.equals(last)) {
         last = content;

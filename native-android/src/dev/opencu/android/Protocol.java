@@ -174,7 +174,10 @@ public final class Protocol {
             num(0.01, 20, false)));
     add(
         "scroll",
-        "Scroll an indexed Android scrollable element or a fresh screenshot coordinate. pages (up"
+        "Scroll an observed Android element (a list, a row in it, a wheel picker) or a fresh"
+            + " screenshot coordinate. Indexed scrolling uses the element's scroll action for that"
+            + " direction, else that of the scrolling element enclosing it, else a touch swipe"
+            + " inside it. pages (up"
             + " to 20, default 1) moves further in one call and stops early at the end: a page that"
             + " does not move ends the call with a notice such as 'Scrolled 3 of 5 pages; reached the"
             + " end', or 'Nothing moved; the list is at its end or does not scroll this way'. Returns"

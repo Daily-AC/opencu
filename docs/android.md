@@ -128,9 +128,25 @@ captured in their place.
   `ACTION_UNCONFIRMED` and is never repeated another way.
 - `drag`: `from_x,from_y,to_x,to_y` from the fresh image, on the active display
   (display 0 unless `agent_desktop` is started).
-- `scroll`: observed scrollable element or image point; up/down/left/right and
-  short aliases; `pages` (default 1, at most 20) moves further in one call.
-  Indexed scrolling uses whole accessibility pages (fractional counts round up).
+- `scroll`: an observed element or image point; up/down/left/right and short
+  aliases; `pages` (default 1, at most 20) moves further in one call (fractional
+  counts round up). An indexed scroll moves the element when it scrolls (it says
+  so or offers a scroll action), otherwise the nearest enclosing element that
+  scrolls, so a row's index scrolls its list; an element with neither returns
+  `ACTION_UNSUPPORTED` with nothing sent. Each page uses, in order: that
+  element's scroll action for the direction (the direction-specific one, or
+  generic forward/backward as down/right and up/left unless the element offers
+  direction-specific actions on the other axis only); the direction-specific
+  action of the nearest scrolling element enclosing it (a generic one is ambiguous
+  there: a horizontal pager's backward is the previous tab); otherwise a touch
+  swipe through the centre of the element's visible part, from 80% to 20% of it,
+  clear of windows above it such as the keyboard and of the display's outer
+  strips, held still before lifting so the list stops where the finger stopped.
+  The swipe is ordinary touch input on the active display under the person rules.
+  ColorOS lists were seen offering only scroll-forward part-way down, so scrolling
+  up such a list swipes. A swiped page moves about 60% of the visible list, so
+  swiped pages overlap. When a page was not sent by the element's own action, the
+  result says how it was sent.
   After each page the engine waits for the content to settle and compares it with
   the content before the page: the scrolled element's own text, description and
   bounds and those of its descendants, with their selected and checked state (the
@@ -141,9 +157,8 @@ captured in their place.
   most one second. A page that did not move ends the call with a notice such as
   `Scrolled 3 of 5 pages; reached the end`, or `Nothing moved; the list is at its
   end or does not scroll this way` on the first page; a page whose content changed
-  counts even when the accessibility action returned false. Nothing is sent when
-  the list offers no scroll action in that direction. Only a failed read after
-  scrolling returns `ACTION_UNCONFIRMED`.
+  counts even when the accessibility action returned false. Only a failed read
+  after scrolling returns `ACTION_UNCONFIRMED`.
 - `press_key`: back, home, enter/Return, delete/backspace, tab, recents/app_switch,
   search. No volume, power, arbitrary keycodes or modifier chords.
 - `type_text`: types into the focused editable only. Without one it returns
