@@ -247,9 +247,11 @@ captured in their place.
   shorter than the page's whole rows, on every page it showed on, may be cut:
   ColorOS reports such a row with clipped bounds and without the children outside
   the list (on the PGBM10, `06:45` alone where the whole row is `06:45 | 响一次 |
-  关闭 [not checked]`). It is left out when all its parts are in another row seen
-  during the call, the final page's included, and kept otherwise, so a row cut on
-  every page it showed on is not lost. A kept one that lacks a field every whole
+  关闭 [not checked]`). It is left out when another row of its kind (the same row
+  class and id) seen during the call, the final page's included, shows all its
+  text and a field it lacks, and kept otherwise, so a row cut on every page it
+  showed on is not lost and a row of another kind (a header `Today` above rows
+  `Today | Standup`) is never taken for part of one. A kept one that lacks a field every whole
   row of its kind has (compared by child resource id, else class) ends ` (cut off
   at the list edge)`, so it is not read as the row's whole content; a row the edge
   cut that still shows all those fields (on the PGBM10, 196 of 280 px with time,

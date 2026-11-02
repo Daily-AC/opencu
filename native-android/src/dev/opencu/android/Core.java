@@ -411,11 +411,10 @@ public final class Core {
    */
   public static final class Passed {
     private final boolean backward, vertical;
-    /** Rows in the order the pages met them, their parts, and where they were seen. */
+    /** Rows in the order the pages met them, and whether each was seen cut or whole. */
     private final List<String> met = new ArrayList<>();
-    private final Map<String, List<String>> parts = new HashMap<>();
     private final Set<String> cut = new HashSet<>(), whole = new HashSet<>();
-    /** Each row's kind and fields, and the fields every whole row of a kind has. */
+    /** Each row as first met (its parts, kind and fields), and the fields every whole row of a kind has. */
     private final Map<String, Row> shapes = new HashMap<>();
     private final Map<String, Set<String>> common = new HashMap<>();
 
@@ -431,13 +430,12 @@ public final class Core {
       int reference = reference(rows, scope);
       for (Row r : rows) {
         String text = r.text();
-        if (!parts.containsKey(text)) {
+        if (!shapes.containsKey(text)) {
           met.add(text);
-          parts.put(text, r.parts);
+          shapes.put(text, r);
         }
         if (cutOff(r, scope, reference)) cut.add(text);
         else whole.add(text);
-        shapes.putIfAbsent(text, r);
       }
       learnFields(rows, scope);
     }
@@ -492,23 +490,28 @@ public final class Core {
     /** The rows passed over, given the final page (or null when there is none). */
     public List<String> finish(Screen s, Element scope) {
       Set<String> last = new HashSet<>();
-      List<List<String>> seen = new ArrayList<>(parts.values());
+      List<Row> seen = new ArrayList<>(shapes.values());
       if (s != null) {
         List<Row> rows = rowList(s, scope);
-        for (Row r : rows) {
-          last.add(r.text());
-          seen.add(r.parts);
-        }
+        for (Row r : rows) last.add(r.text());
+        seen.addAll(rows);
         learnFields(rows, scope);
       }
       List<String> rows = new ArrayList<>();
       for (String text : met) {
         if (last.contains(text)) continue;
-        List<String> own = parts.get(text);
+        Row own = shapes.get(text);
         boolean part = false;
+        // A cut row is part of another row of its own kind that shows all its text and a field
+        // it lacks; a row of another kind (a header "Today" above "Today | Standup") never is.
         if (cut.contains(text) && !whole.contains(text))
-          for (List<String> other : seen)
-            if (other.size() > own.size() && other.containsAll(own)) part = true;
+          for (Row other : seen)
+            if (other != own
+                && other.kind.equals(own.kind)
+                && other.parts.size() > own.parts.size()
+                && other.parts.containsAll(own.parts)
+                && other.fields.size() > own.fields.size()
+                && other.fields.containsAll(own.fields)) part = true;
         // Kept although cut: marked only when a field is missing, since a row the edge cuts
         // often still shows all its fields.
         boolean partial = cut.contains(text) && !whole.contains(text) && incomplete(shapes.get(text));

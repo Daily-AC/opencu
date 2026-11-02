@@ -4341,5 +4341,39 @@ public final class EngineTests {
       require(changes.get() != null && ms < 1000, "took " + ms + " ms");
       require(changes.get().equals(List.of("Switch not checked -> checked")), "changes " + changes.get());
     });
+
+    // 10: a short header "Today" at the list's edge was dropped as a part of "Today | Standup".
+    test("a short header at the list's edge is never dropped as part of a row of another kind", () -> {
+      Scene scene = new Scene();
+      Element list = scene.add("/0", "androidx.recyclerview.widget.RecyclerView", "agenda", "", 0, 100, 1080, 2000);
+      list.scrollable = true;
+      FakeNode node = scene.node(list).with(DOWN);
+      node.scrollable = true;
+      String[][] days = {{"Today", "Standup"}, {"Tomorrow", "Review"}, {"Friday", "Retro"}};
+      int[] page = {0};
+      Runnable layout = () -> {
+        while (scene.specs.size() > 1) {
+          scene.specs.remove(1);
+          scene.nodes.remove(1);
+        }
+        String[] day = days[page[0]];
+        scene.add("/0/0", "android.widget.TextView", "header", day[0], 0, 100, 1080, 160);
+        for (int k = 1; k <= 6; k++) {
+          int y = 160 + (k - 1) * 300;
+          scene.add("/0/" + k, "android.widget.LinearLayout", "event", "", 0, y, 1080, y + 280).clickable = true;
+          scene.add("/0/" + k + "/0", "android.widget.TextView", "day", day[0], 40, y + 20, 400, y + 100);
+          scene.add("/0/" + k + "/1", "android.widget.TextView", "title", day[1] + " " + k, 40, y + 120, 800, y + 200);
+        }
+      };
+      layout.run();
+      node.effects.put(DOWN, () -> {
+        page[0] = Math.min(2, page[0] + 1);
+        layout.run();
+      });
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      engine.read();
+      String out = text(engine.call("scroll", args("element_index", 1, "direction", "down", "pages", 2)));
+      require(out.contains("\n- Today\n") && out.contains("\n- Tomorrow\n"), "headers lost: " + out.substring(0, Math.min(out.length(), 700)));
+    });
   }
 }
