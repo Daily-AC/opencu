@@ -14,7 +14,8 @@ public final class Protocol {
   public static final String INSTRUCTIONS =
       "Control Android applications with the independent OpenCU engine. Read"
           + " get_app_state before input. Use observed element indexes; request screenshots before"
-          + " coordinate input. Coordinates refer to the scaled full-display JPEG. Actions return"
+          + " coordinate input. Coordinates are pixels of the latest screenshot image as returned"
+          + " (long side <=1280), not display pixels. Actions return"
           + " updated state. Use run_actions for a short known sequence; its indexes refer to the"
           + " state before the batch. Steps may wait locally with until (text, gone, app, stable)."
           + " A new dialog, unexpected app switch, failed step or person activity stops the batch;"
@@ -139,8 +140,8 @@ public final class Protocol {
     p.putAll(obj("click_count", num(1, 3, true), "duration", duration()));
     add(
         "click",
-        "Tap an observed Android element or fresh screenshot coordinate; duration >0 holds a long"
-            + " press (seconds). Indexed input touches the centre of the element's visible part, or"
+        "Tap an observed Android element, or x,y in pixels of the latest screenshot image (not"
+            + " display pixels); duration >0 holds a long press (seconds). Indexed input touches the centre of the element's visible part, or"
             + " the point nearest it that nothing drawn above covers (a floating button, a window);"
             + " if every point is covered it uses the accessibility click. Returns updated state;"
             + " coordinate input returns a new JPEG. Indexed input revalidates identity and bounds before sending anything.",
@@ -149,8 +150,8 @@ public final class Protocol {
         "app");
     add(
         "drag",
-        "Drag between coordinates in the latest Android full-display screenshot. Returns updated"
-            + " state and JPEG; no drag outside display bounds.",
+        "Drag between x,y points in pixels of the latest Android screenshot image (not display"
+            + " pixels). Returns updated state and JPEG; no drag outside display bounds.",
         false,
         props(
             "from_x",
@@ -175,15 +176,14 @@ public final class Protocol {
             num(0.01, 20, false)));
     add(
         "scroll",
-        "Scroll an observed Android element (a list, a row in it, a wheel picker) or a fresh"
-            + " screenshot coordinate. Indexed scrolling uses the element's scroll action for that"
-            + " direction, else that of the scrolling element enclosing it, else a touch swipe"
-            + " inside it. pages (up"
-            + " to 20, default 1) moves further in one call and stops early at the end: a page that"
-            + " does not move ends the call with a notice such as 'Scrolled 3 of 5 pages; reached the"
-            + " end', or 'Nothing moved; the list is at its end or does not scroll this way'. With"
-            + " pages >1 the result also lists the distinct rows passed over, so one call reads a"
-            + " long list. Returns updated state (and JPEG for coordinates).",
+        "Scroll an observed Android element (a list, a row in it, a wheel picker), or from x,y in"
+            + " pixels of the latest screenshot image. pages (up to 20, default 1): one call with"
+            + " pages >1 returns every row passed over, whole and top to bottom, then the final"
+            + " page, so read a whole list in one call, not page by page. It stops early at the end"
+            + " and every early stop says how many pages moved and why. Indexed scrolling uses the"
+            + " element's own scroll action, else its scrolling parent's, else a touch swipe that"
+            + " never crosses a picker or slider. Returns updated state (and JPEG for"
+            + " coordinates).",
         false,
         p,
         "app",

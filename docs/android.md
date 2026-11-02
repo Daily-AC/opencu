@@ -132,7 +132,8 @@ windows. While `agent_desktop` is started, images come only from the agent
 display's own frames (see [Agent desktop](#agent-desktop)); display 0 is never
 captured in their place.
 
-- `click`: observed `element_index` or both `x,y`; `click_count` 1–3; positive
+- `click`: observed `element_index` or both `x,y` (pixels of the fresh image);
+  `click_count` 1–3; positive
   `duration` holds a touch for at least the platform long-press interval. Indexed
   clicks inject a touch, so Android views that only enter a mode on real touch
   behave like a person's tap. The touch goes to the centre of the element's
@@ -148,11 +149,15 @@ captured in their place.
   says why. A touch that may have
   been delivered (the input tool timed out, failed or was interrupted) returns
   `ACTION_UNCONFIRMED` and is never repeated another way.
-- `drag`: `from_x,from_y,to_x,to_y` from the fresh image, on the active display
-  (display 0 unless `agent_desktop` is started).
-- `scroll`: an observed element or image point; up/down/left/right and short
-  aliases; `pages` (default 1, at most 20) moves further in one call (fractional
-  counts round up). An indexed scroll moves the element when it scrolls (it says
+- `drag`: `from_x,from_y,to_x,to_y` in pixels of the fresh image (not display
+  pixels), on the active display (display 0 unless `agent_desktop` is started).
+- `scroll`: an observed element or a point in pixels of the fresh image;
+  up/down/left/right and short aliases; `pages` (default 1, at most 20) moves
+  further in one call (fractional counts round up). One `scroll` with `pages`
+  returns every row it passed over, so a whole list is read in one call rather
+  than page by page (on the PGBM10 an agent read 29 alarms with 16 one-page calls
+  where one `pages: 20` call returned them all). An indexed scroll moves the
+  wheel picker the element is or is a row of, else the element when it scrolls (it says
   so or offers a scroll action), otherwise the nearest enclosing element that
   scrolls, so a row's index scrolls its list; an element with neither returns
   `ACTION_UNSUPPORTED` with nothing sent. Each page uses, in order: that

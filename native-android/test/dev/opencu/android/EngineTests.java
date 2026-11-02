@@ -3280,6 +3280,22 @@ public final class EngineTests {
       require(Boolean.TRUE.equals(callStatic("drawnAbove", types, a, b, s)), "drawn last is above");
     });
 
+    // Items 6b and 7: whether to use screenshot or screen pixels; reading a list page by page.
+    test("click, drag and scroll say coordinates are pixels of the latest screenshot image", () -> {
+      for (String tool : List.of("click", "drag", "scroll")) {
+        String description = (String) Protocol.DEFINITIONS.get(tool).get("description");
+        require(description.contains("pixels of the latest") && description.contains("screenshot image"), tool + ": " + description);
+      }
+      require(Protocol.INSTRUCTIONS.contains("Coordinates are pixels of the latest screenshot image"), Protocol.INSTRUCTIONS);
+    });
+
+    test("scroll and set_value descriptions say one call reads a whole list and sets a picker", () -> {
+      String scroll = (String) Protocol.DEFINITIONS.get("scroll").get("description");
+      require(scroll.contains("returns every row passed over") && scroll.contains("read a whole list in one call"), scroll);
+      String setValue = (String) Protocol.DEFINITIONS.get("set_value").get("description");
+      require(setValue.contains("in one call") && setValue.contains("wheel picker"), setValue);
+    });
+
     // Item 4: right after agent_desktop start the engine held 110 MB of mapped APKs from labels.
     test("launcher labels load once per engine and their APK resources are released right after", () -> {
       ScriptedEngine engine = ScriptedEngine.create(new Scene());
