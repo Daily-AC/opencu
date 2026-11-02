@@ -472,6 +472,48 @@ public final class EngineTests {
       require(node.setTexts.equals(List.of("无线调试")), "set-text: " + node.setTexts);
     });
 
+    test("JSON rejects signed or non-hex unicode escapes and non-ASCII digits", () -> {
+      String backslash = "\\";
+      for (String bad :
+          List.of(
+              "\"" + backslash + "u+041\"",
+              "\"" + backslash + "u-001\"",
+              "\"" + backslash + "u 041\"",
+              "\"" + backslash + "u004\uff21\"",
+              "1\u0661",
+              "1.\u0663",
+              "1e\u0663",
+              "\u0661")) {
+        try {
+          Object value = Json.read(bad);
+          throw new AssertionError("accepted " + bad + " as " + value);
+        } catch (IllegalArgumentException expected) {
+        }
+      }
+      require(Json.read("\"" + backslash + "u0041" + backslash + "u00e9\"").equals("Aé"), "valid escapes");
+      require(((Number) Json.read("-12.5e3")).doubleValue() == -12500, "valid number");
+    });
+
+    test("malformed tools/call line is a parse error and never reaches input", () -> {
+      int[] calls = {0};
+      Protocol protocol =
+          new Protocol((name, values) -> {
+            calls[0]++;
+            return Protocol.textResult("called");
+          }, "host");
+      protocol.handle(
+          Json.write(
+              obj("jsonrpc", "2.0", "id", 1, "method", "initialize", "params",
+                  obj("protocolVersion", "2025-11-25", "capabilities", obj(), "clientInfo", obj()))));
+      String line =
+          "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":{\"name\":\"type_text\","
+              + "\"arguments\":{\"app\":\"" + PKG + "\",\"text\":\"\\u+041\"}}}";
+      Map<String, Object> response = protocol.handle(line);
+      require(response.containsKey("error"), "accepted: " + response);
+      require(map(response.get("error")).get("code").equals(-32700), "code: " + response);
+      require(calls[0] == 0, "backend was called");
+    });
+
     if (!failures.isEmpty()) {
       System.out.println("Android engine host checks failed: " + failures);
       System.exit(1);

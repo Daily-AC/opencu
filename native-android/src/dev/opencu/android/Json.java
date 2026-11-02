@@ -84,6 +84,11 @@ public final class Json {
       this.s = s;
     }
 
+    /** JSON numbers use ASCII digits only. */
+    static boolean digit(char c) {
+      return c >= '0' && c <= '9';
+    }
+
     IllegalArgumentException bad() {
       return new IllegalArgumentException("Invalid JSON at " + i);
     }
@@ -139,19 +144,19 @@ public final class Json {
       if (s.charAt(i) == '0') i++;
       else {
         if (s.charAt(i) < '1' || s.charAt(i) > '9') throw bad();
-        while (i < s.length() && Character.isDigit(s.charAt(i))) i++;
+        while (i < s.length() && digit(s.charAt(i))) i++;
       }
       if (i < s.length() && s.charAt(i) == '.') {
         i++;
         int a = i;
-        while (i < s.length() && Character.isDigit(s.charAt(i))) i++;
+        while (i < s.length() && digit(s.charAt(i))) i++;
         if (a == i) throw bad();
       }
       if (i < s.length() && "eE".indexOf(s.charAt(i)) >= 0) {
         i++;
         if (i < s.length() && "+-".indexOf(s.charAt(i)) >= 0) i++;
         int a = i;
-        while (i < s.length() && Character.isDigit(s.charAt(i))) i++;
+        while (i < s.length() && digit(s.charAt(i))) i++;
         if (a == i) throw bad();
       }
       String n = s.substring(start, i);
@@ -197,11 +202,17 @@ public final class Json {
               break;
             case 'u':
               if (i + 4 > s.length()) throw bad();
-              try {
-                c = (char) Integer.parseInt(s.substring(i, i + 4), 16);
-              } catch (NumberFormatException e) {
-                throw bad();
+              int code = 0;
+              for (int k = 0; k < 4; k++) {
+                char h = s.charAt(i + k);
+                int d =
+                    h >= '0' && h <= '9'
+                        ? h - '0'
+                        : h >= 'a' && h <= 'f' ? h - 'a' + 10 : h >= 'A' && h <= 'F' ? h - 'A' + 10 : -1;
+                if (d < 0) throw bad();
+                code = code * 16 + d;
               }
+              c = (char) code;
               i += 4;
               break;
             default:
