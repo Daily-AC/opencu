@@ -4232,5 +4232,114 @@ public final class EngineTests {
       require(f.code.equals("ACTION_UNSUPPORTED") && f.getMessage().contains("cut short"), f.code + ": " + f.getMessage());
       require(engine.events.isEmpty() && engine.log.isEmpty(), "input sent: " + engine.log);
     });
+
+    // 7: a slider next to the list, in one parent, was missed: its identity took in the list's text.
+    test("a swipe that changed a slider beside the list in the same parent is reported", () -> {
+      Scene scene = new Scene();
+      scene.add("/0", "android.widget.LinearLayout", "", "", 0, 100, 1080, 2300);
+      Element list = scene.add("/0/0", "androidx.recyclerview.widget.RecyclerView", "rows", "", 0, 100, 1080, 2000);
+      list.scrollable = true;
+      FakeNode listNode = scene.node(list).with(FORWARD);
+      listNode.scrollable = true;
+      Element first = scene.add("/0/0/0", "android.widget.TextView", "", "Row 11", 0, 100, 1080, 300);
+      Element second = scene.add("/0/0/1", "android.widget.TextView", "", "Row 12", 0, 300, 1080, 500);
+      Element slider = scene.add("/0/1", "android.widget.SeekBar", "volume", "", 0, 2100, 1080, 2200);
+      set(slider, "ranged", true);
+      set(slider, "min", 0f);
+      set(slider, "max", 100f);
+      set(slider, "current", 30f);
+      scene.node(slider).with(SET_PROGRESS);
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      int[] lifts = {0};
+      engine.onObserve = n -> {
+        long ups = engine.events.stream().filter(e -> e.action == 1).count();
+        for (; lifts[0] < ups; lifts[0]++) {
+          first.text = "Row 9";
+          second.text = "Row 10";
+          set(slider, "current", 70f);
+        }
+      };
+      engine.read();
+      String out = text(engine.call("scroll", args("element_index", 2, "direction", "up")));
+      require(lifts[0] == 1, "swipes " + lifts[0]);
+      require(out.startsWith("WARNING: the swipe also changed SeekBar id=volume 30 -> 70"), "notice: " + out.split("\n")[0]);
+    });
+
+    // 8: a coordinate swipe that started on a slider took the slider for the list it scrolled.
+    test("a coordinate swipe that starts on a slider and moves it is reported", () -> {
+      Scene scene = new Scene();
+      Element slider = scene.add("/0", "android.widget.SeekBar", "brightness", "", 0, 1100, 1080, 1300);
+      set(slider, "ranged", true);
+      set(slider, "min", 0f);
+      set(slider, "max", 100f);
+      set(slider, "current", 30f);
+      slider.actions.put("scroll_forward", FORWARD);
+      slider.actions.put("scroll_backward", BACKWARD);
+      scene.node(slider).with(FORWARD, BACKWARD, SET_PROGRESS);
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      engine.mainShot = android.graphics.Bitmap.of(1080, 2400, "display 0");
+      Screen state = engine.read();
+      set(engine, "coordinates", grant(state, 576, 1280));
+      int[] lifts = {0};
+      engine.onObserve = n -> {
+        long ups = engine.events.stream().filter(e -> e.action == 1).count();
+        for (; lifts[0] < ups; lifts[0]++) set(slider, "current", 70f);
+      };
+      String out = text(engine.call("scroll", args("x", 100, "y", 640, "direction", "left")));
+      require(out.contains("WARNING: the swipe also changed SeekBar id=brightness 30 -> 70"), "notice: " + out.split("\n")[1]);
+    });
+
+    // 9: when the warning stopped a swipe, the page just passed was taken for the final page.
+    test("rows of the page a warning stopped after are in the passed-over list", () -> {
+      ListScene rows = new ListScene(FORWARD); // up is swiped
+      rows.show(10);
+      Element toggle = rows.scene.add("/1/1", "android.widget.Switch", "vibrate", "", 800, 2100, 1080, 2200);
+      rows.scene.add("/1/0", "android.widget.TextView", "", "Vibrate", 0, 2100, 800, 2200);
+      toggle.checkable = toggle.clickable = true;
+      ScriptedEngine engine = ScriptedEngine.create(rows.scene);
+      int[] lifts = {0};
+      engine.onObserve = n -> {
+        long ups = engine.events.stream().filter(e -> e.action == 1).count();
+        for (; lifts[0] < ups; lifts[0]++) {
+          rows.show(rows.offset - 2);
+          if (lifts[0] == 1) toggle.checked = true; // the second swipe flips it
+        }
+      };
+      engine.read();
+      String out = text(engine.call("scroll", args("element_index", 1, "direction", "up", "pages", 3)));
+      require(out.startsWith("WARNING: the swipe also changed Switch id=vibrate"), "notice: " + out.split("\n")[0]);
+      require(out.contains("Passed over while scrolling (4 distinct rows") && out.contains("\n- Row 9\n")
+          && out.contains("\n- Row 12\n"), "summary: " + out.substring(0, Math.min(out.length(), 500)));
+    });
+
+    // 12: the value check was quadratic: seconds to minutes on large trees, with no deadline.
+    test("the value check after a swipe stays fast on a flat 3000-element tree with 100 controls", () -> {
+      // A flat form: every control shares its parent with all 3000 elements.
+      Screen before = new Screen(), after = new Screen();
+      for (Screen s : List.of(before, after))
+        for (int k = 0; k < 3000; k++) {
+          boolean control = k % 30 == 29;
+          Element e = new Element();
+          e.index = k + 1;
+          e.window = 7;
+          e.path = "/0/" + k;
+          e.clazz = control ? "android.widget.Switch" : "android.widget.TextView";
+          e.text = control ? "" : "Item " + k;
+          e.checkable = control;
+          e.checked = control && s == after && k == 1259;
+          e.right = 1080;
+          e.bottom = 100;
+          s.elements.put(e.index, e);
+        }
+      java.util.concurrent.atomic.AtomicReference<List<String>> changes = new java.util.concurrent.atomic.AtomicReference<>();
+      Thread check = new Thread(() -> changes.set(Core.valueChanges(before, after, null)));
+      check.setDaemon(true);
+      long started = System.nanoTime();
+      check.start();
+      check.join(3000);
+      long ms = (System.nanoTime() - started) / 1_000_000;
+      require(changes.get() != null && ms < 1000, "took " + ms + " ms");
+      require(changes.get().equals(List.of("Switch not checked -> checked")), "changes " + changes.get());
+    });
   }
 }

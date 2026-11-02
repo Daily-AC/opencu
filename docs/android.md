@@ -187,9 +187,14 @@ captured in their place.
   sent. The scrolled element and everything inside it are left out of that check,
   since its rows come, go and are recycled (every alarm row's switch on the
   PGBM10 has the same id, so an alarm that was on scrolling into a row once
-  produced a false warning); for a coordinate swipe that is the innermost list
-  under the finger that is not a wheel. A control is the same one only when its
-  window, tree path, class, resource id and the text around it match.
+  produced a false warning); for a coordinate swipe that is the innermost element
+  under the finger that scrolls and holds no value itself (not a wheel, slider or
+  other range). A control is the same one only when its window, tree path, class,
+  resource id and the text around it match; that text leaves out the scrolled
+  element's and value holders' own rows, so a slider beside the list in the same
+  layout is still recognised. The check visits each element once per ancestor. A
+  page that the warning stops after is listed as passed over; the state after it
+  is the final page.
   The swipe is ordinary touch input on the active display under the person rules.
   ColorOS lists were seen offering only scroll-forward part-way down, so scrolling
   up such a list swipes. The Clock alarm list's enclosing coordinator then lists a

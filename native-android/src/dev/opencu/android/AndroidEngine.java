@@ -1927,6 +1927,9 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
                   if (result.moved) {
                     moved++;
                     passed.page(pageScreen, pageScope);
+                    // The page just passed is not the final page: the state after it is.
+                    current = result.after;
+                    if (scope != null) scope = result.scope;
                   }
                   stopped = "the swipe changed a value outside the scrolled content, so the rest were not sent";
                   break;
@@ -2257,15 +2260,19 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
 
   /**
    * The list a coordinate swipe from (x, y) scrolls: the innermost element there that scrolls and
-   * is not a wheel picker; null when there is none.
+   * holds no value of its own (not a wheel picker, slider or other range); null when there is none.
    */
   private Element scrollerAt(float x, float y, Screen s) {
     Element inner = null;
-    for (Element e : s.elements.values())
-      if (e.left <= x && x < e.right && e.top <= y && y < e.bottom
-          && scrolls(nodes.get(e.index))
-          && !isWheel(e, s)
-          && (inner == null || e.path.length() > inner.path.length())) inner = e;
+    for (Element e : s.elements.values()) {
+      if (!(e.left <= x && x < e.right && e.top <= y && y < e.bottom)) continue;
+      AccessibilityNodeInfo n = nodes.get(e.index);
+      if (!scrolls(n)
+          || e.ranged
+          || hasAction(n, android.R.id.accessibilityActionSetProgress)
+          || isWheel(e, s)) continue;
+      if (inner == null || e.path.length() > inner.path.length()) inner = e;
+    }
     return inner;
   }
 

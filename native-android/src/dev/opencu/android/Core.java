@@ -159,32 +159,50 @@ public final class Core {
     return changes;
   }
 
-  /** Whether {@code o} is inside an element that holds a value, such as a row of a wheel. */
-  private static boolean insideValue(Element o, Screen s) {
-    for (Element v : s.elements.values())
-      if (v.window == o.window && o.path.startsWith(v.path + "/") && value(v) != null) return true;
-    return false;
+  /** Whether {@code o} is {@code scope} or inside it. */
+  private static boolean within(Element o, Element scope) {
+    return scope != null
+        && o.window == scope.window
+        && (o.path.equals(scope.path) || o.path.startsWith(scope.path + "/"));
   }
 
-  /** The value-holding elements of {@code s} by identity; an identity found twice maps to null. */
+  /**
+   * The value-holding elements of {@code s} outside {@code scope} by identity (an identity found
+   * twice maps to null): window, tree path, class, resource id, and the text around the control
+   * (the non-value text under its parent, leaving out the scrolled container and the rows of other
+   * value holders, which move by themselves). Each element is visited once per ancestor, so a
+   * large tree costs about its size times its depth.
+   */
   private static Map<String, Element> controls(Screen s, Element scope) {
-    Map<String, Element> out = new LinkedHashMap<>();
+    Set<String> holders = new HashSet<>();
+    List<Element> found = new ArrayList<>();
+    Map<String, StringBuilder> around = new HashMap<>();
     for (Element e : s.elements.values()) {
       if (value(e) == null) continue;
-      if (scope != null
-          && e.window == scope.window
-          && (e.path.equals(scope.path) || e.path.startsWith(scope.path + "/"))) continue;
-      String parent = e.path.substring(0, Math.max(0, e.path.lastIndexOf('/'))) + "/";
-      StringBuilder around = new StringBuilder();
-      for (Element o : s.elements.values())
-        if (o != e
-            && o.window == e.window
-            && o.path.startsWith(parent)
-            && value(o) == null
-            && !insideValue(o, s))
-          around.append(o.text).append('\u0001').append(o.desc).append('\u0002');
+      holders.add(e.window + ":" + e.path);
+      if (within(e, scope)) continue;
+      found.add(e);
+      around.putIfAbsent(e.window + ":" + e.path.substring(0, Math.max(0, e.path.lastIndexOf('/'))), new StringBuilder());
+    }
+    Map<String, Element> out = new LinkedHashMap<>();
+    if (found.isEmpty()) return out;
+    elements:
+    for (Element o : s.elements.values()) {
+      if (value(o) != null || within(o, scope)) continue;
+      String path = o.path;
+      // Text inside a value holder (a wheel's rows) turns with it: not part of anything's identity.
+      for (int i = path.indexOf('/', 1); i > 0; i = path.indexOf('/', i + 1))
+        if (holders.contains(o.window + ":" + path.substring(0, i))) continue elements;
+      for (int i = path.indexOf('/'); i >= 0; i = path.indexOf('/', i + 1)) {
+        StringBuilder b = around.get(o.window + ":" + path.substring(0, i));
+        if (b != null) b.append(o.text).append('\u0001').append(o.desc).append('\u0002');
+      }
+    }
+    for (Element e : found) {
+      String parent = e.path.substring(0, Math.max(0, e.path.lastIndexOf('/')));
       String key =
-          e.display + "|" + e.window + "|" + e.path + "|" + e.clazz + "|" + e.id + "|" + around;
+          e.display + "|" + e.window + "|" + e.path + "|" + e.clazz + "|" + e.id + "|"
+              + around.get(e.window + ":" + parent);
       out.put(key, out.containsKey(key) ? null : e);
     }
     return out;
