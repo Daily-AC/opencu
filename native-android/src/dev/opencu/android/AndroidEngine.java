@@ -1291,6 +1291,10 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
    * the editor. The clipboard is never used, and nothing is sent another way.
    */
   private void insertText(AccessibilityNodeInfo n, String value, String pkg, long token) {
+    if (n.isPassword()) {
+      replacePassword(n, value, pkg, token);
+      return;
+    }
     String expected = expectedText(n, value);
     setText(n, expected, pkg, token);
     Screen after = observe(pkg);
@@ -1300,6 +1304,30 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
       throw fail(
           "TEXT_INPUT_FAILED",
           "Focused editable did not contain the requested text after input; no app reaction was observed");
+  }
+
+  /**
+   * Android reports a password's characters masked, so its value cannot be spliced. An empty
+   * password field, or one whose whole value is selected, is set to {@code value} and checked by
+   * length only; any other password field is refused before anything is sent.
+   */
+  private void replacePassword(AccessibilityNodeInfo n, String value, String pkg, long token) {
+    String shown = n.isShowingHintText() ? "" : str(n.getText());
+    int a = n.getTextSelectionStart(), b = n.getTextSelectionEnd();
+    boolean whole = shown.isEmpty() || (Math.min(a, b) == 0 && Math.max(a, b) == shown.length());
+    if (!whole)
+      throw fail(
+          "PASSWORD_INSERT_UNSUPPORTED",
+          "The focused password field already has text, which Android reports only masked, so"
+              + " nothing can be inserted into it; use set_value to replace the whole value."
+              + " Nothing sent");
+    setText(n, value, pkg, token);
+    String actual = focusedText(observe(pkg));
+    if (actual == null || actual.length() != value.length())
+      throw fail(
+          "TEXT_INPUT_FAILED",
+          "The password field's length after input does not match the requested text");
+    addNotice("Password field: its whole value was set and checked by length only.");
   }
 
   private String focusedText(Screen s) {

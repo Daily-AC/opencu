@@ -142,7 +142,11 @@ content is never bypassed. Screenshots can include covering windows.
   included. It never uses the clipboard or the person's keyboard, and never sends
   the text another way; an unconfirmed set-text returns `ACTION_UNCONFIRMED`. The
   editor's resulting text must match or the call returns `TEXT_INPUT_FAILED`. A
-  field that acts only on typed keys may not react. An app reaction can arrive after
+  field that acts only on typed keys may not react. Android reports password text
+  masked, so a password field that already has text (and is not wholly selected)
+  returns `PASSWORD_INSERT_UNSUPPORTED` with nothing sent; use `set_value` to
+  replace the whole value. An empty or wholly selected password field is set and
+  checked by length only, and the result says so. An app reaction can arrive after
   the text postcondition; use `waitForText` or an `until` condition to observe it.
   These waits search visible non-editor content, so the editor's own newly typed
   value does not satisfy a reaction wait by itself.

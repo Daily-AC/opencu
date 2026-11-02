@@ -151,7 +151,7 @@ public final class EngineTests {
 
   /** An accessibility node whose answers and effects are scripted by the test. */
   static class FakeNode extends AccessibilityNodeInfo {
-    boolean editable, clickable, scrollable, hint, refreshes;
+    boolean editable, clickable, scrollable, hint, refreshes, password;
     String text;
     int selectionStart, selectionEnd;
     Set<Integer> actions;
@@ -195,6 +195,7 @@ public final class EngineTests {
         CharSequence value = arguments.getCharSequence(ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE);
         setTexts.add(String.valueOf(value));
         text = String.valueOf(value);
+        selectionStart = selectionEnd = text.length(); // as TextView does after ACTION_SET_TEXT
       }
       Runnable effect = effects.get(action);
       if (effect != null) effect.run();
@@ -218,7 +219,12 @@ public final class EngineTests {
 
     @Override
     public CharSequence getText() {
-      return text;
+      return password ? mask(text) : text; // as TextView reports a password without "speak passwords"
+    }
+
+    @Override
+    public boolean isPassword() {
+      return password;
     }
 
     @Override
@@ -530,6 +536,25 @@ public final class EngineTests {
       set(this, "activeDisplay", 0);
       set(this, "automation", get(this, "mainAutomation"));
     }
+  }
+
+  static String mask(String text) {
+    return "\u2022".repeat(text.length());
+  }
+
+  /** A focused password field holding {@code value}, reported masked like the platform does. */
+  static FakeNode passwordEditor(Scene scene, String value) {
+    Element field = scene.add("/0", "android.widget.EditText", "pin", mask(value), 0, 100, 1080, 200);
+    field.editable = true;
+    field.focused = true;
+    field.password = true;
+    FakeNode node = scene.node(field).with(AccessibilityNodeInfo.ACTION_SET_TEXT);
+    node.editable = true;
+    node.password = true;
+    node.text = value;
+    node.selectionStart = node.selectionEnd = value.length();
+    node.effects.put(AccessibilityNodeInfo.ACTION_SET_TEXT, () -> field.text = mask(node.text));
+    return node;
   }
 
   /** A focused editor whose set-text shows up in the next read, as an app's editor does. */
@@ -1579,6 +1604,38 @@ public final class EngineTests {
       engine.read();
       engine.call("type_text", args("text", "XY"));
       require(node.setTexts.equals(List.of("abXYef")), "set-text " + node.setTexts);
+    });
+
+    test("type_text refuses to splice into a password field that has text", () -> {
+      Scene scene = new Scene();
+      FakeNode node = passwordEditor(scene, "hunter2");
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      engine.read();
+      Failure f = failure(() -> engine.call("type_text", args("text", "x")));
+      require(node.setTexts.isEmpty() && node.performed.isEmpty(), "setTexts=" + node.setTexts + " " + f.code);
+      require(f.code.equals("PASSWORD_INSERT_UNSUPPORTED") && f.getMessage().contains("set_value"), f.code + ": " + f.getMessage());
+      require(node.text.equals("hunter2"), "password now " + node.text);
+    });
+
+    test("type_text sets an empty password field and checks it by length", () -> {
+      Scene scene = new Scene();
+      FakeNode node = passwordEditor(scene, "");
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      engine.read();
+      Map<String, Object> result = engine.call("type_text", args("text", "secret"));
+      require(node.setTexts.equals(List.of("secret")), "setTexts=" + node.setTexts);
+      require(text(result).contains("checked by length only"), "notice: " + text(result).split("\n")[0]);
+    });
+
+    test("type_text replaces a password field whose whole value is selected", () -> {
+      Scene scene = new Scene();
+      FakeNode node = passwordEditor(scene, "hunter2");
+      node.selectionStart = 0;
+      node.selectionEnd = 7;
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      engine.read();
+      engine.call("type_text", args("text", "letmein"));
+      require(node.setTexts.equals(List.of("letmein")), "setTexts=" + node.setTexts);
     });
 
     test("a set-text that is not confirmed is never repeated", () -> {
