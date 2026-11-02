@@ -2878,6 +2878,7 @@ public final class EngineTests {
     secondDeviceRound();
     thirdDeviceRound();
     fourthDeviceRound();
+    fifthDeviceRound();
 
     if (!failures.isEmpty()) {
       System.out.println("Android engine host checks failed: " + failures);
@@ -3160,9 +3161,10 @@ public final class EngineTests {
         for (String line : out.substring(header).split("\n"))
           if (line.startsWith("- ")) rows.add(line.substring(2));
         List<String> expected = new ArrayList<>();
-        // Round 4: no joining of cut pieces; the row across the page boundary keeps its time only.
+        // Round 4: no joining of cut pieces; the row across the page boundary keeps its time only,
+        // and round 5: marked as cut off.
         for (int i = down ? 0 : 4; i <= (down ? 7 : 11); i++)
-          expected.add(i == (down ? 4 : 7) ? alarms.time(i) : alarms.time(i) + " | " + alarms.label(i));
+          expected.add(i == (down ? 4 : 7) ? alarms.time(i) + " (cut off at the list edge)" : alarms.time(i) + " | " + alarms.label(i));
         require(rows.equals(expected), "rows " + rows + " expected " + expected);
       });
 
@@ -3936,6 +3938,31 @@ public final class EngineTests {
       require(hour.wheel.text.equals("07"), "value " + hour.wheel.text);
       require(out.startsWith("Selected value: 07."), "notice: " + out.split("\n")[0]);
       require(!out.contains("Passed over") && !out.contains("there may be more"), "result: " + out.substring(0, Math.min(out.length(), 300)));
+    });
+  }
+
+  /** Checks for what the fifth device round (OPPO PGBM10, 2026-11-03) found. */
+  static void fifthDeviceRound() {
+    // Kept cut rows such as "23:30 | 关闭" were taken for changed labels.
+    test("a row kept although the list's edge cut it on every page is marked as cut off", () -> {
+      ColorOsAlarms alarms = new ColorOsAlarms(0);
+      alarms.step = 1710; // exactly one viewport: the 07:15 row, across the boundary, is never whole
+      ScriptedEngine engine = alarms.engine();
+      engine.read();
+      String out = text(engine.call("scroll", args("element_index", 1, "direction", "down", "pages", 2)));
+      List<String> rows = new ArrayList<>();
+      for (String line : out.substring(out.indexOf("Passed over while scrolling (")).split("\n"))
+        if (line.startsWith("- ")) rows.add(line.substring(2));
+      List<String> cut = new ArrayList<>(), unmarked = new ArrayList<>();
+      for (String row : rows)
+        if (row.endsWith(" (cut off at the list edge)")) cut.add(row);
+        else unmarked.add(row);
+      require(cut.equals(List.of(
+              "07:15 | 法定工作日 | 关闭 [not checked] (cut off at the list edge)",
+              "法定工作日 | 干饭了老铁 | 关闭 [not checked] (cut off at the list edge)")),
+          "cut rows " + cut + " of " + rows);
+      for (String row : unmarked)
+        require(row.endsWith(" | 关闭 [not checked]") && row.split(" \\| ").length >= 3, "a cut row unmarked: " + row);
     });
   }
 }

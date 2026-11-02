@@ -236,12 +236,14 @@ captured in their place.
   directions: every distinct row seen on the starting page and the pages after it,
   in list order, and none of the final page. Each row joins the text,
   descriptions and checked state inside one child of the scrolled element. A row
-  that touches the scrolled element's top or bottom (left or right) edge on every
-  page it showed on may be cut: ColorOS reports such a row with clipped bounds and
-  without the children outside the list (on the PGBM10, `06:45` alone where the
-  whole row is `06:45 | 响一次 | 关闭 [not checked]`). It is left out when all its
-  parts are in another row seen during the call, the final page's included, and
-  kept otherwise, so a row cut on every page it showed on is not lost. Pieces of
+  that touches the scrolled element's top or bottom (left or right) edge and is
+  shorter than the page's whole rows, on every page it showed on, may be cut:
+  ColorOS reports such a row with clipped bounds and without the children outside
+  the list (on the PGBM10, `06:45` alone where the whole row is `06:45 | 响一次 |
+  关闭 [not checked]`). It is left out when all its parts are in another row seen
+  during the call, the final page's included, and kept otherwise, so a row cut on
+  every page it showed on is not lost; a kept one ends ` (cut off at the list
+  edge)`, so it is not read as the row's whole content. Pieces of
   cut rows are never joined: recycled rows made joined pieces of two different
   alarms on the device. A wheel has no such list (see `set_value`). Rows are
   distinct, at most 200 rows of at most 200

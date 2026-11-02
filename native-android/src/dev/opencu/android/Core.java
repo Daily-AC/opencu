@@ -359,10 +359,12 @@ public final class Core {
   /**
    * The rows a multi-page scroll passed over, by one rule in both directions: every distinct row
    * seen on the starting page and the pages after it, but none of the final page (the state shown
-   * below the list). A row that touches the scrolled element's edge across its axis may be cut
+   * below the list). A row that touches the scrolled element's edge across its axis and is shorter
+   * than the page's whole rows may be cut
    * (ColorOS reports such a row with clipped bounds and without the children outside the list):
    * it is left out when all its parts are in another row seen during the call, the final page's
-   * included, and kept otherwise, so a row cut on every page it showed on is not lost. Rows are
+   * included, and kept otherwise, marked {@link #CUT_MARK}, so a row cut on every page it showed
+   * on is not lost nor read as the row's whole content. Rows are
    * listed top to bottom (left to right), whichever way the pages went.
    */
   public static final class Passed {
@@ -381,15 +383,47 @@ public final class Core {
     public void page(Screen s, Element scope) {
       List<Row> rows = rowList(s, scope);
       if (backward) Collections.reverse(rows); // in the order the pages travel
+      int reference = reference(rows, scope);
       for (Row r : rows) {
         String text = r.text();
         if (!parts.containsKey(text)) {
           met.add(text);
           parts.put(text, r.parts);
         }
-        if (atEdge(r, scope)) cut.add(text);
+        if (cutOff(r, scope, reference)) cut.add(text);
         else whole.add(text);
       }
+    }
+
+    /** A row's size along the scrolling axis. */
+    private int extent(Row r) {
+      return vertical ? r.bottom - r.top : r.right - r.left;
+    }
+
+    /**
+     * The size of a whole row on this page: the median of the rows away from the list's edges, or
+     * the largest row when every row touches one. The scope's own row is not a list row.
+     */
+    private int reference(List<Row> rows, Element scope) {
+      List<Integer> inner = new ArrayList<>(), all = new ArrayList<>();
+      for (Row r : rows) {
+        if (scope != null && r.key.equals(scope.path)) continue;
+        all.add(extent(r));
+        if (!atEdge(r, scope)) inner.add(extent(r));
+      }
+      List<Integer> sizes = inner.isEmpty() ? all : inner;
+      if (sizes.isEmpty()) return 0;
+      Collections.sort(sizes);
+      return inner.isEmpty() ? sizes.get(sizes.size() - 1) : sizes.get(sizes.size() / 2);
+    }
+
+    /**
+     * Whether the list's edge may have cut {@code r}: it touches the edge and is shorter than a
+     * whole row of the page. A whole row that merely starts or ends at the edge is not cut.
+     */
+    private boolean cutOff(Row r, Element scope, int reference) {
+      if (scope == null || r.key.equals(scope.path) || !atEdge(r, scope)) return false;
+      return extent(r) * 100 < reference * 95;
     }
 
     /** The rows passed over, given the final page (or null when there is none). */
@@ -409,7 +443,7 @@ public final class Core {
         if (cut.contains(text) && !whole.contains(text))
           for (List<String> other : seen)
             if (other.size() > own.size() && other.containsAll(own)) part = true;
-        if (!part) rows.add(text);
+        if (!part) rows.add(cut.contains(text) && !whole.contains(text) ? text + CUT_MARK : text);
       }
       if (backward) Collections.reverse(rows);
       return rows;
@@ -418,6 +452,9 @@ public final class Core {
     public String order() {
       return vertical ? "top to bottom" : "left to right";
     }
+
+    /** Ends a kept row that was at the list's edge wherever it showed: it may lack parts. */
+    public static final String CUT_MARK = " (cut off at the list edge)";
 
     /** Whether {@code r} touches {@code scope}'s edge across the scrolling axis. */
     private boolean atEdge(Row r, Element scope) {
