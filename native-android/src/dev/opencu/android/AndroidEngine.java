@@ -53,6 +53,8 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
   private Capture coordinates;
   private final Map<Integer, AccessibilityNodeInfo> nodes = new HashMap<>();
   private String notice = "";
+  /** Rows a multi-page scroll passed over, printed after the notice; reset with it. */
+  private String passedOver = "";
   private boolean observationRequired;
   /** Set before anything in the current call reaches the device; a later failure needs a fresh read. */
   private boolean sent;
@@ -995,7 +997,8 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
    * the whole response exists; a failed capture leaves the last returned state in force.
    */
   private Map<String, Object> result(Screen s, boolean screenshot) {
-    Map<String, Object> r = Protocol.textResult((notice.isEmpty() ? "" : notice + "\n") + s.text());
+    Map<String, Object> r =
+        Protocol.textResult((notice.isEmpty() ? "" : notice + "\n") + passedOver + s.text());
     Capture capture = null;
     if (screenshot) {
       Bitmap bitmap = screenshotOf(s);
@@ -1039,6 +1042,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     observationRequired = false;
     coordinates = capture;
     notice = "";
+    passedOver = "";
     return r;
   }
 
@@ -1593,39 +1597,51 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
           String d = ((String) args.get("direction")).substring(0, 1);
           double pages = ((Number) args.getOrDefault("pages", 1)).doubleValue();
           int requested = (int) Math.ceil(pages), moved = 0;
-          boolean listChanged = false, atBatchLimit = false;
+          // Why the pages ended early other than at the list's end; worded as a plain fact.
+          String stopped = null;
           // How the pages were sent when not by the element's own scroll action.
           String path = null;
+          // Rows on the pages scrolled past, in order and distinct.
+          Set<String> passed = new LinkedHashSet<>();
           Screen current = now;
+          // What an indexed scroll moves, as found in current: the element when it scrolls,
+          // otherwise the nearest scrolling element enclosing it. It is followed from page to
+          // page even when its path, bounds or text change (a collapsing toolbar, a wheel's value).
+          Element scope = null;
+          if (n != null) {
+            scope = scrollScope(target, now);
+            if (scope == null)
+              throw fail(
+                  "ACTION_UNSUPPORTED",
+                  "Neither the element nor an element enclosing it scrolls; nothing sent");
+          }
           for (int page = 0; page < requested; page++) {
             if (page > 0
                 && batchDeadline > 0
                 && SystemClock.uptimeMillis() + Core.SCROLL_PAGE_MS > batchDeadline) {
-              atBatchLimit = true;
+              stopped = "stopped at the batch time limit";
               break;
             }
             if (page > 0) {
+              Screen previous = current;
               current = observe(pkg);
               String changed = Core.stopReason(fence, current, pkg);
               if (changed != null) throw fail("POPUP", "Window changed during scroll: " + changed);
-              if (n != null) {
-                target = live(old, base, current);
-                n = nodes.get(target.index);
+              if (scope != null) {
+                scope = Core.follow(previous, scope, current);
+                if (scope == null) {
+                  stopped = "the scrolled element was not found on the new screen, so the rest were not sent";
+                  break;
+                }
               }
             }
-            // Indexed: the element's own scroll action that way, else that of the nearest
-            // scrolling element enclosing it, else a swipe inside its visible part.
-            Element scope = null, acted = null;
+            // Indexed: the element's own scroll action that way, else the direction's action of
+            // the nearest scrolling element enclosing it, else a swipe inside its visible part.
+            Element acted = scope;
             int action = 0;
             float[] swipe = null;
-            if (n != null) {
-              scope = scrollScope(target, current);
-              if (scope == null)
-                throw fail(
-                    "ACTION_UNSUPPORTED",
-                    "Neither the element nor an element enclosing it scrolls; nothing sent");
+            if (scope != null) {
               action = scrollAction(nodes.get(scope.index), d, false);
-              acted = scope;
               if (action == 0) {
                 acted = scrollingAncestor(scope, current);
                 if (acted != null) action = scrollAction(nodes.get(acted.index), d, true);
@@ -1633,15 +1649,20 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
               }
               if (action == 0) {
                 swipe = swipe(scope, current, d);
-                if (swipe == null)
-                  throw fail(
-                      "ACTION_UNSUPPORTED",
-                      "The element offers no scroll-" + direction(d) + " action and too little of it is"
-                          + " visible to swipe; nothing sent");
+                if (swipe == null) {
+                  if (page == 0)
+                    throw fail(
+                        "ACTION_UNSUPPORTED",
+                        "The element offers no scroll-" + direction(d) + " action and too little of it"
+                            + " is visible to swipe; nothing sent");
+                  stopped = "too little of the element is visible to swipe, so the rest were not sent";
+                  break;
+                }
                 path = "a touch swipe inside the element (it offers no scroll-" + direction(d) + " action)";
               }
             }
             String before = Core.scrollContent(current, scope);
+            List<String> rows = Core.rows(current, scope);
             checkTarget(token, pkg);
             if (action != 0) {
               ensureOpen();
@@ -1659,25 +1680,29 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
                   ty = Math.max(1, Math.min(now.height - 2, p[1] + dy));
               touch(p[0], p[1], tx, ty, 350, pkg, token);
             }
-            int outcome =
+            Page result =
                 scrolled(
-                    before, old, base, pkg, token,
+                    before, current, scope, pkg, token,
                     action != 0 ? Core.SCROLL_QUIET_ACTION_MS : Core.SCROLL_QUIET_TOUCH_MS);
-            if (outcome == 0) break;
+            if (!result.moved) break;
             moved++;
-            if (outcome == 2) {
-              listChanged = true;
-              break;
+            passed.addAll(rows);
+            if (scope != null) {
+              current = result.after;
+              scope = result.scope;
+              if (scope == null) {
+                stopped = "the scrolled element was not found on the new screen, so the rest were not sent";
+                break;
+              }
             }
           }
           if (moved < requested)
             addNotice(
-                listChanged
-                    ? "Scrolled " + moved + " of " + requested + " pages; the list changed, so scrolling stopped"
-                    : atBatchLimit
-                        ? "Scrolled " + moved + " of " + requested + " pages; stopped at the batch time limit"
-                        : Core.scrollNotice(moved, requested));
+                stopped != null
+                    ? "Scrolled " + moved + " of " + requested + " pages; " + stopped
+                    : Core.scrollNotice(moved, requested));
           if (path != null) addNotice("Scrolled with " + path + ".");
+          if (requested > 1) passedOver += Core.passedOver(passed);
           break;
         }
       case "press_key":
@@ -1832,31 +1857,48 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     return p;
   }
 
+  /** A scroll page's outcome: whether it moved, the settled screen and the scope as found in it. */
+  private static final class Page {
+    final boolean moved;
+    final Screen after;
+    final Element scope;
+
+    Page(boolean moved, Screen after, Element scope) {
+      this.moved = moved;
+      this.after = after;
+      this.scope = scope;
+    }
+  }
+
   /**
    * Waits for a scroll page to show and settle, and compares the settled content with {@code
-   * before}. Returns 0 when the scrolled content (or, for coordinates, the screen) ends as it was,
-   * also after a bounce, 1 when it changed, 2 when the scrolled element itself changed. Unchanged
-   * content is watched for {@code quietMs}; changed content until two reads {@link
-   * Core#SCROLL_SETTLED_MS} apart agree. One page waits at most {@link Core#SCROLL_PAGE_MS}, and
-   * never past the batch deadline.
+   * before}, the content of {@code scope} in {@code seen} (the screen, for coordinates). The page
+   * has not moved when the content ends as it was, also after a bounce. A scope that can no longer
+   * be followed counts as moved; the caller ends the pages there. Unchanged content is watched for
+   * {@code quietMs}; changed content until two reads {@link Core#SCROLL_SETTLED_MS} apart agree.
+   * One page waits at most {@link Core#SCROLL_PAGE_MS}, and never past the batch deadline.
    */
-  private int scrolled(String before, Element old, Screen base, String pkg, long token, long quietMs) {
+  private Page scrolled(
+      String before, Screen seen, Element scope, String pkg, long token, long quietMs) {
     long start = SystemClock.uptimeMillis(), end = start + Core.SCROLL_PAGE_MS;
     if (batchDeadline > 0) end = Math.min(end, batchDeadline);
     String last = before;
     long since = start;
     boolean changed = false;
+    Screen after;
+    Element followed;
     do {
       pause(40, token);
-      Screen after;
       try {
         after = observe(pkg);
       } catch (RuntimeException e) {
         throw unconfirmed("the list could not be read after scrolling");
       }
-      Element live = old == null ? null : Core.live(base, old, after);
-      if (old != null && live == null) return 2;
-      String content = Core.scrollContent(after, live == null ? null : scrollScope(live, after));
+      followed = scope == null ? null : Core.follow(seen, scope, after);
+      String content =
+          scope == null
+              ? Core.scrollContent(after, null)
+              : followed == null ? "gone\n" + after.fingerprint() : Core.scrollContent(after, followed);
       long now = SystemClock.uptimeMillis();
       if (!content.equals(last)) {
         last = content;
@@ -1864,7 +1906,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
         changed |= !content.equals(before);
       } else if (changed ? now - since >= Core.SCROLL_SETTLED_MS : now - start >= quietMs) break;
     } while (SystemClock.uptimeMillis() < end);
-    return last.equals(before) ? 0 : 1;
+    return new Page(!last.equals(before), after, followed);
   }
 
   void settleAfterInput(long token) {
@@ -1956,6 +1998,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     Capture cap = coordinates;
     coordinates = null;
     notice = "";
+    passedOver = "";
     sent = false;
     long token = person.token();
     if (!name.equals("get_app_state")) check(token, false);

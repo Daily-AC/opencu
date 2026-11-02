@@ -159,6 +159,21 @@ captured in their place.
   end or does not scroll this way` on the first page; a page whose content changed
   counts even when the accessibility action returned false. Only a failed read
   after scrolling returns `ACTION_UNCONFIRMED`.
+  The scrolled element is followed from page to page even when its tree path,
+  bounds or text change (a collapsing toolbar resizes a list and shifts the
+  indexes, a wheel shows its next value): it is the same element, or the only one
+  in its window with its class and resource id. A new dialog or foreign window or
+  another foreground app still stops the call as `POPUP`; if the element can no
+  longer be found (for example in a new activity) the remaining pages are not sent
+  and the notice says so, such as `Scrolled 1 of 3 pages; the scrolled element was
+  not found on the new screen, so the rest were not sent`.
+  When more than one page was requested, the result lists the rows on the pages
+  scrolled past, after the notice and before the state, under `Passed over while
+  scrolling (N distinct rows, in order; the final page is the state below):`.
+  Each row joins the text, descriptions and checked state inside one child of the
+  scrolled element (a wheel's own value is a row); rows are distinct and in the
+  order met, at most 200 rows of at most 200 characters, and password fields are
+  left out. One call can therefore read a long list.
 - `press_key`: back, home, enter/Return, delete/backspace, tab, recents/app_switch,
   search. No volume, power, arbitrary keycodes or modifier chords.
 - `type_text`: types into the focused editable only. Without one it returns

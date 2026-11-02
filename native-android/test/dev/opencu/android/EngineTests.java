@@ -364,6 +364,7 @@ public final class EngineTests {
       set(e, "notice", "");
       // Field initialisers do not run for an allocated instance; mirror the ones the engine has.
       if (hasField(AndroidEngine.class, "keyboardInputFailure")) set(e, "keyboardInputFailure", "");
+      if (hasField(AndroidEngine.class, "passedOver")) set(e, "passedOver", "");
       if (hasField(AndroidEngine.class, "callLock"))
         set(e, "callLock", new java.util.concurrent.locks.ReentrantLock());
       set(e, "desktopDisplay", -1);
@@ -1522,6 +1523,121 @@ public final class EngineTests {
       Failure f = failure(() -> engine.call("scroll", args("element_index", 1, "direction", "down")));
       require(f.code.equals("ACTION_UNSUPPORTED"), f.code + ": " + f.getMessage());
       require(engine.events.isEmpty() && engine.log.isEmpty(), "input sent: " + engine.log);
+    });
+
+    test("a multi-page scroll lists the rows it passed over, in order", () -> {
+      ListScene rows = new ListScene(DOWN);
+      rows.node.effects.put(DOWN, () -> rows.show(Math.min(rows.offset + 2, 8)));
+      ScriptedEngine engine = ScriptedEngine.create(rows.scene);
+      engine.read();
+      String out = text(engine.call("scroll", args("element_index", 1, "direction", "down", "pages", 5)));
+      require(out.startsWith("Scrolled 4 of 5 pages; reached the end"), "notice: " + out.split("\n")[0]);
+      int header = out.indexOf("Passed over while scrolling (8 distinct rows");
+      require(header > 0, "no passed-over rows: " + out);
+      int at = header;
+      for (int row = 1; row <= 8; row++) {
+        int next = out.indexOf("\n- Row " + row + "\n", at);
+        require(next > at - 1, "Row " + row + " missing or out of order: " + out);
+        at = next;
+      }
+      require(out.indexOf("Foreground:") > at, "rows not before the state: " + out);
+    });
+
+    test("a single-page scroll adds no passed-over rows", () -> {
+      ListScene rows = new ListScene(DOWN);
+      rows.node.effects.put(DOWN, () -> rows.show(rows.offset + 2));
+      ScriptedEngine engine = ScriptedEngine.create(rows.scene);
+      engine.read();
+      String out = text(engine.call("scroll", args("element_index", 1, "direction", "down")));
+      require(!out.contains("Passed over"), "rows for one page: " + out);
+    });
+
+    test("passed-over rows are bounded to 200 rows of at most 200 characters", () -> {
+      Scene scene = new Scene();
+      Element list = scene.add("/0", "androidx.recyclerview.widget.RecyclerView", "rows", "", 0, 100, 1080, 2300);
+      list.scrollable = true;
+      FakeNode node = scene.node(list).with(DOWN);
+      node.scrollable = true;
+      List<Element> items = new ArrayList<>();
+      for (int i = 0; i < 12; i++)
+        items.add(scene.add("/0/" + i, "android.widget.TextView", "", "", 0, 100 + i * 180, 1080, 280 + i * 180));
+      int[] offset = {0};
+      Runnable show = () -> {
+        for (int i = 0; i < 12; i++)
+          items.get(i).text = "Item " + (offset[0] + i + 1) + (offset[0] + i == 0 ? " " + "x".repeat(400) : "");
+      };
+      show.run();
+      node.effects.put(DOWN, () -> {
+        offset[0] += 12;
+        show.run();
+      });
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      engine.read();
+      String out = text(engine.call("scroll", args("element_index", 1, "direction", "down", "pages", 20)));
+      require(out.contains("Passed over while scrolling (240 distinct rows"), "header: " + out.split("\n")[0] + " / " + out.split("\n")[1]);
+      long listed = out.lines().filter(l -> l.startsWith("- Item ")).count();
+      require(listed == 200, "rows listed: " + listed);
+      require(out.contains("- … 40 more rows not shown"), "no overflow line");
+      require(out.lines().allMatch(l -> l.length() <= 202), "a row longer than 200 characters");
+      require(out.contains("- Item 200\n") && !out.contains("- Item 201\n"), "not the first 200 in order");
+    });
+
+    test("a collapsing toolbar that re-indexes the screen does not stop a multi-page scroll", () -> {
+      ListScene rows = new ListScene(DOWN);
+      Element title = new Element();
+      title.window = rows.scene.window;
+      title.path = "/1";
+      title.pkg = PKG;
+      title.clazz = "android.widget.TextView";
+      title.text = "Alarms";
+      title.left = 0;
+      title.top = 0;
+      title.right = 1080;
+      title.bottom = 100;
+      rows.scene.specs.add(0, title);
+      rows.scene.nodes.add(0, FakeNode.create());
+      rows.node.effects.put(DOWN, () -> {
+        rows.show(rows.offset + 2);
+        if (rows.scene.specs.get(0) == title) {
+          // The toolbar collapses: its title goes and the list grows upwards.
+          rows.scene.specs.remove(0);
+          rows.scene.nodes.remove(0);
+          rows.list.top = 40;
+        }
+      });
+      ScriptedEngine engine = ScriptedEngine.create(rows.scene);
+      engine.read();
+      String out = text(engine.call("scroll", args("element_index", 2, "direction", "down", "pages", 3)));
+      require(rows.node.performed.size() == 3, "pages sent " + rows.node.performed.size() + ": " + out.split("\n")[0]);
+      require(rows.offset == 6, "offset " + rows.offset);
+      require(!out.startsWith("Scrolled"), "notice: " + out.split("\n")[0]);
+    });
+
+    test("a new activity ends a multi-page scroll with a plain notice", () -> {
+      ListScene rows = new ListScene(DOWN);
+      rows.node.effects.put(DOWN, () -> {
+        rows.show(rows.offset + 2);
+        rows.scene.activity = PKG + "/.Details";
+      });
+      ScriptedEngine engine = ScriptedEngine.create(rows.scene);
+      engine.read();
+      String out = text(engine.call("scroll", args("element_index", 1, "direction", "down", "pages", 3)));
+      require(rows.node.performed.size() == 1, "pages sent " + rows.node.performed.size());
+      require(out.startsWith("Scrolled 1 of 3 pages; the scrolled element was not found on the new screen"),
+          "notice: " + out.split("\n")[0]);
+    });
+
+    test("a wheel picker scrolls one value per page across many pages", () -> {
+      PickerScene picker = new PickerScene();
+      picker.node.effects.put(FORWARD, () ->
+          picker.wheel.text = Integer.toString(Integer.parseInt(picker.wheel.text) + 1));
+      ScriptedEngine engine = ScriptedEngine.create(picker.scene);
+      engine.read();
+      String out = text(engine.call("scroll", args("element_index", 1, "direction", "down", "pages", 15)));
+      require(picker.node.performed.size() == 15, "pages sent " + picker.node.performed.size() + ": " + out.split("\n")[0]);
+      require(picker.wheel.text.equals("35"), "value " + picker.wheel.text);
+      require(!out.startsWith("Scrolled"), "notice: " + out.split("\n")[0]);
+      require(out.contains("\n- 20\n") && out.contains("\n- 34\n"), "values passed over: " + out);
     });
 
     test("scroll description explains pages up to 20", () -> {

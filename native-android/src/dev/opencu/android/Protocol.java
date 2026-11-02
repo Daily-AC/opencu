@@ -180,8 +180,9 @@ public final class Protocol {
             + " inside it. pages (up"
             + " to 20, default 1) moves further in one call and stops early at the end: a page that"
             + " does not move ends the call with a notice such as 'Scrolled 3 of 5 pages; reached the"
-            + " end', or 'Nothing moved; the list is at its end or does not scroll this way'. Returns"
-            + " updated state (and JPEG for coordinates).",
+            + " end', or 'Nothing moved; the list is at its end or does not scroll this way'. With"
+            + " pages >1 the result also lists the distinct rows passed over, so one call reads a"
+            + " long list. Returns updated state (and JPEG for coordinates).",
         false,
         p,
         "app",

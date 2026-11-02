@@ -56,6 +56,95 @@ public final class Core {
     return descendants ? subtree.toString() : window.toString();
   }
 
+  /**
+   * The element of {@code now} that continues {@code prev} (an element of {@code before}) from
+   * one scroll page to the next: the same element, or else the only element in its display, window
+   * and package with its class and resource id, or among several such the one at its tree path.
+   * Its path, bounds and text may change (a collapsing toolbar resizes a list, a wheel shows a new
+   * value); a new activity ends it. Null when no single element qualifies.
+   */
+  public static Element follow(Screen before, Element prev, Screen now) {
+    if (prev == null || !before.activity.equals(now.activity)) return null;
+    for (Element e : now.elements.values()) if (prev.same(e)) return e;
+    Element only = null, atPath = null;
+    int count = 0, paths = 0;
+    for (Element e : now.elements.values()) {
+      if (e.display != prev.display
+          || e.window != prev.window
+          || !e.pkg.equals(prev.pkg)
+          || !e.clazz.equals(prev.clazz)
+          || !e.id.equals(prev.id)) continue;
+      count++;
+      only = e;
+      if (e.path.equals(prev.path)) {
+        paths++;
+        atPath = e;
+      }
+    }
+    return count == 1 ? only : paths == 1 ? atPath : null;
+  }
+
+  /** Most rows a multi-page scroll lists as passed over, and most characters shown per row. */
+  public static final int PASSED_ROWS = 200, ROW_CHARS = 200;
+
+  /**
+   * The visible text of {@code s} as rows: the scope's own text, then one row per child of {@code
+   * scope} joining its descendants' text, descriptions and checked state with " | ". Without a
+   * scope, one row per element. Password fields are left out.
+   */
+  public static List<String> rows(Screen s, Element scope) {
+    Map<String, StringBuilder> rows = new LinkedHashMap<>();
+    String prefix = scope == null ? "" : scope.path + "/";
+    for (Element e : s.elements.values()) {
+      String key;
+      if (scope == null) key = Integer.toString(e.index);
+      else if (e.window != scope.window) continue;
+      else if (e.path.equals(scope.path)) key = e.path;
+      else if (!e.path.startsWith(prefix)) continue;
+      else {
+        int end = e.path.indexOf('/', prefix.length());
+        key = end < 0 ? e.path : e.path.substring(0, end);
+      }
+      String part = rowPart(e);
+      if (part.isEmpty()) continue;
+      StringBuilder row = rows.get(key);
+      if (row == null) rows.put(key, new StringBuilder(part));
+      else row.append(" | ").append(part);
+    }
+    List<String> out = new ArrayList<>();
+    for (StringBuilder row : rows.values()) out.add(row.toString());
+    return out;
+  }
+
+  private static String rowPart(Element e) {
+    if (e.password) return "";
+    String part =
+        e.text.isEmpty()
+            ? e.desc
+            : e.desc.isEmpty() || e.desc.equals(e.text) ? e.text : e.text + " (" + e.desc + ")";
+    if (e.checkable) part += (part.isEmpty() ? "" : " ") + (e.checked ? "[checked]" : "[not checked]");
+    return part.replaceAll("\\s+", " ").trim();
+  }
+
+  /** The labelled list of distinct rows a multi-page scroll passed over, or "" when there are none. */
+  public static String passedOver(Collection<String> rows) {
+    if (rows.isEmpty()) return "";
+    StringBuilder b =
+        new StringBuilder("Passed over while scrolling (")
+            .append(rows.size())
+            .append(" distinct rows, in order; the final page is the state below):\n");
+    int shown = 0;
+    for (String row : rows) {
+      if (shown == PASSED_ROWS) break;
+      b.append("- ")
+          .append(row.length() > ROW_CHARS ? row.substring(0, ROW_CHARS - 1) + "…" : row)
+          .append('\n');
+      shown++;
+    }
+    if (rows.size() > shown) b.append("- … ").append(rows.size() - shown).append(" more rows not shown\n");
+    return b.toString();
+  }
+
   /** Time allowed for one scroll page: the action, then waiting for the list to move. */
   public static final long SCROLL_PAGE_MS = 1_000;
 
