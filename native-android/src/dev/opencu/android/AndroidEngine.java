@@ -1799,8 +1799,8 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
           String path = null;
           // Rows on the pages scrolled past, whole, in list order and distinct.
           Core.Passed passed = new Core.Passed(d);
-          // A wheel's pages pass over its values, one per page.
-          Set<String> wheelValues = new LinkedHashSet<>();
+          // Whether the pages turned a wheel picker: its result is its selected value, not rows.
+          boolean wheelPages = false;
           Screen current = now;
           // What an indexed scroll moves, as found in current: the element when it scrolls,
           // otherwise the nearest scrolling element enclosing it. It is followed from page to
@@ -1875,13 +1875,12 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
               }
               if (action != 0 && acted == scope && isWheel(scope, current)) {
                 // A wheel's page is one step, and only its selected value says whether it moved.
-                String value = Core.selectedValue(current, scope);
+                wheelPages = true;
                 WheelStep step =
                     stepWheel(scope, current, action, fence, pkg, token,
                         deadline);
                 if (!step.changed) break;
                 moved++;
-                wheelValues.add(value);
                 current = step.after;
                 scope = step.wheel;
                 continue;
@@ -1951,14 +1950,13 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
                 stopped != null
                     ? "Scrolled " + moved + " of " + requested + " pages; " + stopped
                     : Core.scrollNotice(moved, requested, d));
-          else if (requested > 1)
+          else if (requested > 1 && !wheelPages)
             addNotice("All " + requested + " pages scrolled; there may be more: scroll again to go further.");
           if (path != null) addNotice("Scrolled with " + path + ".");
-          if (requested > 1)
-            passedOver +=
-                wheelValues.isEmpty()
-                    ? Core.passedOver(passed.finish(current, scope), passed.order())
-                    : Core.passedOver(wheelValues, "in order");
+          if (wheelPages)
+            addNotice("Selected value: " + Core.wheelShort(Core.selectedValue(current, scope)) + ".");
+          else if (requested > 1)
+            passedOver += Core.passedOver(passed.finish(current, scope), passed.order());
           break;
         }
       case "press_key":

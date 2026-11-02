@@ -243,7 +243,7 @@ captured in their place.
   parts are in another row seen during the call, the final page's included, and
   kept otherwise, so a row cut on every page it showed on is not lost. Pieces of
   cut rows are never joined: recycled rows made joined pieces of two different
-  alarms on the device. A wheel lists the values it passed, one per page. Rows are
+  alarms on the device. A wheel has no such list (see `set_value`). Rows are
   distinct, at most 200 rows of at most 200
   characters, and password fields are left out. One call can therefore read a
   long list.
@@ -298,7 +298,8 @@ captured in their place.
   in 12 steps.` One `run_actions` can set every wheel of a time. `scroll` on a
   wheel also steps it, one value per page (`down` is the next value: on ColorOS
   the hour went from 00 to 07 scrolling down), and a page counts as moved only when
-  the wheel's selected value changed.
+  the wheel's selected value changed. Its result says `Selected value: 07.`
+  instead of listing passed-over values, and never that there may be more.
 - `paste`: `format: "text"` only; inserts the text exactly as `type_text` does.
   The clipboard is neither read nor changed.
 - `perform_secondary_action`: only a name listed on that node, rechecked live;

@@ -3926,5 +3926,16 @@ public final class EngineTests {
           "header: " + out.split("\n")[1]);
       require(!out.contains("\n- Row 7\n") && !out.contains("\n- Row 8\n"), "final page rows listed: " + out);
     });
+
+    // Item 4: scrolling a wheel 6 pages listed 01..06 and said "there may be more".
+    test("a wheel scrolled several pages reports its selected value, not passed-over rows", () -> {
+      WheelScene hour = new WheelScene("hour", 1, 0, 23);
+      ScriptedEngine engine = hour.engine();
+      engine.read();
+      String out = text(engine.call("scroll", args("element_index", 2, "direction", "down", "pages", 6)));
+      require(hour.wheel.text.equals("07"), "value " + hour.wheel.text);
+      require(out.startsWith("Selected value: 07."), "notice: " + out.split("\n")[0]);
+      require(!out.contains("Passed over") && !out.contains("there may be more"), "result: " + out.substring(0, Math.min(out.length(), 300)));
+    });
   }
 }
