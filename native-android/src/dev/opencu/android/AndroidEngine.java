@@ -642,8 +642,8 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     boolean changing = !foreground()[0].equals(pkg);
     check(token, changing);
     if (!changing) return;
-    Intent launch = context.getPackageManager().getLaunchIntentForPackage(pkg);
-    if (launch == null) throw fail("LAUNCH_FAILED", "No launcher activity for " + pkg);
+    String component = launchComponent(pkg);
+    if (component == null) throw fail("LAUNCH_FAILED", "No launcher activity for " + pkg);
     // am is a platform shell client; package/component comes from PackageManager, never
     // interpolated shell text.
     check(token, true);
@@ -656,7 +656,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
         "--display",
         Integer.toString(display),
         "-n",
-        launch.getComponent().flattenToString(),
+        component,
         "-a",
         Intent.ACTION_MAIN,
         "-c",
@@ -666,6 +666,12 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     long end = SystemClock.uptimeMillis() + 5000;
     while (!foreground()[0].equals(pkg) && SystemClock.uptimeMillis() < end) pause(25, token);
     checkTarget(token, pkg);
+  }
+
+  /** The launcher activity of {@code pkg} as a flattened component name, or null. */
+  String launchComponent(String pkg) {
+    Intent launch = context.getPackageManager().getLaunchIntentForPackage(pkg);
+    return launch == null ? null : launch.getComponent().flattenToString();
   }
 
   private static String windowIdentity(Screen s) {

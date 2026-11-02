@@ -414,9 +414,34 @@ public final class EngineTests {
       return displayId == 0 ? mainForeground : "";
     }
 
+    /** Stalls the {@code stallOccurrence}-th check made on behalf of {@code stallCaller}. */
+    String stallCaller;
+    int stallOccurrence, stallSeen;
+    CountDownLatch stalled, resume;
+
+    static String checkCaller() {
+      StackTraceElement[] stack = Thread.currentThread().getStackTrace();
+      // [0] getStackTrace, [1] checkCaller, [2] check, [3] checkTarget or the method checking.
+      String name = stack[3].getMethodName();
+      return name.equals("checkTarget") ? stack[4].getMethodName() : name;
+    }
+
+    // Not annotated: older engines start activities without this hook.
+    String launchComponent(String pkg) {
+      return pkg + "/.Main";
+    }
+
     @Override
     void check(long token, boolean changing) {
       if ((Boolean) get(this, "closed")) throw Core.fail("ENGINE_STOPPING", "Stdin closed");
+      if (stallCaller != null && stallCaller.equals(checkCaller()) && ++stallSeen == stallOccurrence) {
+        // A platform call after this check blocks past shutdown's bounded wait.
+        stalled.countDown();
+        try {
+          resume.await(10, TimeUnit.SECONDS);
+        } catch (InterruptedException ignored) {
+        }
+      }
       if (checkHook != null)
         try {
           checkHook.run();
@@ -1318,6 +1343,62 @@ public final class EngineTests {
       for (Event e : engine.events) sentOn.add(e.action + "@" + e.display);
       require(engine.events.isEmpty(), "events after shutdown: " + sentOn);
     });
+
+    // Each first send re-checks the connection after reading its route. Stall the last check
+    // before it, let shutdown restore the main route, then let the call resume.
+    Object[][] firstSends = {
+      {"an activity start", "activate", 2, "activate_app"},
+      {"an accessibility action", "accessibility", 1, "set_value"},
+      {"a shell tap", "shellTap", 1, "click"},
+      {"a key", "key", 1, "press_key"},
+      // perform checks at entry and before its switch; the third is the scroll's own.
+      {"a scroll action", "perform", 3, "scroll"},
+      {"a touch", "touch", 1, "long press"},
+    };
+    for (Object[] path : firstSends)
+      test(path[0] + " stalled across shutdown sends nothing on the restored main route", () -> {
+        Scene scene = new Scene();
+        Element target = scene.add("/0", "android.widget.EditText", "target", "", 100, 200, 300, 260);
+        target.clickable = target.editable = target.scrollable = true;
+        FakeNode node = scene.node(target).with(AccessibilityNodeInfo.ACTION_SET_TEXT, DOWN);
+        node.editable = node.clickable = node.scrollable = true;
+        ScriptedEngine engine = onAgentDisplay(scene);
+        engine.read();
+        if (path[3].equals("activate_app")) scene.foreground = "example.other";
+        engine.stallCaller = (String) path[1];
+        engine.stallOccurrence = (Integer) path[2];
+        engine.stalled = new CountDownLatch(1);
+        engine.resume = new CountDownLatch(1);
+        Map<String, Object> request =
+            path[3].equals("activate_app") ? args()
+                : path[3].equals("set_value") ? args("element_index", 1, "value", "x")
+                : path[3].equals("click") ? args("element_index", 1)
+                : path[3].equals("press_key") ? args("key", "back")
+                : path[3].equals("scroll") ? args("element_index", 1, "direction", "down")
+                : args("element_index", 1, "duration", 0.6);
+        String tool = path[3].equals("long press") ? "click" : (String) path[3];
+        Thread worker = new Thread(() -> {
+          try {
+            engine.call(tool, request);
+          } catch (Throwable ignored) {
+          }
+        });
+        worker.start();
+        require(engine.stalled.await(5, TimeUnit.SECONDS), "never reached the check before sending");
+        try {
+          engine.close();
+        } catch (Throwable ignored) {
+        }
+        require((Integer) get(engine, "activeDisplay") == 0, "shutdown did not restore the main route");
+        engine.resume.countDown();
+        worker.join(3000);
+        reopenCommands();
+        List<String> sentOn = new ArrayList<>();
+        for (String line : engine.log) if (line.startsWith("shell ")) sentOn.add(line);
+        for (Event e : engine.events) sentOn.add(e.kind + " " + e.action + "@" + e.display);
+        if (!node.performed.isEmpty()) sentOn.add("accessibility " + node.performed);
+        require(sentOn.isEmpty(), "sent after shutdown: " + sentOn);
+      });
 
     test("closing waits for an in-flight gesture before releasing the agent display", () -> {
       Scene scene = new Scene();
