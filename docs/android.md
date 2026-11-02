@@ -256,6 +256,10 @@ foreground package/label; `stable: true` means unchanged observable state for
 400 ms. Default timeout is 8000 ms, maximum 20000 ms, measured after the action.
 Polling is local, normally every 40 ms plus the tree read.
 
+Apps that preview a result while you type, such as a calculator, can satisfy an
+`until` on the result text before the last key. Wait on the last step with
+`stable: true`, or with a condition only the last action produces.
+
 The batch stops on timeout, a new dialog/covering foreign window, unexpected
 foreground app, stale element, failed action, lock, physical input or stop.
 An ordinary newly opened IME is expected. An explicit `until.app` can authorize
