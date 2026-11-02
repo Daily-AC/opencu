@@ -3701,7 +3701,9 @@ public final class EngineTests {
       ScriptedEngine engine = alarms.engine();
       engine.read();
       String out = text(engine.call("scroll", args("element_index", 1, "direction", "down", "pages", 2)));
-      require(out.contains("\n- 06:45\n") || out.contains("\n- 06:45 |"), "a row clipped on both pages was lost: " + out.substring(0, Math.min(out.length(), 900)));
+      // Review: 06:45 is whole on the first page; 07:15 is the row cut on both pages (its time,
+      // label and switch at the first page's bottom, its label, name and switch at the next's top).
+      require(out.contains("\n- 07:15 | 法定工作日 | 关闭 [not checked]\n"), "a row clipped on both pages was lost: " + out.substring(0, Math.min(out.length(), 900)));
     });
 
     // Item B: scrolling up repeated the final page's rows above the state that shows them.
