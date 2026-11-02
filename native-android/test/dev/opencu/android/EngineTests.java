@@ -1671,6 +1671,21 @@ public final class EngineTests {
       require(text(result).contains("caret could not be placed"), "notice: " + text(result).split("\n")[0]);
     });
 
+    test("type_text fails when the editor does not hold the requested text afterwards", () -> {
+      Scene scene = new Scene();
+      FakeNode node = focusedEditor(scene, AccessibilityNodeInfo.ACTION_SET_TEXT);
+      Element field = scene.specs.get(0);
+      // The app accepts set-text but keeps only three characters, as a length filter would.
+      node.effects.put(AccessibilityNodeInfo.ACTION_SET_TEXT, () -> {
+        node.text = node.text.substring(0, Math.min(3, node.text.length()));
+        field.text = node.text;
+      });
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      engine.read();
+      Failure f = failure(() -> engine.call("type_text", args("text", "hello")));
+      require(f.code.equals("TEXT_INPUT_FAILED"), f.code + ": " + f.getMessage());
+    });
+
     test("a set-text that is not confirmed is never repeated", () -> {
       Scene scene = new Scene();
       FakeNode node = focusedEditor(scene, AccessibilityNodeInfo.ACTION_SET_TEXT);
