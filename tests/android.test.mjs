@@ -63,3 +63,46 @@ test('Android engine host checks: decisions run against a scripted phone', () =>
   assert.match(run.stdout,/Android engine host checks passed: \d+/);
   console.log(run.stdout.trim());
 });
+
+import { mkdtempSync, copyFileSync } from 'node:fs';
+/** Runs a copy of the launcher against the local fake adb; no device or adb is involved. */
+function launchWithFakeAdb(env, args=[]) {
+  const dir=mkdtempSync(path.join(os.tmpdir(),'opencu-launch-'));
+  try {
+    mkdirSync(path.join(dir,'native-android'),{recursive:true});mkdirSync(path.join(dir,'.build/android'),{recursive:true});
+    copyFileSync(path.join(root,'native-android/launcher.mjs'),path.join(dir,'native-android/launcher.mjs'));
+    writeFileSync(path.join(dir,'.build/android/opencu-android.jar'),'synthetic engine bytes; never executed');
+    const device=path.join(dir,'device');mkdirSync(device);
+    const r=spawnSync(process.execPath,[path.join(dir,'native-android/launcher.mjs'),...args],{input:'',encoding:'utf8',timeout:30000,
+      env:{...process.env,ANDROID_SERIAL:'',ADB:path.join(root,'native-android/test/launcher/fake-adb.mjs'),FAKE_ADB_ROOT:device,...env}});
+    const calls=readFileSync(path.join(device,'calls.jsonl'),'utf8').trim().split('\n').map(line=>JSON.parse(line));
+    return {...r,calls};
+  } finally { rmSync(dir,{recursive:true,force:true}); }
+}
+
+test('Android launcher sends every adb call of one launch to one device', () => {
+  const r=launchWithFakeAdb({FAKE_ADB_SERIAL:'phone-1',FAKE_ADB_STAT:'2000 644 regular file'});
+  assert.equal(r.status,0,r.stderr);
+  assert.match(r.stdout,/"launched"/);
+  const [first,...later]=r.calls;
+  assert.deepEqual(first,['get-serialno']);
+  assert.ok(later.length>=3,JSON.stringify(r.calls));
+  for(const call of later)assert.deepEqual(call.slice(0,2),['-s','phone-1'],JSON.stringify(call));
+  const given=launchWithFakeAdb({FAKE_ADB_STAT:'2000 644 regular file'},['--serial','phone-2']);
+  assert.equal(given.status,0,given.stderr);
+  for(const call of given.calls)assert.deepEqual(call.slice(0,2),['-s','phone-2'],JSON.stringify(call));
+});
+
+test('Android launcher refuses a cached engine jar that shell does not own exclusively', () => {
+  for(const stat of ['2000 666 regular file','2000 664 regular file','0 644 regular file','2000 644 symbolic link','2000 4644 regular file','2000 755 regular file','']){
+    const r=launchWithFakeAdb({FAKE_ADB_SERIAL:'phone-1',FAKE_ADB_STAT:stat});
+    assert.notEqual(r.status,0,`launched with "${stat}"`);
+    assert.doesNotMatch(r.stdout,/launched/,stat);
+    assert.match(r.stderr.split('\n')[0],/^UNSAFE_ENGINE_JAR: /,stat);
+  }
+  for(const stat of ['2000 644 regular file','2000 640 regular file','2000 600 regular file','2000 444 regular file']){
+    const r=launchWithFakeAdb({FAKE_ADB_SERIAL:'phone-1',FAKE_ADB_STAT:stat});
+    assert.equal(r.status,0,`${stat}: ${r.stderr}`);
+    assert.match(r.stdout,/"launched"/,stat);
+  }
+});

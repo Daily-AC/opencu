@@ -16,9 +16,11 @@ for(let i=0;i<args.length;i++){
   else if(args[i]==='doctor'&&mode==='mcp')mode='doctor';
   else {console.error('Usage: opencu android [--serial SERIAL] [doctor]');process.exit(2);}
 }
-const prefix=serial?['-s',serial]:[];
+let prefix=serial?['-s',serial]:[];
 function run(args){const r=spawnSync(adb,[...prefix,...args],{encoding:'utf8',maxBuffer:4*1024*1024});if(r.error)throw r.error;if(r.status!==0)throw new Error(r.stderr.trim()||r.stdout.trim()||`adb exited ${r.status}`);return r.stdout;}
 try{
+  // Every adb call of this launch, the final exec included, goes to the same device.
+  if(!serial){serial=run(['get-serialno']).trim();if(!serial||/\s/.test(serial))throw new Error('adb did not name a single device; pass --serial');prefix=['-s',serial];}
   const jar=path.join(root,'.build/android/opencu-android.jar');
   if(!existsSync(jar))throw new Error('Android engine missing. Run npm run build:android.');
   const digest=createHash('sha256').update(readFileSync(jar)).digest('hex');
@@ -33,7 +35,11 @@ try{
   const idleEnv = process.env.OPENCU_ANDROID_IDLE_MS
     ? `OPENCU_ANDROID_IDLE_MS='${process.env.OPENCU_ANDROID_IDLE_MS.replace(/'/g, "'\\''")}' `
     : '';
-  const child=spawn(adb,[...prefix,'shell','-T',`${idleEnv}CLASSPATH='${remote}' exec app_process / dev.opencu.android.Main ${mode}`],{stdio:['pipe','inherit','inherit']});
+  // Only shell and root can write /data/local/tmp, and the engine already runs as shell, so the
+  // cache is trusted as far as shell is. Still refuse anything but a regular file owned by shell
+  // with mode 0644 or stricter (no symlink, no group/other write, no special bits).
+  const launch=`s=$(stat -c '%u %a %F' '${remote}' 2>/dev/null); case "$s" in "2000 "[46][04][04]" regular file") ${idleEnv}CLASSPATH='${remote}' exec app_process / dev.opencu.android.Main ${mode};; *) echo "UNSAFE_ENGINE_JAR: ${remote} is not a regular file owned by shell with mode 0644 or stricter ($s); remove it and launch again" >&2; exit 126;; esac`;
+  const child=spawn(adb,[...prefix,'shell','-T',launch],{stdio:['pipe','inherit','inherit']});
   process.stdin.pipe(child.stdin);
   child.stdin.on('error',e=>{if(e.code!=='EPIPE')console.error(e.message);});
   for(const signal of ['SIGINT','SIGTERM','SIGHUP'])process.on(signal,()=>{child.stdin.end();setTimeout(()=>child.kill(signal),1500).unref();});
