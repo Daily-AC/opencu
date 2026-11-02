@@ -30,6 +30,29 @@ public final class Core {
     return "Scrolled " + moved + " of " + requested + " pages";
   }
 
+  /** Notice for a scroll that moved fewer pages than requested. */
+  public static String scrollOutcome(int moved, int requested) {
+    if (moved == 0) return "Nothing moved; the list is at its end or does not scroll this way";
+    return scrollNotice(moved, requested);
+  }
+
+  /**
+   * What a scroll would change: the scrollable's descendants (path, text, description, bounds), or
+   * its whole window when it exposes none. Without a target, the whole screen.
+   */
+  public static String scrollContent(Screen s, Element scrollable) {
+    if (scrollable == null) return s.fingerprint();
+    StringBuilder subtree = new StringBuilder(), window = new StringBuilder();
+    for (Element e : s.elements.values()) {
+      if (e.window != scrollable.window) continue;
+      String line =
+          e.path + "|" + e.text + "|" + e.desc + "|" + e.left + "," + e.top + "," + e.right + "," + e.bottom + "\n";
+      window.append(line);
+      if (e.path.startsWith(scrollable.path + "/")) subtree.append(line);
+    }
+    return subtree.length() > 0 ? subtree.toString() : window.toString();
+  }
+
   public static String screenshotNotice(int imageWidth, int imageHeight, int displayWidth, int displayHeight) {
     return "Screenshot: "
         + imageWidth

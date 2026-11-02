@@ -1297,9 +1297,11 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
           String d = ((String) args.get("direction")).substring(0, 1);
           double pages = ((Number) args.getOrDefault("pages", 1)).doubleValue();
           int requested = (int) Math.ceil(pages), moved = 0;
+          boolean listChanged = false;
+          Screen current = now;
           for (int page = 0; page < requested; page++) {
             if (page > 0) {
-              Screen current = observe(pkg);
+              current = observe(pkg);
               String changed = Core.stopReason(fence, current, pkg);
               if (changed != null) throw fail("POPUP", "Window changed during scroll: " + changed);
               if (n != null) {
@@ -1307,6 +1309,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
                 n = nodes.get(target.index);
               }
             }
+            String before = Core.scrollContent(current, target);
             if (n != null) {
               if (!n.isScrollable()) throw fail("ACTION_UNSUPPORTED", "Element is not scrollable");
               // AccessibilityAction.ACTION_SCROLL_* ids are these platform resource ids.
@@ -1323,12 +1326,12 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
                     d.equals("d") || d.equals("r")
                         ? AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
                         : AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD;
+              // A list at its end usually stops offering the action: nothing to send.
+              if (!hasAction(n, action)) break;
               checkTarget(token, pkg);
               sent = true;
-              if (!n.performAction(action, null)) {
-                notice = Core.scrollNotice(moved, requested);
-                break;
-              }
+              // The result is not evidence either way; the list's content decides below.
+              n.performAction(action, null);
               check(token, false);
             } else {
               float[] p = point(args, "x", "y", cap, now);
@@ -1338,10 +1341,19 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
                   ty = Math.max(1, Math.min(now.height - 2, p[1] + dy));
               touch(p[0], p[1], tx, ty, 350, pkg, token);
             }
+            int outcome = scrolled(before, old, base, pkg, token);
+            if (outcome == 0) break;
             moved++;
-            pause(80, token);
+            if (outcome == 2) {
+              listChanged = true;
+              break;
+            }
           }
-          if (notice.isEmpty() && moved < requested) notice = Core.scrollNotice(moved, requested);
+          if (moved < requested)
+            addNotice(
+                listChanged
+                    ? "Scrolled " + moved + " of " + requested + " pages; the list changed, so scrolling stopped"
+                    : Core.scrollOutcome(moved, requested));
           break;
         }
       case "press_key":
@@ -1403,6 +1415,27 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     }
     // Standalone calls settle in afterAction; batches observe the post-action fence directly
     // to avoid paying a second idle wait for every quickly settling step.
+  }
+
+  /**
+   * Waits briefly for a scroll to show. Returns 0 when the scrolled content (or, for coordinates,
+   * the screen) is unchanged, 1 when it changed, 2 when the scrolled element itself changed.
+   */
+  private int scrolled(String before, Element old, Screen base, String pkg, long token) {
+    long end = SystemClock.uptimeMillis() + 500;
+    do {
+      pause(40, token);
+      Screen after;
+      try {
+        after = observe(pkg);
+      } catch (RuntimeException e) {
+        throw unconfirmed("the list could not be read after scrolling");
+      }
+      Element live = old == null ? null : Core.live(base, old, after);
+      if (old != null && live == null) return 2;
+      if (!Core.scrollContent(after, live).equals(before)) return 1;
+    } while (SystemClock.uptimeMillis() < end);
+    return 0;
   }
 
   void settleAfterInput(long token) {

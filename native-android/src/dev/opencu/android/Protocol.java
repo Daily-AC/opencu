@@ -168,13 +168,14 @@ public final class Protocol {
             "direction",
             enumeration("up", "down", "left", "right", "u", "d", "l", "r"),
             "pages",
-            num(0.01, 20, false)));
+            num(0.01, 5, false)));
     add(
         "scroll",
-        "Scroll an indexed Android scrollable element or a fresh screenshot coordinate. pages"
-            + " defaults to 1, maximum 20. Indexed scrolling stops at the end and returns a notice"
-            + " such as 'Scrolled 3 of 5 pages; reached the end'; a first page at the end says"
-            + " 'Nothing scrolled; already at the end'. Returns updated state (and JPEG for coordinates).",
+        "Scroll an indexed Android scrollable element or a fresh screenshot coordinate. pages (up"
+            + " to 5, default 1) moves further in one call and stops early at the end: a page that"
+            + " does not move ends the call with a notice such as 'Scrolled 3 of 5 pages; reached the"
+            + " end', or 'Nothing moved; the list is at its end or does not scroll this way'. Returns"
+            + " updated state (and JPEG for coordinates).",
         false,
         p,
         "app",

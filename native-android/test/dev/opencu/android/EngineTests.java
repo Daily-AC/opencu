@@ -34,6 +34,7 @@ public final class EngineTests {
   }
 
   static final String PKG = "example.host";
+  static final int DOWN = android.R.id.accessibilityActionScrollDown;
   static final List<String> failures = new ArrayList<>();
   static int passed;
   static String only;
@@ -503,6 +504,29 @@ public final class EngineTests {
     return node;
   }
 
+  /** A scrollable list showing rows {@code offset+1} and {@code offset+2}; scrolling shifts the offset. */
+  static final class ListScene {
+    final Scene scene = new Scene();
+    final Element list = scene.add("/0", "androidx.recyclerview.widget.RecyclerView", "rows", "", 0, 100, 1080, 2000);
+    final Element first = scene.add("/0/0", "android.widget.TextView", "", "", 0, 100, 1080, 300);
+    final Element second = scene.add("/0/1", "android.widget.TextView", "", "", 0, 300, 1080, 500);
+    final FakeNode node;
+    int offset;
+
+    ListScene(int... actions) {
+      list.scrollable = true;
+      node = scene.node(list).with(actions);
+      node.scrollable = true;
+      show(0);
+    }
+
+    void show(int offset) {
+      this.offset = offset;
+      first.text = "Row " + (offset + 1);
+      second.text = "Row " + (offset + 2);
+    }
+  }
+
   static Map<String, Object> args(Object... pairs) {
     Map<String, Object> a = obj("app", PKG);
     a.putAll(obj(pairs));
@@ -868,6 +892,57 @@ public final class EngineTests {
       require(node.setTexts.equals(List.of("hello")), "set-text " + node.setTexts);
       require(service.calls.isEmpty(), "clipboard touched: " + service.calls);
       require(text(result).contains("does not offer paste"), "no reason: " + text(result).split("\n")[0]);
+    });
+
+    test("a scroll that moved the list counts even when the action returned false", () -> {
+      ListScene rows = new ListScene(DOWN);
+      rows.node.results.put(DOWN, false);
+      rows.node.effects.put(DOWN, () -> rows.show(rows.offset + 2));
+      ScriptedEngine engine = ScriptedEngine.create(rows.scene);
+      engine.read();
+      Map<String, Object> result = engine.call("scroll", args("element_index", 1, "direction", "down"));
+      String head = text(result).split("\n")[0];
+      require(!head.contains("end") && !head.contains("Nothing"), "claimed no movement: " + head);
+      require(rows.offset == 2, "list did not move");
+    });
+
+    test("a scroll that changed nothing stops at the first page and says so", () -> {
+      ListScene rows = new ListScene(DOWN);
+      ScriptedEngine engine = ScriptedEngine.create(rows.scene);
+      engine.read();
+      Map<String, Object> result =
+          engine.call("scroll", args("element_index", 1, "direction", "down", "pages", 3));
+      require(rows.node.performed.size() == 1, "kept scrolling: " + rows.node.performed.size() + " actions");
+      require(text(result).startsWith("Nothing moved"), "notice: " + text(result).split("\n")[0]);
+    });
+
+    test("multi-page scroll stops at the first page that did not move", () -> {
+      ListScene rows = new ListScene(DOWN);
+      rows.node.effects.put(DOWN, () -> rows.show(Math.min(rows.offset + 2, 4)));
+      ScriptedEngine engine = ScriptedEngine.create(rows.scene);
+      engine.read();
+      Map<String, Object> result =
+          engine.call("scroll", args("element_index", 1, "direction", "down", "pages", 5));
+      require(rows.node.performed.size() == 3, "actions sent: " + rows.node.performed.size());
+      require(text(result).startsWith("Scrolled 2 of 5 pages; reached the end"), "notice: " + text(result).split("\n")[0]);
+    });
+
+    test("a list that offers no scroll that way gets nothing sent", () -> {
+      ListScene rows = new ListScene(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD);
+      ScriptedEngine engine = ScriptedEngine.create(rows.scene);
+      engine.read();
+      Map<String, Object> result = engine.call("scroll", args("element_index", 1, "direction", "down"));
+      require(rows.node.performed.isEmpty(), "sent " + rows.node.performed);
+      require(text(result).startsWith("Nothing moved"), "notice: " + text(result).split("\n")[0]);
+    });
+
+    test("scroll description explains pages up to 5", () -> {
+      String description = (String) Protocol.DEFINITIONS.get("scroll").get("description");
+      require(description.contains("pages (up to 5"), description);
+      require(description.contains("stops early at the end"), description);
+      Protocol.validate("scroll", args("element_index", 1, "direction", "down", "pages", 5));
+      Failure f = failure(() -> Protocol.validate("scroll", args("element_index", 1, "direction", "down", "pages", 6)));
+      require(f.code.equals("INVALID_ARGUMENT"), f.code);
     });
 
     if (!failures.isEmpty()) {
