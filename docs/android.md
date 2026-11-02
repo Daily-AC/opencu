@@ -90,7 +90,12 @@ the agent display and exits the VM. There is no listener, installed engine APK, 
 Ambiguous labels return `AMBIGUOUS_APP`. `get_app_state` starts or brings forward
 the app under the person rules. `list_apps` gives label, package, running and
 foreground status. Every input tool returns an updated full state; there is no
-diff or scope mode in this milestone.
+diff or scope mode in this milestone. That state is read once the screen is
+stable, so a key still scaled by its press animation, a moving result row or a
+wheel still settling is not returned as the result: after input the engine reads
+until two reads 120 ms apart agree, for at most 1.5 s (never past a batch's time
+limit). `_meta["opencu/settle"]` reports `waitedMs` and `stable`, which is false
+when the bound ended the wait, as on a screen that keeps animating.
 
 State reports foreground package/activity, main display size, IME visibility and
 a connection-local state id. Visible useful nodes get dense indexes. Pure layout
@@ -256,6 +261,9 @@ notice), and an `until` wait ends at the limit at the latest, also as `time_limi
 
 `_meta["opencu/batch"]` reports `completed`, one-based `stoppedStep`, `reason` and
 `waitedMs` for the last step (including action time), followed by the final state.
+The final state waits for a stable screen as above and reports it in
+`_meta["opencu/settle"]`, except after a dialog stop (which has its own short
+settle), at the time limit, and after person activity, stop, lock or shutdown.
 Typical reasons: `timeout`, `time_limit`, `popup`, `system_dialog`, `app_switched`,
 `stale_element`, `person_active`, `user_stopped`, `screen_locked`. Earlier input
 may have executed. Never retry the stopped sequence automatically.

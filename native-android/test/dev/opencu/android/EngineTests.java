@@ -680,6 +680,38 @@ public final class EngineTests {
     }
   }
 
+  /**
+   * A calculator-like screen: tapping "=" starts an animation that moves the result row on every
+   * frame for {@code animationMs}, after which it rests at 0,600 showing 21 (20 while it moves).
+   */
+  static final class AnimatedScene {
+    final Scene scene = new Scene();
+    final Element key = scene.add("/0", "android.widget.Button", "equals", "=", 100, 1900, 300, 2100);
+    final Element result = scene.add("/1", "android.widget.TextView", "result", "20", 0, 600, 1080, 800);
+    final long animationMs;
+    long tappedAt;
+
+    AnimatedScene(long animationMs) {
+      this.animationMs = animationMs;
+      key.clickable = true;
+    }
+
+    ScriptedEngine engine() {
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      engine.shellHook = tap -> {
+        tappedAt = android.os.SystemClock.uptimeMillis();
+        return "";
+      };
+      engine.onObserve = n -> {
+        long elapsed = tappedAt == 0 ? Long.MAX_VALUE : android.os.SystemClock.uptimeMillis() - tappedAt;
+        boolean moving = elapsed < animationMs;
+        result.left = moving ? 1 + (int) (elapsed / 10 % 49) : 0;
+        result.text = moving ? "20" : "21";
+      };
+      return engine;
+    }
+  }
+
   /** The touch points sent so far: {action, x, y, display}. */
   static List<int[]> motions(ScriptedEngine engine) {
     List<int[]> points = new ArrayList<>();
@@ -1803,6 +1835,67 @@ public final class EngineTests {
       require(limit == 100_000, "engine batch limit " + limit + " ms");
       String description = (String) Protocol.DEFINITIONS.get("run_actions").get("description");
       require(description.contains("limited to " + limit / 1000 + " s:"), "description: " + description);
+    });
+
+    test("an input call's final state waits until the animation it started ends", () -> {
+      AnimatedScene calc = new AnimatedScene(900);
+      ScriptedEngine engine = calc.engine();
+      engine.read();
+      Map<String, Object> result = engine.call("click", args("element_index", 1));
+      require(text(result).contains("text=\"21\" id=result bounds=0,600,1080,800"), "mid-animation state: " + text(result));
+      Map<String, Object> settle = map(map(result.get("_meta")).get("opencu/settle"));
+      require(Boolean.TRUE.equals(settle.get("stable")), "settle " + settle);
+      require(((Number) settle.get("waitedMs")).longValue() >= 400, "settle " + settle);
+    });
+
+    test("a batch's final state waits until the animation its last step started ends", () -> {
+      AnimatedScene calc = new AnimatedScene(900);
+      ScriptedEngine engine = calc.engine();
+      engine.read();
+      Map<String, Object> result =
+          engine.call("run_actions", args("actions", List.of(obj("method", "click", "element_index", 1))));
+      require(text(result).contains("text=\"21\" id=result bounds=0,600,1080,800"), "mid-animation state: " + text(result));
+      Map<String, Object> meta = map(result.get("_meta"));
+      require(meta.get("opencu/settle") != null && Boolean.TRUE.equals(map(meta.get("opencu/settle")).get("stable")),
+          "meta " + meta);
+      require(Integer.valueOf(1).equals(map(meta.get("opencu/batch")).get("completed")), "batch " + meta);
+    });
+
+    test("the wait for a stable final state is bounded to 1.5 s", () -> {
+      AnimatedScene clock = new AnimatedScene(60_000);
+      ScriptedEngine engine = clock.engine();
+      engine.read();
+      long started = System.nanoTime();
+      Map<String, Object> result = engine.call("click", args("element_index", 1));
+      long ms = (System.nanoTime() - started) / 1_000_000;
+      Map<String, Object> settle = map(map(result.get("_meta")).get("opencu/settle"));
+      require(Boolean.FALSE.equals(settle.get("stable")), "settle " + settle);
+      long waited = ((Number) settle.get("waitedMs")).longValue();
+      require(waited >= 1300 && waited <= 1700, "settle " + settle);
+      require(ms < 3000, "call took " + ms + " ms");
+    });
+
+    test("a batch's final-state wait ends at the batch deadline", () -> {
+      ListScene rows = new ListScene(DOWN);
+      Element ticker = rows.scene.add("/1", "android.widget.TextView", "", "0", 0, 2100, 1080, 2200);
+      rows.node.effects.put(DOWN, () -> {
+        android.os.SystemClock.sleep(2_500); // a slow app
+        rows.show(rows.offset + 2);
+      });
+      ScriptedEngine engine = ScriptedEngine.create(rows.scene);
+      engine.batchLimit = 3_500L;
+      engine.read();
+      engine.onObserve = n -> ticker.text = Integer.toString(n); // something always changes
+      long started = System.nanoTime();
+      Map<String, Object> result = engine.call("run_actions", args("actions", List.of(
+          obj("method", "scroll", "element_index", 1, "direction", "down"))));
+      long ms = (System.nanoTime() - started) / 1_000_000;
+      Map<String, Object> meta = map(result.get("_meta"));
+      require(meta.get("opencu/batch") != null && map(meta.get("opencu/batch")).get("reason") == null, "batch " + meta);
+      require(meta.get("opencu/settle") != null, "no settle reported: " + meta);
+      long waited = ((Number) map(meta.get("opencu/settle")).get("waitedMs")).longValue();
+      require(waited < 1000, "settle waited " + waited + " ms with less than a second left");
+      require(ms < 3_500 + 250, "call took " + ms + " ms");
     });
 
     test("indexed click settles before its final read", () -> {

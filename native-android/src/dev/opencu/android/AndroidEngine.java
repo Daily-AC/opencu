@@ -1038,11 +1038,16 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
           "_meta",
           obj("opencu/screenshot", obj("width", w, "height", h, "display", s.displayId)));
     }
+    if (settled != null) {
+      if (!r.containsKey("_meta")) r.put("_meta", obj());
+      map(r.get("_meta")).put("opencu/settle", settled);
+    }
     latest = s;
     observationRequired = false;
     coordinates = capture;
     notice = "";
     passedOver = "";
+    settled = null;
     return r;
   }
 
@@ -1999,6 +2004,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     coordinates = null;
     notice = "";
     passedOver = "";
+    settled = null;
     sent = false;
     long token = person.token();
     if (!name.equals("get_app_state")) check(token, false);
@@ -2110,23 +2116,40 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
 
   private Screen afterAction(Screen before, String pkg, long token) {
     settleAfterInput(token);
-    Screen current = observe(pkg);
-    long end = SystemClock.uptimeMillis() + 450;
-    String signature = current.fingerprint();
-    long stableSince = SystemClock.uptimeMillis();
-    while (SystemClock.uptimeMillis() < end) {
-      SystemClock.sleep(25);
-      Screen next = observe(pkg);
-      String value = next.fingerprint();
-      if (value.equals(signature) && SystemClock.uptimeMillis() - stableSince >= 50
-          && !(next.elements.isEmpty() && next.foreground.equals(pkg))) return next;
-      if (!value.equals(signature)) {
-        signature = value;
-        stableSince = SystemClock.uptimeMillis();
+    return stable(observe(pkg), pkg, token);
+  }
+
+  /** A final state is stable once two reads this far apart agree; the wait for it is bounded. */
+  static final long STABLE_GAP_MS = 120, STABLE_MAX_MS = 1500;
+
+  /** The wait for the final state of this call, for {@code _meta["opencu/settle"]}; or null. */
+  private Map<String, Object> settled;
+
+  /**
+   * The final state after input: reads from {@code first} until two reads {@link #STABLE_GAP_MS}
+   * apart agree, so an animation still running (a key's press scale, a moving formula row, a wheel
+   * settling on its value) is not returned as the result. An empty tree of the target app is not
+   * stable. Waits at most {@link #STABLE_MAX_MS} and never past the batch deadline, and records the
+   * wait for the result.
+   */
+  private Screen stable(Screen first, String pkg, long token) {
+    long start = SystemClock.uptimeMillis(), end = start + STABLE_MAX_MS;
+    if (batchDeadline > 0) end = Math.min(end, batchDeadline);
+    Screen s = first;
+    String signature = s.fingerprint();
+    boolean stable = false;
+    while (SystemClock.uptimeMillis() + STABLE_GAP_MS <= end) {
+      pause(STABLE_GAP_MS, token);
+      s = observe(pkg);
+      String value = s.fingerprint();
+      if (value.equals(signature) && !(s.elements.isEmpty() && s.foreground.equals(pkg))) {
+        stable = true;
+        break;
       }
-      current = next;
+      signature = value;
     }
-    return current;
+    settled = obj("waitedMs", SystemClock.uptimeMillis() - start, "stable", stable);
+    return s;
   }
 
   private Failure priorityFailure(Failure original, long token) {
@@ -2144,6 +2167,18 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
   /** The time a whole batch may take; the run_actions description states the same limit. */
   long batchLimitMs() {
     return Protocol.BATCH_LIMIT_MS;
+  }
+
+  /**
+   * Whether a batch that stopped for {@code reason} still waits for a stable final state. A dialog
+   * has its own short settle; at the time limit no time is left; a person, a stop, a lock or
+   * shutdown ends the call at once.
+   */
+  private static boolean settlesAfterStop(String reason) {
+    return !Arrays.asList(
+            "popup", "system_dialog", "time_limit", "person_active", "user_stopped",
+            "screen_locked", "engine_stopping")
+        .contains(reason);
   }
 
   private Map<String, Object> batch(
@@ -2239,9 +2274,18 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
       reason = e.code.toLowerCase(Locale.ROOT);
       waited = started == 0 ? 0 : SystemClock.uptimeMillis() - started;
     }
+    if (reason == null) {
+      try {
+        last = stable(last, activePackage, token);
+      } catch (Failure safety) {
+        failure = safety;
+        reason = safety.code.toLowerCase(Locale.ROOT);
+      }
+    }
     if (reason != null) {
       try {
         last = observe(activePackage);
+        if (settlesAfterStop(reason)) last = stable(last, activePackage, token);
         if (reason.equals("popup") || reason.equals("system_dialog")) {
           long end = SystemClock.uptimeMillis() + 500, unchanged = SystemClock.uptimeMillis();
           String fingerprint = last.fingerprint();
