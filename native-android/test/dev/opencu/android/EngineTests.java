@@ -717,6 +717,18 @@ public final class EngineTests {
       Thread.sleep(10_000);
       return;
     }
+    if (argv.length == 1 && argv[0].equals("monitor-stderr")) {
+      // Starts the input monitor on a stream that complains on stderr, as getevent does.
+      PersonMonitor monitor =
+          new PersonMonitor(
+              notice -> {},
+              () -> 0L,
+              new String[] {"/bin/sh", "-c", "printf 'add device 1: /dev/input/event1\\n  KEY_VOLUMEDOWN ABS_MT_POSITION_X\\n'"},
+              new String[] {"/bin/sh", "-c", "echo 'could not open /dev/input/event9, Permission denied' >&2; echo 'add device 1: /dev/input/event1'; exec sleep 30"});
+      Thread.sleep(200);
+      monitor.close();
+      return;
+    }
     if (argv.length > 0) only = argv[0];
 
     test("indexed click taps the visible centre through the platform input tool", () -> {
@@ -1571,6 +1583,18 @@ public final class EngineTests {
         worker.join(3000);
         reopenCommands();
       }
+    });
+
+    test("the input monitor's diagnostics never reach the engine's stderr", () -> {
+      Process p =
+          new ProcessBuilder(
+                  System.getProperty("java.home") + "/bin/java", "-cp", System.getProperty("java.class.path"),
+                  EngineTests.class.getName(), "monitor-stderr")
+              .start();
+      p.getOutputStream().close();
+      String err = new String(p.getErrorStream().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+      require(p.waitFor(20, TimeUnit.SECONDS) && p.exitValue() == 0, "monitor run failed: " + err);
+      require(!err.contains("could not open"), "stderr: " + err.trim());
     });
 
     test("startup and doctor failures print one coded stderr line", () -> {

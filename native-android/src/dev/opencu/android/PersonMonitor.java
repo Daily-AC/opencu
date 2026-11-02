@@ -41,8 +41,10 @@ final class PersonMonitor implements AutoCloseable {
       if (line.startsWith("add device ")) devices.add(line.substring(line.indexOf("/dev/input/")));
     if (devices.isEmpty()) throw fail("PERSON_MONITOR_UNAVAILABLE", "No readable input devices");
     process =
+        // getevent reports unreadable devices on stderr; the engine's own stderr must start with
+        // its coded line, and readiness below decides whether monitoring works.
         new ProcessBuilder(stream)
-            .redirectError(ProcessBuilder.Redirect.INHERIT)
+            .redirectError(ProcessBuilder.Redirect.DISCARD)
             .start();
     Set<String> opened = Collections.synchronizedSet(new HashSet<>());
     Thread reader =
