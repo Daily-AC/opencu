@@ -10,13 +10,13 @@
 
 <p align="center">
   OpenCU 是一个 MCP 服务器，让 Claude Code、Codex 或任何 MCP 客户端读取并操作<br>
-  macOS、Windows 和 Linux 上的应用。它在本机运行，不需要账号和模型密钥，<br>
+  macOS、Windows、Linux 和 Android 上的应用。它在本机运行，不需要账号和模型密钥，<br>
   坐在电脑前的人随时可以叫停。
 </p>
 
 <p align="center">
   <a href="https://github.com/Daily-AC/opencu/releases/latest"><img src="https://img.shields.io/github/v/release/Daily-AC/opencu?label=release&color=111111" alt="最新版本"></a>
-  <img src="https://img.shields.io/badge/macOS%20%C2%B7%20Windows%20%C2%B7%20Linux-111111" alt="macOS、Windows、Linux">
+  <img src="https://img.shields.io/badge/macOS%20%C2%B7%20Windows%20%C2%B7%20Linux%20%C2%B7%20Android-111111" alt="macOS、Windows、Linux、Android">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-111111" alt="MIT 许可证"></a>
 </p>
 
@@ -64,8 +64,16 @@ npm ci --ignore-scripts && npm run build
 ./bin/opencu setup    # 授予一次「辅助功能」和「录屏」权限
 ```
 
+**Android** · 预览版，Android 14 及以上，由电脑经 adb（USB 或无线调试）驱动
+
+```sh
+git clone https://github.com/Daily-AC/opencu.git && cd opencu
+npm ci --ignore-scripts && npm run build:android   # 需要 JDK 21 和 Android SDK platform 34
+./bin/opencu android doctor
+```
+
 装好后运行 `opencu doctor` 检查。各平台说明：
-[macOS](docs/macos.md) · [Windows](docs/windows.md) · [Linux](docs/linux.md)（英文）。
+[macOS](docs/macos.md) · [Windows](docs/windows.md) · [Linux](docs/linux.md) · [Android](docs/android.md)（英文）。
 
 ## 接入你的 agent
 
@@ -76,6 +84,7 @@ OpenCU 是 stdio 方式的 MCP 服务器，要注册的命令是：
 | macOS | `/path/to/opencu/bin/opencu` |
 | Windows | `%LOCALAPPDATA%\OpenCU\bin\opencu.cmd` |
 | Linux | `~/.local/share/opencu/bin/opencu` |
+| Android | `/path/to/opencu/bin/opencu android`（adb 上只连一台手机，或设 `ANDROID_SERIAL`） |
 
 ```sh
 # Claude Code
@@ -140,17 +149,18 @@ codex mcp add opencu -- /path/to/opencu/bin/opencu
 
 ## 平台
 
-| | macOS | Windows | Linux |
-|---|---|---|---|
-| 安装 | 从源码构建 | x64 预编译包，未签名 | x64 预编译包 |
-| 输入 | 后台，只送到目标应用 | 前台，你 10 秒没动键鼠才切 | 前台，你 10 秒没动键鼠才切 |
-| agent 桌面 | 虚拟显示器，带只看不点的预览窗 | 独立会话，显示在一个窗口里 | 暂无 |
-| 锁屏时 | 拒绝操作；agent 桌面暂停 | 拒绝操作；agent 桌面仍可按编号点击和设值 | 拒绝操作 |
+| | macOS | Windows | Linux | Android |
+|---|---|---|---|---|
+| 安装 | 从源码构建 | x64 预编译包，未签名 | x64 预编译包 | 从源码构建，经 adb 运行 |
+| 输入 | 后台，只送到目标应用 | 前台，你 10 秒没动键鼠才切 | 前台，你 10 秒没动键鼠才切 | 前台，你 10 秒没碰屏幕才切 |
+| agent 桌面 | 虚拟显示器，带只看不点的预览窗 | 独立会话，显示在一个窗口里 | 暂无 | 虚拟屏，没有预览 |
+| 锁屏时 | 拒绝操作；agent 桌面暂停 | 拒绝操作；agent 桌面仍可按编号点击和设值 | 拒绝操作 | 拒绝操作 |
 
 ## 怎么叫停
 
 - **macOS：** 菜单栏里的 V 图标有「停止」。agent 桌面模式下，预览窗的停止按钮效果相同。
 - **Windows 和 Linux：** 按一下实体 Esc，这个连接后面的输入就全停了；动作进行中你一动键鼠，这个动作就会停下。Windows 的 agent 桌面也有停止按钮。
+- **Android：** 1.5 秒内按三下音量减。在主屏上操作时你一碰屏幕，这个动作就会停下。
 - 被人停掉的连接就此结束，agent 绝不能绕开它重新连接。
 
 OpenCU 是给人用的刹车，不是沙箱：agent 操作的应用和你共用同一个账号和文件，本机任何能运行 `opencu` 的程序都能用到它的权限。
@@ -160,13 +170,14 @@ OpenCU 是给人用的刹车，不是沙箱：agent 操作的应用和你共用�
 - **macOS：** 只能从源码构建，只支持 Apple 芯片。macOS 大约每月问一次是否允许 OpenCU 继续录屏。电脑锁屏时无法操作。
 - **Windows：** 安装包没有签名，SmartScreen 或 Defender 可能会提示。不在 agent 桌面里时，输入走前台。
 - **Linux：** 只支持 X11，Wayland 会被拒绝。输入走前台。
+- **Android：** 预览版，只在一台手机（OPPO PGBM10，Android 14）上测过。要在电脑上经 adb 运行，没有预编译包，也没有手机端 App。
 - Blender 这类自绘界面的应用，以及台前调度侧栏里的窗口，需要在前台操作。
 
 完整清单和实测数据见 [Limitations](docs/limitations.md)（英文）。
 
 ## 文档
 
-- 各平台说明：[macOS](docs/macos.md)、[Windows](docs/windows.md)、[Linux](docs/linux.md)
+- 各平台说明：[macOS](docs/macos.md)、[Windows](docs/windows.md)、[Linux](docs/linux.md)、[Android](docs/android.md)
 - [Tools](docs/tools.md) 和[引擎契约](docs/independent-engine-contract.md)，以及 [Windows](docs/windows-engine-contract.md)、[Linux](docs/linux-engine-contract.md) 契约
 - [宿主接入](docs/host-integration.md)：给代替 agent 启动 OpenCU 的程序看
 - [Limitations](docs/limitations.md) 和[实测行为](docs/opencu-independent-2026-10-12.md)
