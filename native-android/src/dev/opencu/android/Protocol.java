@@ -182,8 +182,8 @@ public final class Protocol {
             + " page, so read a whole list in one call, not page by page. It stops early at the end"
             + " and every early stop says how many pages moved and why. Indexed scrolling uses the"
             + " element's own scroll action, else its scrolling parent's, else a touch swipe that"
-            + " never crosses a picker or slider. Returns updated state (and JPEG for"
-            + " coordinates).",
+            + " never crosses a picker or slider. On a wheel, down is the next value; set_value"
+            + " sets it in one call. Returns updated state (and JPEG for coordinates).",
         false,
         p,
         "app",

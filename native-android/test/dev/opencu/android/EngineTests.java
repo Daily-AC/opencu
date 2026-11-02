@@ -3708,6 +3708,11 @@ public final class EngineTests {
       require(out.startsWith("Scrolled 1 of 8 pages; reached the end (the top)"), "notice: " + out.split("\n")[0]);
     });
 
+    // Item D.
+    test("the scroll description says down is a wheel's next value and set_value sets it in one call", () -> {
+      String scroll = (String) Protocol.DEFINITIONS.get("scroll").get("description");
+      require(scroll.contains("On a wheel, down is the next value") && scroll.contains("set_value sets it in one call"), scroll);
+    });
   }
 
   /**

@@ -290,7 +290,8 @@ captured in their place.
   a batch's time limit), or when the wheel comes round without showing the value;
   read state before continuing. On success the result starts `Set the wheel to 35
   in 12 steps.` One `run_actions` can set every wheel of a time. `scroll` on a
-  wheel also steps it, one value per page, and a page counts as moved only when
+  wheel also steps it, one value per page (`down` is the next value: on ColorOS
+  the hour went from 00 to 07 scrolling down), and a page counts as moved only when
   the wheel's selected value changed.
 - `paste`: `format: "text"` only; inserts the text exactly as `type_text` does.
   The clipboard is neither read nor changed.
