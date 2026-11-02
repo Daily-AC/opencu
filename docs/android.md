@@ -185,7 +185,10 @@ captured in their place.
   checked -> checked`, and no further pages are sent.
   The swipe is ordinary touch input on the active display under the person rules.
   ColorOS lists were seen offering only scroll-forward part-way down, so scrolling
-  up such a list swipes. A list at its real start offers no action back either and
+  up such a list swipes. The Clock alarm list's enclosing coordinator then lists a
+  generic scroll-backward once its toolbar has collapsed, but a generic action on an
+  enclosing element can belong to a pager or a toolbar, so the list is still
+  swiped. A list at its real start offers no action back either and
   is swiped too; in an app with pull-to-refresh that swipe can start a refresh. A
   swiped page moves about 80% of the visible list, close to an accessibility page
   (a whole viewport), so swiped pages overlap a little. When a page was not sent
@@ -197,10 +200,15 @@ captured in their place.
   it shows; a change that springs back, such as an overscroll bounce, does not.
   An accessibility page is watched for 0.9 s before it counts as not moved,
   because a picker can change its value only after animating, and a page waits at
-  most one second. A page that did not move ends the call with a notice such as
-  `Scrolled 3 of 5 pages; reached the end`, or `Nothing moved; the list is at its
+  most one second. A swiped page waits until the list has settled (unchanged for
+  200 ms, at most 2 s after the finger lifts) and counts as moved only when the
+  rows it shows changed: a ColorOS list at its end is pulled by the swipe and
+  springs back, maybe a pixel off, and that is not a page. A page that did not move
+  ends the call with a notice such as `Scrolled 3 of 5 pages; reached the end`
+  (`reached the end (the top)` scrolling up), or `Nothing moved; the list is at its
   end or does not scroll this way` on the first page; a page whose content changed
-  counts even when the accessibility action returned false. Only a failed read
+  counts even when the accessibility action returned false. A scroll outside a
+  batch ends within 45 s, inside a host's one-minute call limit, with a notice. Only a failed read
   after scrolling returns `ACTION_UNCONFIRMED`.
   The scrolled element is followed from page to page even when its tree path,
   bounds or text change (a collapsing toolbar resizes a list and shifts the

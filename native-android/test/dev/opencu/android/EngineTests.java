@@ -3698,6 +3698,16 @@ public final class EngineTests {
       alarms.requireSummary(out, List.of(2911, 1611, 311));
     });
 
+    // Item C: a list at its top was swiped 8 times and reported "All 8 pages scrolled".
+    test("a swiped page that only springs back has not moved: the scroll reports the top", () -> {
+      ColorOsAlarms alarms = new ColorOsAlarms(600);
+      ScriptedEngine engine = alarms.engine();
+      engine.read();
+      String out = text(engine.call("scroll", args("element_index", 1, "direction", "up", "pages", 8)));
+      require(alarms.lifts == 2, "swipes sent: " + alarms.lifts + "; notice: " + out.split("\n")[0]);
+      require(out.startsWith("Scrolled 1 of 8 pages; reached the end (the top)"), "notice: " + out.split("\n")[0]);
+    });
+
   }
 
   /**

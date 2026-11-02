@@ -1825,12 +1825,16 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
                   "Neither the element nor an element enclosing it scrolls; nothing sent");
             advertised = advertisedScroll(scope == target ? old : counterpart(base, scope), d);
           }
+          // The pages end at the batch's limit, or within a host's one-minute call limit.
+          long deadline =
+              batchDeadline > 0 ? batchDeadline : SystemClock.uptimeMillis() + SCROLL_CALL_MS;
           try {
             for (int page = 0; page < requested; page++) {
-              if (page > 0
-                  && batchDeadline > 0
-                  && SystemClock.uptimeMillis() + Core.SCROLL_PAGE_MS > batchDeadline) {
-                stopped = "stopped at the batch time limit";
+              if (page > 0 && SystemClock.uptimeMillis() + Core.SCROLL_PAGE_MS > deadline) {
+                stopped =
+                    batchDeadline > 0
+                        ? "stopped at the batch time limit"
+                        : "stopped at the " + SCROLL_CALL_MS / 1000 + " s limit of one call";
                 break;
               }
               if (page > 0) {
@@ -1881,7 +1885,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
                 String value = Core.selectedValue(current, scope);
                 WheelStep step =
                     stepWheel(scope, current, action, fence, pkg, token,
-                        batchDeadline > 0 ? batchDeadline : Long.MAX_VALUE);
+                        deadline);
                 if (!step.changed) break;
                 moved++;
                 wheelValues.add(value);
@@ -1912,7 +1916,8 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
               Page result =
                   scrolled(
                       before, current, scope, pkg, token,
-                      action != 0 ? Core.SCROLL_QUIET_ACTION_MS : Core.SCROLL_QUIET_TOUCH_MS);
+                      action != 0 ? Core.SCROLL_QUIET_ACTION_MS : Core.SCROLL_QUIET_TOUCH_MS,
+                      swipe != null, deadline);
               if (action == 0) {
                 // A finger can set what it crosses; say so first, with the old and new values.
                 List<String> changes = Core.valueChanges(current, result.after, scope);
@@ -1949,7 +1954,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
             addNotice(
                 stopped != null
                     ? "Scrolled " + moved + " of " + requested + " pages; " + stopped
-                    : Core.scrollNotice(moved, requested));
+                    : Core.scrollNotice(moved, requested, d));
           else if (requested > 1)
             addNotice("All " + requested + " pages scrolled; there may be more: scroll again to go further.");
           if (path != null) addNotice("Scrolled with " + path + ".");
@@ -2450,9 +2455,16 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
    * One page waits at most {@link Core#SCROLL_PAGE_MS}, and never past the batch deadline.
    */
   private Page scrolled(
-      String before, Screen seen, Element scope, String pkg, long token, long quietMs) {
-    long start = SystemClock.uptimeMillis(), end = start + Core.SCROLL_PAGE_MS;
-    if (batchDeadline > 0) end = Math.min(end, batchDeadline);
+      String before,
+      Screen seen,
+      Element scope,
+      String pkg,
+      long token,
+      long quietMs,
+      boolean swiped,
+      long deadline) {
+    long start = SystemClock.uptimeMillis();
+    long end = Math.min(start + (swiped ? SWIPE_SETTLE_MS : Core.SCROLL_PAGE_MS), deadline);
     String last = before;
     long since = start;
     boolean changed = false;
@@ -2475,10 +2487,31 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
         last = content;
         since = now;
         changed |= !content.equals(before);
-      } else if (changed ? now - since >= Core.SCROLL_SETTLED_MS : now - start >= quietMs) break;
+      } else if (changed
+          ? now - since >= (swiped ? SWIPE_SETTLED_MS : Core.SCROLL_SETTLED_MS)
+          : now - start >= quietMs) break;
     } while (SystemClock.uptimeMillis() < end);
-    return new Page(!last.equals(before), after, followed);
+    boolean moved = !last.equals(before);
+    if (swiped && moved && followed != null) {
+      // A swipe that only pulled the rows and let them spring back (ColorOS, maybe a pixel off)
+      // shows the same rows: it did not move the list.
+      List<String> was = Core.rows(seen, scope);
+      if (!was.isEmpty() && was.equals(Core.rows(after, followed))) moved = false;
+    }
+    return new Page(moved, after, followed);
   }
+
+  /**
+   * How long a swiped page may take to settle once the finger lifted: a list at its end can be
+   * pulled and spring back (ColorOS) for longer than an accessibility page takes.
+   */
+  static final long SWIPE_SETTLE_MS = 2_000;
+
+  /** How long a swiped page's content must hold still to count as settled: a spring is slow at its turn. */
+  static final long SWIPE_SETTLED_MS = 200;
+
+  /** The longest one scroll call outside a batch may take, inside a host's 60 s call limit. */
+  static final long SCROLL_CALL_MS = 45_000;
 
   void settleAfterInput(long token) {
     check(token, false);

@@ -32,6 +32,17 @@ public final class Core {
   }
 
   /**
+   * {@link #scrollNotice(int, int)} for direction {@code d}: scrolling up or left, the end reached
+   * is the top or the left.
+   */
+  public static String scrollNotice(int moved, int requested, String d) {
+    String side = d.equals("u") ? " (the top)" : d.equals("l") ? " (the left)" : "";
+    if (moved == 0) return "Nothing moved; the list is at its end" + side + " or does not scroll this way";
+    if (moved < requested) return scrollNotice(moved, requested) + side;
+    return scrollNotice(moved, requested);
+  }
+
+  /**
    * What a scroll would change: the scrollable itself and its descendants (path, text,
    * description, bounds, selected and checked state), or its whole window when it exposes no
    * descendants. A wheel picker's new value therefore counts, wherever it shows. Without a target,
