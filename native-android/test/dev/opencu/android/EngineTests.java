@@ -184,6 +184,7 @@ public final class EngineTests {
     @Override
     public boolean performAction(int action, Bundle arguments) {
       performed.add(action);
+      if (!actions.contains(action)) return false; // Android ignores actions a node does not list.
       if (action == ACTION_SET_TEXT && arguments != null) {
         CharSequence value = arguments.getCharSequence(ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE);
         setTexts.add(String.valueOf(value));
@@ -344,7 +345,9 @@ public final class EngineTests {
       set(e, "nodes", new HashMap<Integer, AccessibilityNodeInfo>());
       set(e, "hidden", obj());
       set(e, "notice", "");
-      set(e, "keyboardInputFailure", "");
+      // Field initialisers do not run for an allocated instance; mirror the ones the engine has.
+      if (hasField(AndroidEngine.class, "keyboardInputFailure")) set(e, "keyboardInputFailure", "");
+      if (hasField(AndroidEngine.class, "clipboardLock")) set(e, "clipboardLock", new Object());
       set(e, "desktopDisplay", -1);
       set(e, "activeDisplay", 0);
       set(e, "desktopIdleMs", 300_000L);
@@ -445,6 +448,59 @@ public final class EngineTests {
       set(this, "activeDisplay", 0);
       set(this, "automation", get(this, "mainAutomation"));
     }
+  }
+
+  /** A clipboard binder: the person's clip, with reads optionally refused. */
+  public static final class ClipService {
+    volatile android.content.ClipData clip;
+    volatile boolean denyReads;
+    final List<String> calls = Collections.synchronizedList(new ArrayList<>());
+
+    public android.content.ClipData getPrimaryClip(String pkg, String tag, int user, int device) {
+      calls.add("read");
+      if (denyReads) throw new SecurityException("denied");
+      return clip;
+    }
+
+    public void setPrimaryClip(android.content.ClipData c, String pkg, String tag, int user, int device) {
+      calls.add("write");
+      clip = c;
+    }
+
+    public void clearPrimaryClip(String pkg, String tag, int user, int device) {
+      calls.add("clear");
+      clip = null;
+    }
+
+    String text() {
+      return clip == null ? null : String.valueOf(clip.hostText());
+    }
+  }
+
+  static ShellClipboard clipboard(ClipService service) throws Exception {
+    ShellClipboard c = allocate(ShellClipboard.class);
+    set(c, "callerPackage", "com.android.shell");
+    set(c, "service", service);
+    Class<?> s = String.class, i = int.class, clip = android.content.ClipData.class;
+    set(c, "getPrimaryClip", ClipService.class.getMethod("getPrimaryClip", s, s, i, i));
+    set(c, "setPrimaryClip", ClipService.class.getMethod("setPrimaryClip", clip, s, s, i, i));
+    set(c, "clearPrimaryClip", ClipService.class.getMethod("clearPrimaryClip", s, s, i, i));
+    return c;
+  }
+
+  /** A focused editor whose paste inserts the clipboard text, as an app's editor does. */
+  static FakeNode focusedEditor(Scene scene, ClipService service, int... actions) {
+    Element field = scene.add("/0", "android.widget.EditText", "query", "", 0, 100, 1080, 200);
+    field.editable = true;
+    field.focused = true;
+    FakeNode node = scene.node(field).with(actions);
+    node.editable = true;
+    node.effects.put(AccessibilityNodeInfo.ACTION_PASTE, () -> {
+      node.text = node.text + service.text();
+      field.text = node.text;
+    });
+    node.effects.put(AccessibilityNodeInfo.ACTION_SET_TEXT, () -> field.text = node.text);
+    return node;
   }
 
   static Map<String, Object> args(Object... pairs) {
@@ -727,6 +783,91 @@ public final class EngineTests {
       require(engine.events.isEmpty() && engine.log.isEmpty(), "input sent: " + engine.log);
       for (FakeNode n : scene.nodes) require(n.performed.isEmpty(), "performed " + n.performed);
       require(System.nanoTime() - started < 2_000_000_000L, "waited for a focus nobody requested");
+    });
+
+    test("clipboard read failure is unreadable, not empty", () -> {
+      ClipService service = new ClipService();
+      service.denyReads = true;
+      Object snapshot = invoke(clipboard(service), "read", new Class<?>[0]);
+      require(!(Boolean) get(snapshot, "readable"), "refused read reported as readable");
+      service.denyReads = false;
+      Object empty = invoke(clipboard(service), "read", new Class<?>[0]);
+      require((Boolean) get(empty, "readable") && get(empty, "clip") == null, "empty clipboard not readable-empty");
+    });
+
+    test("type_text never writes a clipboard it could not read", () -> {
+      ClipService service = new ClipService();
+      service.clip = android.content.ClipData.newPlainText("person", "PERSON-CLIP");
+      service.denyReads = true;
+      Scene scene = new Scene();
+      FakeNode node =
+          focusedEditor(scene, service, AccessibilityNodeInfo.ACTION_PASTE, AccessibilityNodeInfo.ACTION_SET_TEXT);
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      set(engine, "clipboard", clipboard(service));
+      engine.read();
+      Map<String, Object> result = engine.call("type_text", args("text", "hello"));
+      require(!service.calls.contains("write") && !service.calls.contains("clear"), "clipboard changed: " + service.calls);
+      require("PERSON-CLIP".equals(service.text()), "person's clip lost");
+      require(!node.performed.contains(AccessibilityNodeInfo.ACTION_PASTE), "pasted");
+      require(node.setTexts.equals(List.of("hello")), "set-text " + node.setTexts);
+      require(text(result).contains("clipboard could not be read"), "no reason: " + text(result).split("\n")[0]);
+    });
+
+    test("type_text pastes and restores the person's clip", () -> {
+      ClipService service = new ClipService();
+      service.clip = android.content.ClipData.newPlainText("person", "PERSON-CLIP");
+      Scene scene = new Scene();
+      FakeNode node =
+          focusedEditor(scene, service, AccessibilityNodeInfo.ACTION_PASTE, AccessibilityNodeInfo.ACTION_SET_TEXT);
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      set(engine, "clipboard", clipboard(service));
+      engine.read();
+      engine.call("type_text", args("text", "无线调试"));
+      require(node.text.equals("无线调试"), "editor: " + node.text);
+      require("PERSON-CLIP".equals(service.text()), "clipboard now " + service.text());
+      require(node.setTexts.isEmpty(), "used set-text");
+    });
+
+    test("type_text with an empty clipboard pastes and leaves it empty", () -> {
+      ClipService service = new ClipService();
+      Scene scene = new Scene();
+      FakeNode node =
+          focusedEditor(scene, service, AccessibilityNodeInfo.ACTION_PASTE, AccessibilityNodeInfo.ACTION_SET_TEXT);
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      set(engine, "clipboard", clipboard(service));
+      engine.read();
+      engine.call("type_text", args("text", "wuxian"));
+      require(node.text.equals("wuxian") && node.setTexts.isEmpty(), "editor: " + node.text + " " + node.setTexts);
+      require(service.clip == null, "clipboard left with " + service.text());
+    });
+
+    test("a rejected paste is unconfirmed and never followed by set-text", () -> {
+      ClipService service = new ClipService();
+      service.clip = android.content.ClipData.newPlainText("person", "PERSON-CLIP");
+      Scene scene = new Scene();
+      FakeNode node =
+          focusedEditor(scene, service, AccessibilityNodeInfo.ACTION_PASTE, AccessibilityNodeInfo.ACTION_SET_TEXT);
+      node.results.put(AccessibilityNodeInfo.ACTION_PASTE, false);
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      set(engine, "clipboard", clipboard(service));
+      engine.read();
+      Failure f = failure(() -> engine.call("type_text", args("text", "hello")));
+      require(node.setTexts.isEmpty(), "replayed through set-text " + node.setTexts + ", then " + f.code);
+      require(f.code.equals("ACTION_UNCONFIRMED"), f.code + ": " + f.getMessage());
+      require("PERSON-CLIP".equals(service.text()), "clipboard now " + service.text());
+    });
+
+    test("type_text fallback names why paste was unusable", () -> {
+      ClipService service = new ClipService();
+      Scene scene = new Scene();
+      FakeNode node = focusedEditor(scene, service, AccessibilityNodeInfo.ACTION_SET_TEXT);
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      set(engine, "clipboard", clipboard(service));
+      engine.read();
+      Map<String, Object> result = engine.call("type_text", args("text", "hello"));
+      require(node.setTexts.equals(List.of("hello")), "set-text " + node.setTexts);
+      require(service.calls.isEmpty(), "clipboard touched: " + service.calls);
+      require(text(result).contains("does not offer paste"), "no reason: " + text(result).split("\n")[0]);
     });
 
     if (!failures.isEmpty()) {

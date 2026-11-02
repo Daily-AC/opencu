@@ -46,7 +46,6 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
   private Capture coordinates;
   private final Map<Integer, AccessibilityNodeInfo> nodes = new HashMap<>();
   private String notice = "";
-  private String keyboardInputFailure = "";
   private boolean observationRequired;
   /** Set before anything in the current call reaches the device; a later failure needs a fresh read. */
   private boolean sent;
@@ -1136,59 +1135,86 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     }
   }
 
-  private boolean tryPaste(AccessibilityNodeInfo n, String text, String pkg, long token) {
-    if (!n.isEditable()) return false;
-    checkTarget(token, pkg);
-    ClipData old;
-    try {
-      old = clipboard.getPrimaryClip();
-    } catch (Exception e) {
-      keyboardInputFailure = "Clipboard read failed: " + e.getClass().getSimpleName();
-      return false;
-    }
-    String marker = "OpenCU-" + UUID.randomUUID();
-    ClipData clip = ClipData.newPlainText(marker, text);
-    boolean changed = false;
-    try {
-      checkTarget(token, pkg);
-      try {
-        clipboard.setPrimaryClip(clip);
-      } catch (Exception e) {
-        keyboardInputFailure = "Clipboard write failed: " + e.getClass().getSimpleName();
-        return false;
-      }
-      changed = true;
-      if (!n.refresh()) {
-        keyboardInputFailure = "Focused editor refresh failed before paste";
-        return false;
-      }
-      checkTarget(token, pkg);
-      sent = true;
-      if (!n.performAction(AccessibilityNodeInfo.ACTION_PASTE)) {
-        keyboardInputFailure = "Focused editor rejected ACTION_PASTE";
-        return false;
-      }
-      check(token, false);
-      pause(80, token);
-      return true;
-    } finally {
-      if (changed)
-        try {
-          ClipData current = clipboard.getPrimaryClip();
-          if (current != null && marker.contentEquals(current.getDescription().getLabel())) {
-            if (old != null) clipboard.setPrimaryClip(old);
-            else clipboard.clearPrimaryClip();
-          } else
-            notice = "Clipboard changed or became unreadable; previous clipboard was not restored.";
-        } catch (Exception e) {
-          notice = "Previous clipboard could not be restored.";
-        }
+  /** The clipboard this connection owes back while its temporary clip may be installed. */
+  private static final class OwedClip {
+    final ShellClipboard.Snapshot previous;
+    final String marker;
+    boolean written;
+
+    OwedClip(ShellClipboard.Snapshot previous, String marker) {
+      this.previous = previous;
+      this.marker = marker;
     }
   }
 
+  private final Object clipboardLock = new Object();
+  private OwedClip owedClip;
+
+  /**
+   * Pastes {@code text} into {@code n} through the clipboard. Returns null once pasted, or why paste
+   * is unusable when that is known before anything reached the app. A paste that was sent but not
+   * confirmed is ACTION_UNCONFIRMED and is never followed by another input method.
+   */
+  private String pasteText(AccessibilityNodeInfo n, String text, String pkg, long token) {
+    if (!n.isEditable()) return "the focused node is not editable";
+    if (!hasAction(n, AccessibilityNodeInfo.ACTION_PASTE)) return "the editor does not offer paste";
+    checkTarget(token, pkg);
+    ShellClipboard.Snapshot previous = clipboard.read();
+    if (!previous.readable)
+      return "the clipboard could not be read (" + previous.problem + "), so it was not used";
+    OwedClip owed = new OwedClip(previous, "OpenCU-" + UUID.randomUUID());
+    synchronized (clipboardLock) {
+      owedClip = owed;
+    }
+    try {
+      checkTarget(token, pkg);
+      try {
+        clipboard.setPrimaryClip(ClipData.newPlainText(owed.marker, text));
+        owed.written = true;
+      } catch (Exception e) {
+        return "the clipboard could not be written (" + e.getClass().getSimpleName() + ")";
+      }
+      if (!n.refresh()) throw fail("STALE_ELEMENT", "The focused editor went away before paste; nothing sent");
+      checkTarget(token, pkg);
+      sent = true;
+      actionConfirmed(n.performAction(AccessibilityNodeInfo.ACTION_PASTE));
+      check(token, false);
+      pause(80, token);
+      return null;
+    } finally {
+      restoreClipboard();
+    }
+  }
+
+  /** Puts back the clipboard owed by an interrupted or finished paste, at most once. */
+  private void restoreClipboard() {
+    synchronized (clipboardLock) {
+      OwedClip owed = owedClip;
+      owedClip = null;
+      if (owed == null) return;
+      ShellClipboard.Snapshot current = clipboard.read();
+      if (!current.labelled(owed.marker)) {
+        if (owed.written)
+          addNotice("Clipboard changed or became unreadable; previous clipboard was not restored.");
+        return;
+      }
+      try {
+        if (owed.previous.clip != null) clipboard.setPrimaryClip(owed.previous.clip);
+        else clipboard.clearPrimaryClip();
+      } catch (Exception e) {
+        addNotice("Previous clipboard could not be restored.");
+      }
+    }
+  }
+
+  private void addNotice(String text) {
+    notice = notice.isEmpty() ? text : notice + " " + text;
+  }
+
   private void paste(AccessibilityNodeInfo n, String text, String pkg, long token) {
-    if (!tryPaste(n, text, pkg, token))
-      throw fail("PASTE_UNSUPPORTED", "Focused editor does not expose paste");
+    String unavailable = pasteText(n, text, pkg, token);
+    if (unavailable != null)
+      throw fail("PASTE_UNSUPPORTED", "Paste unavailable: " + unavailable + "; nothing sent");
   }
 
   private String focusedText(Screen s) {
@@ -1333,22 +1359,18 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
           n = focused(now);
           String value = (String) args.get("text");
           String expected = expectedText(n, value);
-          keyboardInputFailure = "";
-          boolean inputPath = tryPaste(n, value, pkg, token);
-          if (!inputPath) {
-            String before = n.isShowingHintText() ? "" : str(n.getText());
-            int a = n.getTextSelectionStart(), b = n.getTextSelectionEnd();
-            if (a < 0 || b < 0 || a > before.length() || b > before.length())
-              a = b = before.length();
-            setText(
-                n,
-                before.substring(0, Math.min(a, b))
-                    + value
-                    + before.substring(Math.max(a, b)),
-                pkg,
-                token);
-            notice =
-                "Keyboard-style text input unavailable; used accessibility set-text fallback.";
+          String unavailable = pasteText(n, value, pkg, token);
+          if (unavailable != null) {
+            // Paste was known unusable before anything reached the app.
+            if (!n.isEditable() || !hasAction(n, AccessibilityNodeInfo.ACTION_SET_TEXT))
+              throw fail(
+                  "INPUT_UNAVAILABLE",
+                  "Paste unavailable (" + unavailable + ") and the editor offers no set-text; nothing sent");
+            setText(n, expected, pkg, token);
+            addNotice(
+                "Keyboard-style text input unavailable ("
+                    + unavailable
+                    + "); used accessibility set-text fallback, so the app may not react as to typing.");
           }
           Screen after = observe(pkg);
           String actual = focusedText(after);

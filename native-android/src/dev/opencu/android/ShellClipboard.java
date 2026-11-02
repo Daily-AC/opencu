@@ -1,43 +1,52 @@
 package dev.opencu.android;
 
 import android.content.ClipData;
-import android.content.ClipDescription;
-import android.content.ClipboardManager;
 import android.content.Context;
 import android.os.IBinder;
-import android.os.Handler;
-import android.os.Looper;
 import android.os.Process;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 
-/** Clipboard access for app_process: reads use IClipboard when the framework wrapper needs a provider. */
+/**
+ * Clipboard access for app_process through the IClipboard binder. The framework wrapper's read
+ * path needs a provider that app_process cannot reach, so only the binder is used; without it the
+ * clipboard is treated as unreadable.
+ */
 final class ShellClipboard {
+  /** One clipboard read. A readable clipboard may be empty ({@code clip == null}). */
+  static final class Snapshot {
+    final boolean readable;
+    final ClipData clip;
+    final String problem;
+
+    private Snapshot(boolean readable, ClipData clip, String problem) {
+      this.readable = readable;
+      this.clip = clip;
+      this.problem = problem;
+    }
+
+    static Snapshot unreadable(String problem) {
+      return new Snapshot(false, null, problem);
+    }
+
+    /** Whether this clip carries {@code label}. */
+    boolean labelled(String label) {
+      return clip != null
+          && clip.getDescription() != null
+          && label.contentEquals(clip.getDescription().getLabel());
+    }
+  }
+
   private final String callerPackage;
-  private final ClipboardManager manager;
   private final Object service;
   private final Method getPrimaryClip;
-  private final Method getPrimaryClipDescription;
-  private final Method hasPrimaryClip;
   private final Method setPrimaryClip;
   private final Method clearPrimaryClip;
 
   ShellClipboard(Context context) {
     callerPackage = context.getOpPackageName();
-    ClipboardManager frameworkManager;
-    try {
-      java.lang.reflect.Constructor<ClipboardManager> constructor =
-          ClipboardManager.class.getDeclaredConstructor(Context.class, Handler.class);
-      constructor.setAccessible(true);
-      frameworkManager =
-          constructor.newInstance(context, new Handler(Looper.getMainLooper()));
-    } catch (Exception ignored) {
-      frameworkManager =
-          (ClipboardManager) context.getSystemService(Context.CLIPBOARD_SERVICE);
-    }
-    manager = frameworkManager;
     Object foundService = null;
-    Method clip = null, description = null, has = null, set = null, clear = null;
+    Method read = null, set = null, clear = null;
     try {
       IBinder binder =
           (IBinder)
@@ -49,64 +58,48 @@ final class ShellClipboard {
               .getMethod("asInterface", IBinder.class)
               .invoke(null, binder);
       Class<?> type = Class.forName("android.content.IClipboard");
-      clip = readMethod(type, "getPrimaryClip");
-      description = readMethod(type, "getPrimaryClipDescription");
-      has = readMethod(type, "hasPrimaryClip");
+      read = readMethod(type, "getPrimaryClip");
       set = writeMethod(type, "setPrimaryClip", ClipData.class);
       clear = writeMethod(type, "clearPrimaryClip");
     } catch (Exception ignored) {
       foundService = null;
     }
     service = foundService;
-    getPrimaryClip = clip;
-    getPrimaryClipDescription = description;
-    hasPrimaryClip = has;
+    getPrimaryClip = read;
     setPrimaryClip = set;
     clearPrimaryClip = clear;
   }
 
-  ClipData getPrimaryClip() {
-    if (service != null && getPrimaryClip != null) {
-      Object value = call(getPrimaryClip);
-      return value instanceof ClipData ? (ClipData) value : null;
+  /**
+   * Reads the primary clip. A failed or refused call is unreadable, never empty. Android also
+   * answers a silently denied read with an empty clip; that case cannot be told apart here.
+   */
+  Snapshot read() {
+    if (service == null || getPrimaryClip == null || setPrimaryClip == null || clearPrimaryClip == null)
+      return Snapshot.unreadable("clipboard service unavailable");
+    Object value;
+    try {
+      value = getPrimaryClip.invoke(service, readArguments(getPrimaryClip));
+    } catch (InvocationTargetException e) {
+      return Snapshot.unreadable("read refused: " + e.getCause().getClass().getSimpleName());
+    } catch (Exception e) {
+      return Snapshot.unreadable("read failed: " + e.getClass().getSimpleName());
     }
-    Object value = call(getPrimaryClip);
-    return value instanceof ClipData ? (ClipData) value : manager.getPrimaryClip();
-  }
-
-  ClipDescription getPrimaryClipDescription() {
-    if (service != null && getPrimaryClipDescription != null) {
-      Object value = call(getPrimaryClipDescription);
-      return value instanceof ClipDescription ? (ClipDescription) value : null;
-    }
-    Object value = call(getPrimaryClipDescription);
-    return value instanceof ClipDescription
-        ? (ClipDescription) value
-        : manager.getPrimaryClipDescription();
-  }
-
-  boolean hasPrimaryClip() {
-    Object value = call(hasPrimaryClip);
-    return value instanceof Boolean ? (Boolean) value : manager.hasPrimaryClip();
+    if (value != null && !(value instanceof ClipData))
+      return Snapshot.unreadable("unexpected clipboard reply");
+    return new Snapshot(true, (ClipData) value, "");
   }
 
   void setPrimaryClip(ClipData clip) {
-    if (service != null && setPrimaryClip != null) {
-      invokeWrite(setPrimaryClip, clip);
-      return;
-    }
-    manager.setPrimaryClip(clip);
+    invokeWrite(setPrimaryClip, clip);
   }
 
   void clearPrimaryClip() {
-    if (service != null && clearPrimaryClip != null) {
-      invokeWrite(clearPrimaryClip, null);
-      return;
-    }
-    manager.clearPrimaryClip();
+    invokeWrite(clearPrimaryClip, null);
   }
 
   private void invokeWrite(Method method, ClipData clip) {
+    if (service == null || method == null) throw new IllegalStateException("IClipboard unavailable");
     int userId = Process.myUid() / 100_000;
     try {
       if (method.getParameterTypes().length == 5)
@@ -114,7 +107,7 @@ final class ShellClipboard {
       else method.invoke(service, callerPackage, null, userId, 0);
     } catch (IllegalAccessException | InvocationTargetException e) {
       Throwable cause = e instanceof InvocationTargetException ? e.getCause() : e;
-      throw new IllegalStateException("IClipboard write failed: " + cause, cause);
+      throw new IllegalStateException("IClipboard write failed: " + cause.getClass().getSimpleName(), cause);
     }
   }
 
@@ -151,19 +144,12 @@ final class ShellClipboard {
     }
   }
 
-  private Object call(Method method) {
-    if (service == null || method == null) return null;
+  private Object[] readArguments(Method method) {
     int userId = Process.myUid() / 100_000;
-    Object[] args;
     if (method.getParameterTypes().length == 7)
-      args = new Object[] {callerPackage, callerPackage, "", null, userId, 0, false};
-    else if (method.getParameterTypes().length == 4)
-      args = new Object[] {callerPackage, null, userId, 0};
-    else args = new Object[] {callerPackage, null, userId};
-    try {
-      return method.invoke(service, args);
-    } catch (IllegalAccessException | InvocationTargetException ignored) {
-      return null;
-    }
+      return new Object[] {callerPackage, callerPackage, "", null, userId, 0, false};
+    if (method.getParameterTypes().length == 4)
+      return new Object[] {callerPackage, null, userId, 0};
+    return new Object[] {callerPackage, null, userId};
   }
 }
