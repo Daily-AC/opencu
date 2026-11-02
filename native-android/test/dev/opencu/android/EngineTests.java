@@ -3356,6 +3356,19 @@ public final class EngineTests {
       require(time.minute.value == 47, "minute " + time.minute.value);
     });
 
+    test("after a batch step turns a ColorOS picker by its row, a later step finds the picker", () -> {
+      ColorOsTime time = new ColorOsTime(23, 45);
+      ScriptedEngine engine = time.engine();
+      engine.read();
+      Map<String, Object> result = engine.call("run_actions", args("actions", List.of(
+          obj("method", "scroll", "element_index", time.minute.index() + 2, "direction", "down"),
+          obj("method", "perform_secondary_action", "element_index", time.minute.index(), "action", "scroll_forward"))));
+      Map<String, Object> batch = map(map(result.get("_meta")).get("opencu/batch"));
+      require(Integer.valueOf(2).equals(batch.get("completed")) && batch.get("reason") == null,
+          "batch " + batch + ": " + text(result).split("\n")[0]);
+      require(time.minute.value == 47, "minute " + time.minute.value);
+    });
+
     test("a ColorOS picker that a swipe turned is named with its old and new number", () -> {
       ColorOsTime time = new ColorOsTime(7, 35);
       ScriptedEngine engine = time.engine();

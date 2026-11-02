@@ -1753,12 +1753,17 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
               : live(old, base, now);
       n = nodes.get(target.index);
     }
-    // Whether this step changes the element's own value (and so maybe its text).
+    // Whether this step changes the element's own value (and so maybe its text), and the wheel
+    // picker it turns when it is a row of one.
     boolean ownValue =
         n != null
             && (method.equals("set_value")
                 || method.equals("perform_secondary_action")
                 || (method.equals("scroll") && scrolls(n)));
+    Element turnedWheel =
+        n != null && (method.equals("set_value") || method.equals("scroll"))
+            ? enclosingWheel(target, now)
+            : null;
     checkTarget(token, pkg);
     switch (method) {
       case "click":
@@ -1990,7 +1995,11 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
       default:
         throw fail("METHOD_NOT_FOUND", "Unknown action");
     }
-    if (ownValue && batchChanged != null) batchChanged.add(index);
+    if (batchChanged != null) {
+      if (ownValue) batchChanged.add(index);
+      Element wheelBefore = turnedWheel == null ? null : counterpart(base, turnedWheel);
+      if (wheelBefore != null) batchChanged.add(wheelBefore.index);
+    }
     // Standalone calls settle in afterAction; batches observe the post-action fence directly
     // to avoid paying a second idle wait for every quickly settling step.
   }
