@@ -14,8 +14,35 @@ public final class Main {
     if (value != null) output.println(Json.write(value));
   }
 
+  private static final java.util.regex.Pattern CODE =
+      java.util.regex.Pattern.compile("[A-Z][A-Z0-9_]{2,40}");
+
+  /**
+   * The single stderr line for a fatal error: {@code CODE: detail}, where detail is one line of at
+   * most 300 characters naming the exception. Hosts forward only this form. Startup and doctor
+   * failures never involve screen or clipboard content.
+   */
+  static String diagnostic(String code, Throwable error) {
+    Throwable cause = error;
+    while ((cause instanceof java.lang.reflect.InvocationTargetException
+            || cause instanceof ExecutionException)
+        && cause.getCause() != null) cause = cause.getCause();
+    String detail = cause.getClass().getName() + ": " + cause.getMessage();
+    if (cause instanceof Core.Failure && CODE.matcher(((Core.Failure) cause).code).matches()) {
+      code = ((Core.Failure) cause).code;
+      detail = String.valueOf(cause.getMessage());
+    } else if (cause instanceof IllegalArgumentException && String.valueOf(cause.getMessage()).startsWith("Usage:")) {
+      code = "INVALID_ARGUMENT";
+      detail = cause.getMessage();
+    }
+    detail = detail.replaceAll("[\\p{Cntrl}\\s\\x{85}\\x{2028}\\x{2029}]+", " ").trim();
+    if (detail.length() > 300) detail = detail.substring(0, 297) + "...";
+    return code + ": " + detail;
+  }
+
   public static void main(String[] args) {
     AndroidEngine engine = null;
+    String stage = "ENGINE_START_FAILED";
     try {
       String mode = args.length == 0 ? "mcp" : args[0];
       if (args.length > 1 || (!mode.equals("mcp") && !mode.equals("doctor")))
@@ -24,10 +51,12 @@ public final class Main {
       final AndroidEngine active = engine;
       Runtime.getRuntime().addShutdownHook(new Thread(active::close));
       if (mode.equals("doctor")) {
+        stage = "DOCTOR_FAILED";
         emit(engine.doctor());
         engine.close();
         System.exit(0);
       }
+      stage = "ENGINE_FAILED";
       Protocol protocol = new Protocol(engine, BuildInfo.VERSION);
       // One serialized worker runs every call and the engine's idle timer.
       ScheduledThreadPoolExecutor worker =
@@ -60,7 +89,8 @@ public final class Main {
       worker.shutdownNow();
       System.exit(0);
     } catch (Throwable error) {
-      System.err.println("OpenCU Android: " + error);
+      String line = diagnostic(stage, error);
+      System.err.println(line);
       if (args.length == 1 && args[0].equals("doctor"))
         emit(
             Json.obj(
@@ -73,7 +103,7 @@ public final class Main {
                 "uiAutomationConnected",
                 false,
                 "error",
-                error.toString()));
+                line));
       if (engine != null) engine.close();
       System.exit(1);
     }

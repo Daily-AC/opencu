@@ -119,23 +119,30 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     keyguard = (KeyguardManager) context.getSystemService(Context.KEYGUARD_SERVICE);
     thread = new HandlerThread("opencu-uia");
     thread.start();
-    Class<?> conn = Class.forName("android.app.UiAutomationConnection"),
-        iconn = Class.forName("android.app.IUiAutomationConnection");
-    automation =
-        UiAutomation.class
-            .getDeclaredConstructor(Looper.class, iconn)
-            .newInstance(thread.getLooper(), conn.getDeclaredConstructor().newInstance());
-    hidden.put("UiAutomation(Looper,IUiAutomationConnection)", true);
-    UiAutomation.class
-        .getDeclaredMethod("connect", int.class)
-        .invoke(automation, UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES);
-    hidden.put("UiAutomation.connect(int)", true);
-    AccessibilityServiceInfo info = automation.getServiceInfo();
-    info.flags |=
-        AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
-            | AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
-            | AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS;
-    automation.setServiceInfo(info);
+    try {
+      Class<?> conn = Class.forName("android.app.UiAutomationConnection"),
+          iconn = Class.forName("android.app.IUiAutomationConnection");
+      automation =
+          UiAutomation.class
+              .getDeclaredConstructor(Looper.class, iconn)
+              .newInstance(thread.getLooper(), conn.getDeclaredConstructor().newInstance());
+      hidden.put("UiAutomation(Looper,IUiAutomationConnection)", true);
+      UiAutomation.class
+          .getDeclaredMethod("connect", int.class)
+          .invoke(automation, UiAutomation.FLAG_DONT_SUPPRESS_ACCESSIBILITY_SERVICES);
+      hidden.put("UiAutomation.connect(int)", true);
+      AccessibilityServiceInfo info = automation.getServiceInfo();
+      info.flags |=
+          AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS
+              | AccessibilityServiceInfo.FLAG_REPORT_VIEW_IDS
+              | AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS;
+      automation.setServiceInfo(info);
+    } catch (Exception e) {
+      Throwable cause = e instanceof InvocationTargetException && e.getCause() != null ? e.getCause() : e;
+      throw fail(
+          "UIAUTOMATION_UNAVAILABLE",
+          cause.getClass().getName() + ": " + cause.getMessage());
+    }
     mainAutomation = automation;
     PersonMonitor connectedMonitor = null;
     String problem = "";

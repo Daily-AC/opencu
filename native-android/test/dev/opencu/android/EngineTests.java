@@ -1473,6 +1473,38 @@ public final class EngineTests {
       require(person.lastActivity == 50_000, "last activity " + person.lastActivity);
     });
 
+    test("startup and doctor failures print one coded stderr line", () -> {
+      java.util.regex.Pattern line = java.util.regex.Pattern.compile("^[A-Z][A-Z0-9_]{2,40}: [^\\n]{1,300}\\n$");
+      String javaBin = System.getProperty("java.home") + "/bin/java", cp = System.getProperty("java.class.path");
+      for (String[] run : new String[][] {{"mcp", "UNSUPPORTED_PLATFORM"}, {"doctor", "UNSUPPORTED_PLATFORM"}, {"bogus", "INVALID_ARGUMENT"}}) {
+        Process p = new ProcessBuilder(javaBin, "-cp", cp, "dev.opencu.android.Main", run[0]).redirectInput(ProcessBuilder.Redirect.PIPE).start();
+        p.getOutputStream().close();
+        String err = new String(p.getErrorStream().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+        String out = new String(p.getInputStream().readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+        require(p.waitFor(20, TimeUnit.SECONDS) && p.exitValue() == 1, run[0] + " exit");
+        require(line.matcher(err).matches(), run[0] + " stderr: " + err);
+        require(err.startsWith(run[1] + ": "), run[0] + " code: " + err);
+        if (run[0].equals("doctor"))
+          require(String.valueOf(map(Json.read(out.trim())).get("error")).startsWith("UNSUPPORTED_PLATFORM: "), "doctor JSON: " + out);
+      }
+    });
+
+    test("diagnostic lines are single-line, bounded and coded", () -> {
+      Class<?>[] types = {String.class, Throwable.class};
+      Object main = allocate(Main.class);
+      String wrapped = (String) invoke(main, "diagnostic", types, "ENGINE_START_FAILED",
+          new java.lang.reflect.InvocationTargetException(Core.fail("UIAUTOMATION_UNAVAILABLE", "connect\nrefused")));
+      require(wrapped.equals("UIAUTOMATION_UNAVAILABLE: connect refused"), wrapped);
+      String generic = (String) invoke(main, "diagnostic", types, "ENGINE_START_FAILED",
+          new IllegalStateException("first line\r\nsecond\u2028third\t" + "x".repeat(400)));
+      require(generic.startsWith("ENGINE_START_FAILED: java.lang.IllegalStateException: first line second third x"), generic);
+      require(!generic.contains("\n") && !generic.contains("\u2028") && generic.length() <= "ENGINE_START_FAILED: ".length() + 300, generic);
+      String unnamed = (String) invoke(main, "diagnostic", types, "DOCTOR_FAILED", new NullPointerException());
+      require(unnamed.equals("DOCTOR_FAILED: java.lang.NullPointerException: null"), unnamed);
+      String odd = (String) invoke(main, "diagnostic", types, "ENGINE_FAILED", Core.fail("bad code", "x"));
+      require(odd.startsWith("ENGINE_FAILED: "), odd);
+    });
+
     if (!failures.isEmpty()) {
       System.out.println("Android engine host checks failed: " + failures);
       System.exit(1);
