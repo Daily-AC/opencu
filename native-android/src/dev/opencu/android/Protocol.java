@@ -19,8 +19,8 @@ public final class Protocol {
           + " state before the batch. Steps may wait locally with until (text, gone, app, stable)."
           + " A new dialog, unexpected app switch, failed step or person activity stops the batch;"
           + " inspect its final state, never replay. type_text and set_value support Unicode."
-          + " type_text pastes through the focused editor without changing the keyboard and says"
-          + " when it must use an accessibility fallback. Verify actual results before"
+          + " type_text sets the focused editor's text through accessibility, without the keyboard"
+          + " or the clipboard. Verify actual results before"
           + " reporting success. Input uses the main display and can change foreground only after"
           + " 10 seconds without physical input. A physical touch or key during a call returns"
           + " PERSON_ACTIVE: stop and ask the person, never retry automatically. Three physical"
@@ -192,21 +192,20 @@ public final class Protocol {
         "key");
     add(
         "type_text",
-        "Insert Unicode text into the currently focused Android editable node by paste first,"
-            + " replacing its selected range without installing or switching a keyboard. If paste"
-            + " is unavailable, the result says it used the accessibility set-text fallback; the"
-            + " final editor postcondition is still checked. App reactions may arrive later; use"
-            + " get_app_state waitForText or run_actions until to observe them.",
+        "Insert Unicode text into the currently focused Android editable node, replacing its"
+            + " selected range, with accessibility set-text; no keyboard or clipboard is used. The"
+            + " editor's resulting text is checked. With no focused editable it returns"
+            + " NO_FOCUSED_ELEMENT and sends nothing: click the field first. App reactions may"
+            + " arrive later; use get_app_state waitForText or run_actions until to observe them.",
         false,
         props("text", string()),
         "app",
         "text");
     add(
         "paste",
-        "Paste plain text into the focused Android editable field via its listed accessibility"
-            + " paste action. format must be text. Restores the previous clipboard when readable"
-            + " and unchanged by another app; reports restoration limitations. Returns updated"
-            + " state.",
+        "Insert plain text into the focused Android editable field exactly as type_text does"
+            + " (accessibility set-text at the selection). format must be text. The clipboard is"
+            + " neither read nor changed. Returns updated state.",
         false,
         props("text", string(), "format", enumeration("text")),
         "app",

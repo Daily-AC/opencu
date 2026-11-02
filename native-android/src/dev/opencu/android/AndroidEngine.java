@@ -39,7 +39,6 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
   private final KeyguardManager keyguard;
   private final PersonMonitor monitor;
   private final Core.Person person;
-  private final ShellClipboard clipboard;
   private final String monitorProblem;
   private final Field taskDisplay;
   private final Map<String, Object> hidden = obj();
@@ -108,12 +107,10 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     Class<?> at = Class.forName("android.app.ActivityThread");
     Object activityThread = at.getMethod("systemMain").invoke(null);
     Context system = (Context) at.getMethod("getSystemContext").invoke(activityThread);
-    // Services are called through this package's context; the clipboard is told the package
-    // explicitly, because a package context still reports "android" as its op package.
+    // Services are called through this package's context.
     String ownPackage = ownPackage(system, android.os.Process.myUid());
     context = serviceContext(system, ownPackage);
     hidden.put("packageContext", ownPackage);
-    clipboard = new ShellClipboard(ownPackage);
     hidden.put("ActivityThread.systemMain/getSystemContext", true);
     taskDisplay = ActivityManager.RunningTaskInfo.class.getField("displayId");
     hidden.put("TaskInfo.displayId", true);
@@ -1268,90 +1265,24 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     }
   }
 
-  /** The clipboard this connection owes back while its temporary clip may be installed. */
-  private static final class OwedClip {
-    final ShellClipboard.Snapshot previous;
-    final String marker;
-    boolean written;
-
-    OwedClip(ShellClipboard.Snapshot previous, String marker) {
-      this.previous = previous;
-      this.marker = marker;
-    }
-  }
-
-  private final Object clipboardLock = new Object();
-  private OwedClip owedClip;
-
-  /**
-   * Pastes {@code text} into {@code n} through the clipboard. Returns null once pasted, or why paste
-   * is unusable when that is known before anything reached the app; the person's clipboard is back
-   * in place by then. A paste that was sent but not confirmed is ACTION_UNCONFIRMED and is never
-   * followed by another input method.
-   */
-  private String pasteText(AccessibilityNodeInfo n, String text, String pkg, long token) {
-    if (!n.isEditable()) return "the focused node is not editable";
-    checkTarget(token, pkg);
-    ShellClipboard.Snapshot previous = clipboard.read();
-    if (!previous.readable)
-      return "the clipboard could not be read (" + previous.problem + "), so it was not used";
-    OwedClip owed = new OwedClip(previous, "OpenCU-" + UUID.randomUUID());
-    try {
-      checkTarget(token, pkg);
-      synchronized (clipboardLock) {
-        // Shutdown settles the clipboard under this lock; never write once it has begun.
-        if (closed) throw fail("ENGINE_STOPPING", "Stdin closed");
-        owedClip = owed;
-        try {
-          clipboard.setPrimaryClip(ClipData.newPlainText(owed.marker, text));
-          owed.written = true;
-        } catch (Exception e) {
-          return "the clipboard could not be written (" + e.getClass().getSimpleName() + ")";
-        }
-      }
-      // Editors offer paste only while the clipboard holds a clip, so ask once the text is there.
-      if (!n.refresh()) throw fail("STALE_ELEMENT", "The focused editor went away before paste; nothing sent");
-      if (!hasAction(n, AccessibilityNodeInfo.ACTION_PASTE)) return "the editor does not offer paste";
-      checkTarget(token, pkg);
-      sent = true;
-      actionConfirmed(n.performAction(AccessibilityNodeInfo.ACTION_PASTE));
-      check(token, false);
-      pause(80, token);
-      return null;
-    } finally {
-      restoreClipboard();
-    }
-  }
-
-  /** Puts back the clipboard owed by an interrupted or finished paste, at most once. */
-  private void restoreClipboard() {
-    synchronized (clipboardLock) {
-      OwedClip owed = owedClip;
-      owedClip = null;
-      if (owed == null) return;
-      ShellClipboard.Snapshot current = clipboard.read();
-      if (!current.labelled(owed.marker)) {
-        if (owed.written)
-          addNotice("Clipboard changed or became unreadable; previous clipboard was not restored.");
-        return;
-      }
-      try {
-        if (owed.previous.clip != null) clipboard.setPrimaryClip(owed.previous.clip);
-        else clipboard.clearPrimaryClip();
-      } catch (Exception e) {
-        addNotice("Previous clipboard could not be restored.");
-      }
-    }
-  }
-
   private void addNotice(String text) {
     notice = notice.isEmpty() ? text : notice + " " + text;
   }
 
-  private void paste(AccessibilityNodeInfo n, String text, String pkg, long token) {
-    String unavailable = pasteText(n, text, pkg, token);
-    if (unavailable != null)
-      throw fail("PASTE_UNSUPPORTED", "Paste unavailable: " + unavailable + "; nothing sent");
+  /**
+   * Inserts {@code value} at the focused editor's selection with accessibility set-text, then checks
+   * the editor. The clipboard is never used, and nothing is sent another way.
+   */
+  private void insertText(AccessibilityNodeInfo n, String value, String pkg, long token) {
+    String expected = expectedText(n, value);
+    setText(n, expected, pkg, token);
+    Screen after = observe(pkg);
+    String actual = focusedText(after);
+    boolean reacted = actual == null && after.content().contains(value);
+    if (!Core.textInputSatisfied(expected, actual, reacted))
+      throw fail(
+          "TEXT_INPUT_FAILED",
+          "Focused editable did not contain the requested text after input; no app reaction was observed");
   }
 
   private String focusedText(Screen s) {
@@ -1507,34 +1438,10 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
         setText(n, (String) args.get("value"), pkg, token);
         break;
       case "type_text":
-        {
-          n = focused(now);
-          String value = (String) args.get("text");
-          String expected = expectedText(n, value);
-          String unavailable = pasteText(n, value, pkg, token);
-          if (unavailable != null) {
-            // Paste was known unusable before anything reached the app.
-            if (!n.isEditable() || !hasAction(n, AccessibilityNodeInfo.ACTION_SET_TEXT))
-              throw fail(
-                  "INPUT_UNAVAILABLE",
-                  "Paste unavailable (" + unavailable + ") and the editor offers no set-text; nothing sent");
-            setText(n, expected, pkg, token);
-            addNotice(
-                "Keyboard-style text input unavailable ("
-                    + unavailable
-                    + "); used accessibility set-text fallback, so the app may not react as to typing.");
-          }
-          Screen after = observe(pkg);
-          String actual = focusedText(after);
-          boolean reacted = actual == null && after.content().contains(value);
-          if (!Core.textInputSatisfied(expected, actual, reacted))
-            throw fail(
-                "TEXT_INPUT_FAILED",
-                "Focused editable did not contain the requested text after input; no app reaction was observed");
-          break;
-        }
+        insertText(focused(now), (String) args.get("text"), pkg, token);
+        break;
       case "paste":
-        paste(focused(now), (String) args.get("text"), pkg, token);
+        insertText(focused(now), (String) args.get("text"), pkg, token);
         break;
       case "perform_secondary_action":
         {
@@ -1952,8 +1859,8 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
 
   /**
    * Ends the connection: refuses further work, kills running platform clients, lets an in-flight
-   * call unwind (bounded), puts back a clipboard it still owes, then releases the displays. EOF must
-   * still finish within two seconds even when a Binder call blocks.
+   * call unwind (bounded), then releases the displays. EOF must still finish within two seconds even
+   * when a Binder call blocks.
    */
   public void close() {
     synchronized (this) {
@@ -1970,18 +1877,9 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     }
     try {
       if (idleTimer != null) idleTimer.cancel(false);
-      // Clipboard and display calls can block on Binder, so they run on a bounded thread. Route
-      // changes wait for in-flight input; a gesture keeps its own target either way.
-      Thread cleanup =
-          new Thread(
-              () -> {
-                try {
-                  restoreClipboard();
-                } finally {
-                  releaseRoutes();
-                }
-              },
-              "opencu-close");
+      // Display calls can block on Binder, so they run on a bounded thread. Route changes wait
+      // for in-flight input; a gesture keeps its own target either way.
+      Thread cleanup = new Thread(this::releaseRoutes, "opencu-close");
       cleanup.setDaemon(true);
       cleanup.start();
       try {

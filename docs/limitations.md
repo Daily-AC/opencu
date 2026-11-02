@@ -165,9 +165,10 @@ The measurements behind this section are in
 - Requires Android shell uid 2000 and API 34+. Unicode indexed editing, clicks,
   list scrolling, back, batch guards and idle EOF are covered by the fixture
   suite. Settings on the acceptance ColorOS build requires a real touch to enter
-  search mode; the engine now uses touch-first clicks and direct shell clipboard
-  reads for paste. Custom editor clipboard policy,
-  coordinate gestures and custom accessibility
+  search mode; the engine uses touch-first clicks. `type_text` and `paste` set the
+  focused editor's text through accessibility and never use the clipboard or the
+  keyboard, so a field that acts only on typed keys may not react. Coordinate
+  gestures and custom accessibility
   actions have not been verified on the owner's apps. Timings are in the evidence;
   no general app performance claim follows from these samples.
 - The connection uses hidden UiAutomation construction/connection and system

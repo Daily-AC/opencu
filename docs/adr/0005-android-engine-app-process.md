@@ -102,8 +102,14 @@ policy and display-targeted input, and reports the flags actually obtained.
 
 - **Never repeat input whose outcome is unknown.** A second input method is used
   only when the first is known unavailable before anything is sent. Once a shell
-  tap has started, or an accessibility paste has been sent, a timeout, error or
+  tap has started, or an accessibility action has been sent, a timeout, error or
   false result is `ACTION_UNCONFIRMED` and needs a fresh read.
+- **Text goes in through set-text only.** `type_text` and `paste` set the focused
+  editor's text through accessibility; the engine never uses the clipboard.
+  Pasting through the clipboard put the agent's text where other apps and the
+  IME's clipboard history can see it, and an unconfirmed paste could later insert
+  the person's restored clip. On the accepted phone, set-text gave the same
+  search results as paste in the apps tested.
 - **The agent display is isolated or absent.** It must read back as trusted, with
   its own focus and unable to take the top focus, and its IME policy must read
   back as local. Otherwise start releases everything and returns

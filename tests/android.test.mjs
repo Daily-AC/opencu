@@ -108,3 +108,11 @@ test('Android launcher refuses a cached engine jar that shell does not own exclu
     assert.match(r.stdout,/"launched"/,stat);
   }
 });
+
+test('Android engine never uses the clipboard', () => {
+  const sourceRoot=path.join(root,'native-android/src');
+  for(const file of javaFiles(sourceRoot)){
+    const source=readFileSync(file,'utf8');
+    assert.doesNotMatch(source,/ClipData|ClipDescription|ClipboardManager|IClipboard|CLIPBOARD_SERVICE|ACTION_PASTE|PrimaryClip|"clipboard"/,file);
+  }
+});

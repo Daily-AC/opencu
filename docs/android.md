@@ -78,9 +78,8 @@ and `ping`. Unknown methods use `-32601`; invalid params use `-32602`. Tool erro
 are `isError: true`, start `CODE: message` and retain the code in
 `_meta["opencu/error"]`. Request lines are size-bounded; JSON-RPC batch arrays are
 not supported. Stdin EOF refuses further work, kills running platform clients
-(`input`, `am`), waits up to one second for an in-flight call to unwind, restores a
-clipboard still owed by an interrupted paste, releases the agent display and exits
-the VM. There is no listener, installed engine APK, accessibility service, account or brand gate.
+(`input`, `am`), waits up to one second for an in-flight call to unwind, releases
+the agent display and exits the VM. There is no listener, installed engine APK, accessibility service, account or brand gate.
 
 ## State and input
 
@@ -135,27 +134,19 @@ content is never bypassed. Screenshots can include covering windows.
 - `press_key`: back, home, enter/Return, delete/backspace, tab, recents/app_switch,
   search. No volume, power, arbitrary keycodes or modifier chords.
 - `type_text`: types into the focused editable only. Without one it returns
-  `NO_FOCUSED_ELEMENT` and sends nothing; click the intended field first. It reads
-  and keeps the clipboard, places the text there and re-reads the editor, because
-  Android editors offer paste only while the clipboard holds a clip. If the editor
-  then offers paste, it pastes (preserving Unicode) and restores the previous
-  clipboard. When paste is unusable before anything reached the app, the previous
-  clipboard is restored first and then accessibility set-text is used; the result
-  says why (for example the editor does not offer paste, or the clipboard could not
-  be read, in which case it is left untouched). A paste that was sent but not confirmed returns `ACTION_UNCONFIRMED`
-  and is never followed by set-text. The postcondition still has to match or the
-  call returns `TEXT_INPUT_FAILED`. It never types through the person's keyboard. An app reaction can arrive after
+  `NO_FOCUSED_ELEMENT` and sends nothing; click the intended field first. It
+  replaces the editor's selected range through accessibility set-text, Unicode
+  included. It never uses the clipboard or the person's keyboard, and never sends
+  the text another way; an unconfirmed set-text returns `ACTION_UNCONFIRMED`. The
+  editor's resulting text must match or the call returns `TEXT_INPUT_FAILED`. A
+  field that acts only on typed keys may not react. An app reaction can arrive after
   the text postcondition; use `waitForText` or an `until` condition to observe it.
   These waits search visible non-editor content, so the editor's own newly typed
   value does not satisfy a reaction wait by itself.
 - `set_value`: replace an indexed editable field's entire value. Use click for
   a checkbox. The editor must actually expose `ACTION_SET_TEXT`.
-- `paste`: `format: "text"` only, using the editor's accessibility paste action.
-  Saves/restores the previous clipboard if readable and unchanged; refuses
-  unreadable clipboard access and reports failed restoration. A read that fails or
-  is refused counts as unreadable, never as empty. Android also answers a silently
-  denied read with an empty clipboard, which cannot be told apart from an empty
-  one. This clipboard path has not been exercised on the owner's clipboard.
+- `paste`: `format: "text"` only; inserts the text exactly as `type_text` does.
+  The clipboard is neither read nor changed.
 - `perform_secondary_action`: only a name listed on that node, rechecked live;
   the live node must still carry the same name (including its label) under the
   same action id, otherwise `STALE_ELEMENT`.
@@ -292,7 +283,7 @@ mid-call interruption and lock transition remain owner acceptance tasks.
 ## Validation and limits
 
 `npm run test:android` runs production-core logic on a host JVM. It also runs the
-engine's own decision code (identity, input paths, clipboard, scrolling, batches,
+engine's own decision code (identity, input paths, scrolling, batches,
 shutdown, idle stop, agent-display start) against a scripted phone, and the
 launcher against a local fake adb. Tests include a real normalized fixture tree from the PGBM10,
 the AOSP documentation's published two-finger evdev trace, and synthetic edge
@@ -323,20 +314,19 @@ injected volume-up events while the fixture explicitly routes keys to media; it
 reads back every increment. The owner completed the initial OEM installation
 confirmation; subsequent streamed fixture installs succeeded without UI input.
 
-Known unverified boundaries include OEM clipboard policy for unrelated custom
-editors, coordinate drag/long press, custom secondary actions, custom/WebView
+Known unverified boundaries include custom editors that ignore accessibility
+set-text, coordinate drag/long press, custom secondary actions, custom/WebView
 trees, secure
 screenshot behavior, orientation changes, physical stop and EOF during blocked
-Binder calls. The fixture suite covers Unicode set_value, keyboard-path
-`type_text` with ASCII and Chinese text, indexed clicks and
+Binder calls. The fixture suite covers Unicode set_value, `type_text` with ASCII
+and Chinese text, indexed clicks and
 scrolls, back, popup/stale guards, local waits, injected-volume exclusion and idle EOF. Polling cannot detect a window
 that appears and disappears entirely between observations. System UI windows use
 platform window types; OEM dialogs presented as activities can be reported as
 `app_switched` instead of `system_dialog`.
 
 Remaining milestone 2 risks are OEM task reuse for single-task apps, permission
-activities, display lock transitions, coordinate gestures, clipboard behavior,
-and restoration when a task moves itself after display release. Virtual-display
+activities, display lock transitions, coordinate gestures, and restoration when a task moves itself after display release. Virtual-display
 windows, screenshots, display-targeted input, IME locality, APP_IN_USE_BY_PERSON,
 stop, EOF and configurable idle were accepted only with the fixture on this
 PGBM10.
