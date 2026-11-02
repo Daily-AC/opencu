@@ -293,8 +293,6 @@ public final class Core {
     final String key;
     final List<String> parts = new ArrayList<>();
     int left = Integer.MAX_VALUE, top = Integer.MAX_VALUE, right = Integer.MIN_VALUE, bottom = Integer.MIN_VALUE;
-    /** The row's own size when the scrolled element's edge cuts it; 0 when it is whole. */
-    int fullWidth, fullHeight;
 
     Row(String key) {
       this.key = key;
@@ -310,10 +308,6 @@ public final class Core {
       right = Math.max(right, e.right);
       bottom = Math.max(bottom, e.bottom);
     }
-
-    boolean cut() {
-      return fullHeight > 0;
-    }
   }
 
   /**
@@ -327,7 +321,7 @@ public final class Core {
     return out;
   }
 
-  /** {@link #rows} with each row's bounds and, when a parent's edge cuts it, its own size. */
+  /** {@link #rows} with each row's bounds. */
   static List<Row> rowList(Screen s, Element scope) {
     Map<String, Row> rows = new LinkedHashMap<>();
     String prefix = scope == null ? "" : scope.path + "/";
@@ -344,22 +338,11 @@ public final class Core {
       Row row = rows.get(key);
       if (row == null) rows.put(key, row = new Row(key));
       row.cover(e);
-      if (scope != null && e.path.equals(key) && !key.equals(scope.path) && e.clipped()) {
-        row.fullWidth = e.fullWidth;
-        row.fullHeight = e.fullHeight;
-      }
       String part = rowPart(e);
       if (!part.isEmpty()) row.parts.add(part);
     }
     List<Row> out = new ArrayList<>();
-    for (Row row : rows.values()) {
-      int[] size = scope == null || row.key.equals(scope.path) ? null : s.clipped.get(row.key);
-      if (size != null && row.fullHeight == 0) {
-        row.fullWidth = size[0];
-        row.fullHeight = size[1];
-      }
-      if (!row.parts.isEmpty()) out.add(row);
-    }
+    for (Row row : rows.values()) if (!row.parts.isEmpty()) out.add(row);
     return out;
   }
 
@@ -374,35 +357,20 @@ public final class Core {
   }
 
   /**
-   * The rows a multi-page scroll passes over, kept whole. A row that the scrolled element's edge
-   * cuts is a fragment: an accessibility page moves exactly one viewport, so a row across the
-   * boundary is cut on both pages, its two parts are joined into one row when they fit together
-   * (same own size; their visible parts add up to it). A fragment of a row shown whole on the
-   * neighbouring page is dropped, and the fragment the first page shows of the row before it.
-   * The result lists rows top to bottom (left to right), whichever way the pages went.
+   * The rows a multi-page scroll passed over, by one rule in both directions: every distinct row
+   * seen on the starting page and the pages after it, but none of the final page (the state shown
+   * below the list). A row that touches the scrolled element's edge across its axis may be cut
+   * (ColorOS reports such a row with clipped bounds and without the children outside the list):
+   * it is left out when all its parts are in another row seen during the call, the final page's
+   * included, and kept otherwise, so a row cut on every page it showed on is not lost. Rows are
+   * listed top to bottom (left to right), whichever way the pages went.
    */
   public static final class Passed {
     private final boolean backward, vertical;
-    /** Rows in the order the pages met them. */
-    private final List<Met> met = new ArrayList<>();
-    /** The row the last page cut at its leading edge, where the next page continues. */
-    private Row pending;
-    /** The whole rows of the last page. */
-    private List<Row> previous = new ArrayList<>();
-    private boolean first = true;
-
-    /** A row met on a page, and whether it touched the list's edge there (and may be cut). */
-    private static final class Met {
-      final String text;
-      final List<String> parts;
-      final boolean edge;
-
-      Met(String text, List<String> parts, boolean edge) {
-        this.text = text;
-        this.parts = parts;
-        this.edge = edge;
-      }
-    }
+    /** Rows in the order the pages met them, their parts, and where they were seen. */
+    private final List<String> met = new ArrayList<>();
+    private final Map<String, List<String>> parts = new HashMap<>();
+    private final Set<String> cut = new HashSet<>(), whole = new HashSet<>();
 
     public Passed(String direction) {
       backward = direction.equals("u") || direction.equals("l");
@@ -411,41 +379,37 @@ public final class Core {
 
     /** Takes the rows of a page that was then scrolled past. */
     public void page(Screen s, Element scope) {
-      take(s, scope, true);
+      List<Row> rows = rowList(s, scope);
+      if (backward) Collections.reverse(rows); // in the order the pages travel
+      for (Row r : rows) {
+        String text = r.text();
+        if (!parts.containsKey(text)) {
+          met.add(text);
+          parts.put(text, r.parts);
+        }
+        if (atEdge(r, scope)) cut.add(text);
+        else whole.add(text);
+      }
     }
 
-    /**
-     * The rows passed over, top to bottom (left to right), given the final page (the state shown
-     * below the list) or null. Rows of the final page are left out, whichever way the pages went.
-     * A row that touched the list's edge may be cut (ColorOS reports a cut row with its clipped
-     * bounds only, and without the children outside the list): it is left out when every part of
-     * it is in another listed or final row, the row it is part of, and kept otherwise, so a row
-     * cut on every page it showed on is not lost.
-     */
+    /** The rows passed over, given the final page (or null when there is none). */
     public List<String> finish(Screen s, Element scope) {
-      List<Row> last = new ArrayList<>();
-      if (s != null) {
-        take(s, scope, false);
-        last = rowList(s, scope);
-      } else if (pending != null) met.add(new Met(pending.text(), pending.parts, true));
-      pending = null;
-      Map<String, Met> unique = new LinkedHashMap<>();
-      for (Met m : met) unique.putIfAbsent(m.text, m);
-      Set<String> shown = new HashSet<>();
-      List<List<String>> all = new ArrayList<>();
-      for (Row r : last) {
-        shown.add(r.text());
-        all.add(r.parts);
-      }
-      for (Met m : unique.values()) all.add(m.parts);
+      Set<String> last = new HashSet<>();
+      List<List<String>> seen = new ArrayList<>(parts.values());
+      if (s != null)
+        for (Row r : rowList(s, scope)) {
+          last.add(r.text());
+          seen.add(r.parts);
+        }
       List<String> rows = new ArrayList<>();
-      for (Met m : unique.values()) {
-        if (shown.contains(m.text)) continue;
+      for (String text : met) {
+        if (last.contains(text)) continue;
+        List<String> own = parts.get(text);
         boolean part = false;
-        if (m.edge)
-          for (List<String> other : all)
-            if (other.size() > m.parts.size() && other.containsAll(m.parts)) part = true;
-        if (!part) rows.add(m.text);
+        if (cut.contains(text) && !whole.contains(text))
+          for (List<String> other : seen)
+            if (other.size() > own.size() && other.containsAll(own)) part = true;
+        if (!part) rows.add(text);
       }
       if (backward) Collections.reverse(rows);
       return rows;
@@ -462,59 +426,6 @@ public final class Core {
           ? r.top <= scope.top + 2 || r.bottom >= scope.bottom - 2
           : r.left <= scope.left + 2 || r.right >= scope.right - 2;
     }
-
-    private void take(Screen s, Element scope, boolean record) {
-      List<Row> rows = rowList(s, scope);
-      if (backward) Collections.reverse(rows); // in the order the pages travel
-      Row lead = null, trail = null;
-      List<Row> whole = new ArrayList<>();
-      for (Row r : rows) {
-        boolean atStart = scope != null && r.cut() && (vertical ? r.top <= scope.top + 2 : r.left <= scope.left + 2),
-            atEnd = scope != null && r.cut() && (vertical ? r.bottom >= scope.bottom - 2 : r.right >= scope.right - 2);
-        boolean leading = backward ? atStart : atEnd, trailing = backward ? atEnd : atStart;
-        if (leading && !trailing) lead = r;
-        else if (trailing && !leading && trail == null) trail = r;
-        else whole.add(r);
-      }
-      List<Met> here = new ArrayList<>();
-      if (pending != null) {
-        if (trail != null && joins(pending, trail)) {
-          List<String> parts = join(pending, trail);
-          here.add(new Met(String.join(" | ", parts), parts, false));
-          trail = null;
-        } else if (!within(pending, whole)) here.add(new Met(pending.text(), pending.parts, true));
-      }
-      if (trail != null && !first && !within(trail, previous))
-        here.add(new Met(trail.text(), trail.parts, true));
-      if (record) for (Row r : whole) here.add(new Met(r.text(), r.parts, atEdge(r, scope)));
-      met.addAll(here);
-      pending = lead;
-      previous = whole;
-      first = false;
-    }
-
-    /** Whether {@code a}, cut on one page, and {@code b}, cut on the next, are one row's two parts. */
-    private boolean joins(Row a, Row b) {
-      int full = vertical ? a.fullHeight : a.fullWidth;
-      int shown = vertical ? (a.bottom - a.top) + (b.bottom - b.top) : (a.right - a.left) + (b.right - b.left);
-      return full > 0
-          && Math.abs(full - (vertical ? b.fullHeight : b.fullWidth)) <= 2
-          && Math.abs(full - shown) <= 6;
-    }
-
-    /** The parts of one row's two pieces in reading order, without a part both show. */
-    private List<String> join(Row earlier, Row later) {
-      Row first = backward ? later : earlier, second = backward ? earlier : later;
-      List<String> parts = new ArrayList<>(first.parts);
-      for (String p : second.parts) if (!parts.contains(p)) parts.add(p);
-      return parts;
-    }
-
-    /** Whether a whole row of {@code rows} shows every part of the fragment {@code r}. */
-    private static boolean within(Row r, List<Row> rows) {
-      for (Row w : rows) if (w.parts.containsAll(r.parts)) return true;
-      return false;
-    }
   }
 
   /** The labelled list of distinct rows a multi-page scroll passed over, or "" when there are none. */
@@ -530,7 +441,7 @@ public final class Core {
             .append(rows.size())
             .append(" distinct rows, ")
             .append(order)
-            .append("; the final page is the state below):\n");
+            .append("; the final page is in the state below, not here):\n");
     int shown = 0;
     for (String row : rows) {
       if (shown == PASSED_ROWS) break;
@@ -615,15 +526,6 @@ public final class Core {
         focusable,
         enabled = true,
         password;
-    /** The node's own size (its bounds in its parent), or 0 when unknown; bounds are clipped. */
-    public int fullWidth, fullHeight;
-
-    /** Whether less of the node is visible than its own size: a parent's edge cuts it. */
-    public boolean clipped() {
-      return fullHeight > 0
-          && (bottom - top + 2 < fullHeight || right - left + 2 < fullWidth);
-    }
-
     /** A range element (slider, rating, progress) and its RangeInfo bounds and value. */
     public boolean ranged;
     public float min, max, current;
@@ -819,8 +721,6 @@ public final class Core {
     public boolean keyboard, truncated;
     public final List<Window> windows = new ArrayList<>();
     public final Map<Integer, Element> elements = new LinkedHashMap<>();
-    /** Visible nodes cut by a parent's edge, also those without an element: path to own size. */
-    public final Map<String, int[]> clipped = new HashMap<>();
     /** Drawing order among its siblings, by tree path, for nodes that report one. */
     public final Map<String, Integer> order = new HashMap<>();
 

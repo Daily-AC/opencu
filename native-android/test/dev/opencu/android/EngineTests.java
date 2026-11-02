@@ -3160,7 +3160,9 @@ public final class EngineTests {
         for (String line : out.substring(header).split("\n"))
           if (line.startsWith("- ")) rows.add(line.substring(2));
         List<String> expected = new ArrayList<>();
-        for (int i = down ? 0 : 4; i <= (down ? 7 : 11); i++) expected.add(alarms.time(i) + " | " + alarms.label(i));
+        // Round 4: no joining of cut pieces; the row across the page boundary keeps its time only.
+        for (int i = down ? 0 : 4; i <= (down ? 7 : 11); i++)
+          expected.add(i == (down ? 4 : 7) ? alarms.time(i) : alarms.time(i) + " | " + alarms.label(i));
         require(rows.equals(expected), "rows " + rows + " expected " + expected);
       });
 
@@ -3896,5 +3898,33 @@ public final class EngineTests {
       require(!out.contains("WARNING"), "false warning: " + out.split("\n")[0]);
     });
 
+    // Item 2: "- 19:55 | 14:39 | 响一次 | 关闭 [not checked]" joined two different recycled rows.
+    test("cut pieces of two different rows are never joined into one summary row", () -> {
+      CutListScene alarms = new CutListScene(12, 1250);
+      alarms.node.actions.remove(UP); // up is swiped, 700 px a page
+      ScriptedEngine engine = ScriptedEngine.create(alarms.scene);
+      int[] lifts = {0};
+      engine.onObserve = n -> {
+        long ups = engine.events.stream().filter(e -> e.action == 1).count();
+        for (; lifts[0] < ups; lifts[0]++) alarms.layout(Math.max(0, alarms.offset - 700));
+      };
+      engine.read();
+      String out = text(engine.call("scroll", args("element_index", 1, "direction", "up", "pages", 2)));
+      for (String line : out.split("\n"))
+        require(!(line.startsWith("- ") && line.matches(".*[0-9]{2}:[0-9]{2}.*[0-9]{2}:[0-9]{2}.*")),
+            "a row joined from two rows: " + line);
+    });
+
+    // Item 3: one rule in both directions, stated in the header.
+    test("the passed-over header says the final page is in the state below, not in the list", () -> {
+      ListScene rows = new ListScene(DOWN);
+      rows.node.effects.put(DOWN, () -> rows.show(rows.offset + 2));
+      ScriptedEngine engine = ScriptedEngine.create(rows.scene);
+      engine.read();
+      String out = text(engine.call("scroll", args("element_index", 1, "direction", "down", "pages", 3)));
+      require(out.contains("Passed over while scrolling (6 distinct rows, top to bottom; the final page is in the state below, not here):"),
+          "header: " + out.split("\n")[1]);
+      require(!out.contains("\n- Row 7\n") && !out.contains("\n- Row 8\n"), "final page rows listed: " + out);
+    });
   }
 }

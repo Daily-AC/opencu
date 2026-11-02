@@ -178,8 +178,8 @@ public final class Protocol {
         "scroll",
         "Scroll an observed Android element (a list, a row in it, a wheel picker), or from x,y in"
             + " pixels of the latest screenshot image. pages (up to 20, default 1): one call with"
-            + " pages >1 returns every row passed over, whole and top to bottom, then the final"
-            + " page, so read a whole list in one call, not page by page. It stops early at the end"
+            + " pages >1 returns every row passed over, top to bottom, and the final page as the"
+            + " state, so read a whole list in one call, not page by page. It stops early at the end"
             + " and every early stop says how many pages moved and why. Indexed scrolling uses the"
             + " element's own scroll action, else its scrolling parent's, else a touch swipe that"
             + " never crosses a picker or slider. On a wheel, down is the next value; set_value"

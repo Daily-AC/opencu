@@ -963,8 +963,6 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     }
     Element e = element(n, path, w.id);
     if (e.right <= 0 || e.left >= s.width || e.bottom <= 0 || e.top >= s.height) e.visible = false;
-    if (e.visible && e.right > e.left && e.bottom > e.top && e.clipped())
-      s.clipped.put(path, new int[] {e.fullWidth, e.fullHeight});
     int order = n.getDrawingOrder();
     if (order > 0) s.order.put(path, order);
     if (e.useful()) {
@@ -995,11 +993,6 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     e.top = b.top;
     e.right = b.right;
     e.bottom = b.bottom;
-    // Screen bounds are clipped to the parents; bounds in the parent keep the node's own size.
-    Rect own = new Rect();
-    n.getBoundsInParent(own);
-    e.fullWidth = Math.max(0, own.right - own.left);
-    e.fullHeight = Math.max(0, own.bottom - own.top);
     e.visible = n.isVisibleToUser();
     e.clickable = n.isClickable();
     e.longClickable = n.isLongClickable();

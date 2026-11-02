@@ -231,19 +231,20 @@ captured in their place.
   pages scrolled; there may be more: scroll again to go further.`
   When more than one page was requested, the result lists the rows on the pages
   scrolled past, after the notice and before the state, under `Passed over while
-  scrolling (N distinct rows, top to bottom; the final page is the state below):`
-  (`left to right` for a horizontal list), in list order whichever way the pages
-  went. Each row joins the text, descriptions and checked state inside one child
-  of the scrolled element. Rows the final state shows are left out, whichever way
-  the pages went. A row that touches the scrolled element's top or bottom (left or
-  right) edge may be cut: ColorOS reports such a row with clipped bounds and
+  scrolling (N distinct rows, top to bottom; the final page is in the state below,
+  not here):` (`left to right` for a horizontal list). One rule holds in both
+  directions: every distinct row seen on the starting page and the pages after it,
+  in list order, and none of the final page. Each row joins the text,
+  descriptions and checked state inside one child of the scrolled element. A row
+  that touches the scrolled element's top or bottom (left or right) edge on every
+  page it showed on may be cut: ColorOS reports such a row with clipped bounds and
   without the children outside the list (on the PGBM10, `06:45` alone where the
   whole row is `06:45 | 响一次 | 关闭 [not checked]`). It is left out when all its
-  parts are in another listed row or a row of the final state, and kept otherwise,
-  so a row cut on every page it showed on is not lost. Where Android does keep a
-  cut row's own size (its bounds in its parent), the two parts of a row across a
-  page boundary are also joined into one. A wheel lists the values it passed, one
-  per page. Rows are distinct, at most 200 rows of at most 200
+  parts are in another row seen during the call, the final page's included, and
+  kept otherwise, so a row cut on every page it showed on is not lost. Pieces of
+  cut rows are never joined: recycled rows made joined pieces of two different
+  alarms on the device. A wheel lists the values it passed, one per page. Rows are
+  distinct, at most 200 rows of at most 200
   characters, and password fields are left out. One call can therefore read a
   long list.
 - `press_key`: back, home, enter/Return, delete/backspace, tab, recents/app_switch,
@@ -514,9 +515,8 @@ fallbacks (an enclosing element's action and the touch swipe), wheel-picker
 paging, the stable final-state wait and set-progress (host checks only so far),
 and from the second PGBM10 round (host checks modelled on the device's nodes,
 not yet run on the phone): `set_value` stepping a wheel, the swipe lanes that
-avoid settable elements and the value-change warning, whole rows in the
-passed-over list (which relies on a node's bounds in its parent keeping its own
-size), taps that avoid covering elements (which use the reported drawing order),
+avoid settable elements and the value-change warning, taps that avoid covering
+elements (which use the reported drawing order),
 the launcher's `DEVICE_UNAVAILABLE`, the label cache's effect on memory and the
 agent display's portrait size while display 0 is turned,
 custom/WebView trees, secure
