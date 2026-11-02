@@ -28,7 +28,10 @@ bin/opencu android --serial SERIAL
 ```
 
 `ANDROID_SDK_ROOT` also works; `OPENCU_ANDROID_BUILD_TOOLS` can select another
-installed toolchain. No dependencies are downloaded by the build. The build bakes
+installed toolchain. The engine and fixture compile against `android-34`'s
+`android.jar` as the boot class path (with build-tools' `core-lambda-stubs.jar`,
+at Java language level 8), so `java.*` resolves to Android's classes and a Java
+API that Android lacks fails the build rather than the phone. No dependencies are downloaded by the build. The build bakes
 `package.json`'s version into the Java classes. The fixture APK and throwaway
 signing key stay under ignored `.build/android/`.
 
