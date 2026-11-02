@@ -514,6 +514,123 @@ public final class EngineTests {
       require(calls[0] == 0, "backend was called");
     });
 
+    test("element identity requires the same window and bounds within 6 px", () -> {
+      Scene scene = new Scene();
+      Element spec = scene.add("/0", "Button", "button", "Confirm", 10, 100, 110, 150);
+      Element old = scene.screen().elements.get(1);
+      Element replacement = copy(old);
+      replacement.window = old.window + 1;
+      Element moved = copy(old);
+      moved.top += 300;
+      moved.bottom += 300;
+      Element jitter = copy(old);
+      jitter.left += 3;
+      require(!old.same(replacement), "different window accepted");
+      require(!old.same(moved), "300 px movement accepted");
+      require(old.same(jitter), "3 px jitter rejected");
+      require(spec.same(old), "identical element rejected");
+    });
+
+    test("index is stale after a same-looking element arrives in a replacement window", () -> {
+      Scene scene = new Scene();
+      scene.add("/0", "android.widget.Button", "confirm", "Confirm", 10, 100, 110, 150).clickable = true;
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      engine.read();
+      scene.activity = PKG + "/.Replacement";
+      scene.window = 8;
+      scene.specs.get(0).window = 8;
+      Failure f = failure(() -> engine.call("click", args("element_index", 1)));
+      require(f.code.equals("STALE_ELEMENT"), f.code + ": " + f.getMessage());
+      require(engine.log.isEmpty() && engine.events.isEmpty(), "input sent: " + engine.log);
+    });
+
+    test("index is stale after the element moved 300 px on the main display", () -> {
+      Scene scene = new Scene();
+      Element button = scene.add("/0", "android.widget.Button", "confirm", "Confirm", 10, 100, 110, 150);
+      button.clickable = true;
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      engine.read();
+      button.top += 300;
+      button.bottom += 300;
+      Failure f = failure(() -> engine.call("click", args("element_index", 1)));
+      require(f.code.equals("STALE_ELEMENT"), f.code + ": " + f.getMessage());
+      require(engine.log.isEmpty(), "input sent: " + engine.log);
+    });
+
+    test("indexed click taps the live element after a whole-window settle on a virtual display", () -> {
+      Scene scene = new Scene();
+      scene.display = 5;
+      scene.add("/0", "android.widget.TextView", "", "Title", 0, 0, 1080, 100);
+      Element button = scene.add("/1", "android.widget.Button", "ok", "OK", 100, 200, 300, 260);
+      button.clickable = true;
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      set(engine, "activeDisplay", 5);
+      engine.read();
+      for (Element e : scene.specs) {
+        e.top += 120;
+        e.bottom += 120;
+      }
+      engine.call("click", args("element_index", 2));
+      require(engine.log.contains("shell /system/bin/input -d 5 tap 200 350"), "tap: " + engine.log);
+    });
+
+    test("one element moving alone on a virtual display is stale", () -> {
+      Scene scene = new Scene();
+      scene.display = 5;
+      scene.add("/0", "android.widget.TextView", "", "Title", 0, 0, 1080, 100);
+      Element button = scene.add("/1", "android.widget.Button", "ok", "OK", 100, 200, 300, 260);
+      button.clickable = true;
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      set(engine, "activeDisplay", 5);
+      engine.read();
+      button.top += 120;
+      button.bottom += 120;
+      Failure f = failure(() -> engine.call("click", args("element_index", 2)));
+      require(f.code.equals("STALE_ELEMENT"), f.code + ": " + f.getMessage());
+      require(engine.log.isEmpty(), "input sent: " + engine.log);
+    });
+
+    test("stale-element errors never include node text", () -> {
+      Scene scene = new Scene();
+      Element secret = scene.add("/0", "android.widget.EditText", "pin", "SYNTHETIC-SECRET-ONLY", 0, 100, 1080, 200);
+      secret.password = true;
+      secret.editable = true;
+      secret.clickable = true;
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      engine.read();
+      secret.text = "SYNTHETIC-CHANGED";
+      Failure f = failure(() -> engine.call("click", args("element_index", 1)));
+      require(f.code.equals("STALE_ELEMENT"), f.code);
+      require(!f.getMessage().contains("SYNTHETIC"), "diagnostic disclosed text: " + f.getMessage());
+    });
+
+    test("secondary action whose label changed under the same id is not performed", () -> {
+      Scene scene = new Scene();
+      Element row = scene.add("/0", "android.widget.LinearLayout", "row", "Message", 0, 100, 1080, 300);
+      row.actions.put("action_16777217:Archive", 16777217);
+      FakeNode node = scene.node(row).with(16777217);
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      engine.read();
+      row.actions.clear();
+      row.actions.put("action_16777217:Delete permanently", 16777217);
+      Failure f =
+          failure(() -> engine.call(
+              "perform_secondary_action", args("element_index", 1, "action", "action_16777217:Archive")));
+      require(f.code.equals("STALE_ELEMENT"), f.code + ": " + f.getMessage());
+      require(node.performed.isEmpty(), "performed " + node.performed);
+    });
+
+    test("unchanged secondary action is performed once", () -> {
+      Scene scene = new Scene();
+      Element row = scene.add("/0", "android.widget.LinearLayout", "row", "Message", 0, 100, 1080, 300);
+      row.actions.put("action_16777217:Archive", 16777217);
+      FakeNode node = scene.node(row).with(16777217);
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      engine.read();
+      engine.call("perform_secondary_action", args("element_index", 1, "action", "action_16777217:Archive"));
+      require(node.performed.equals(List.of(16777217)), "performed " + node.performed);
+    });
+
     if (!failures.isEmpty()) {
       System.out.println("Android engine host checks failed: " + failures);
       System.exit(1);

@@ -632,6 +632,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
   private Element element(AccessibilityNodeInfo n, String path, int window) {
     Element e = new Element();
     e.window = window;
+    e.display = activeDisplay;
     e.path = path;
     e.clazz = str(n.getClassName());
     e.text = str(n.getText());
@@ -671,25 +672,29 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     return e;
   }
 
-  private AccessibilityNodeInfo live(Element old, Screen now) {
+  /** The live element that {@code old} (from {@code before}) still names in {@code now}. */
+  private Element live(Element old, Screen before, Screen now) {
     if (old == null)
       throw fail("STALE_ELEMENT", "Element index was not in the last returned state");
-    for (Element e : now.elements.values())
-      if (old.same(e)) {
-        if (!e.enabled) throw fail("ELEMENT_DISABLED", "Element is disabled");
-        return nodes.get(e.index);
-      }
-    String detail = "";
-    if (old != null) {
-      for (Element candidate : now.elements.values()) {
-        if (old.id.equals(candidate.id) && old.clazz.equals(candidate.clazz)) {
-          detail = " old=" + old.path + "/" + old.text + "/" + old.left + "," + old.top
-              + " current=" + candidate.path + "/" + candidate.text + "/" + candidate.left + "," + candidate.top;
-          break;
-        }
-      }
+    Element e = Core.live(before, old, now);
+    if (e != null && nodes.get(e.index) != null) {
+      if (!e.enabled) throw fail("ELEMENT_DISABLED", "Element is disabled");
+      return e;
     }
-    throw fail("STALE_ELEMENT", "Observed element changed class, text/id, path or bounds; nothing sent" + detail);
+    // Diagnostics carry structure and geometry only, never node text.
+    String detail = "";
+    for (Element candidate : now.elements.values())
+      if (old.id.equals(candidate.id) && old.clazz.equals(candidate.clazz)) {
+        detail =
+            " old=" + old.path + " window " + old.window + " at " + old.left + "," + old.top
+                + " current=" + candidate.path + " window " + candidate.window + " at "
+                + candidate.left + "," + candidate.top;
+        break;
+      }
+    throw fail(
+        "STALE_ELEMENT",
+        "Observed element changed activity, window, class, text/id, path or bounds; nothing sent"
+            + detail);
   }
 
   private Screen readReady(String pkg, long token, boolean inputCall) {
@@ -1206,10 +1211,11 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
           unexpected.equals("app_switched") ? "APP_SWITCHED" : "POPUP",
           "Screen changed since observation: " + unexpected);
     AccessibilityNodeInfo n = null;
-    Element old = null;
+    Element old = null, target = null;
     if (args.containsKey("element_index")) {
       old = base.elements.get(((Number) args.get("element_index")).intValue());
-      n = live(old, now);
+      target = live(old, base, now);
+      n = nodes.get(target.index);
     }
     checkTarget(token, pkg);
     switch (method) {
@@ -1218,9 +1224,9 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
           int count = ((Number) args.getOrDefault("click_count", 1)).intValue();
           double seconds = ((Number) args.getOrDefault("duration", 0)).doubleValue();
           if (n != null) {
-            clickElement(n, old, now, pkg, token, count, seconds);
+            clickElement(n, target, now, pkg, token, count, seconds);
           } else {
-            float[] p = n == null ? point(args, "x", "y", cap, now) : center(old, now);
+            float[] p = point(args, "x", "y", cap, now);
             for (int i = 0; i < count; i++) {
               touch(
                   p[0],
@@ -1252,7 +1258,10 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
               Screen current = observe(pkg);
               String changed = Core.stopReason(fence, current, pkg);
               if (changed != null) throw fail("POPUP", "Window changed during scroll: " + changed);
-              if (n != null) n = live(old, current);
+              if (n != null) {
+                target = live(old, base, current);
+                n = nodes.get(target.index);
+              }
             }
             if (n != null) {
               if (!n.isScrollable()) throw fail("ACTION_UNSUPPORTED", "Element is not scrollable");
@@ -1336,9 +1345,15 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
         break;
       case "perform_secondary_action":
         {
-          Integer action = old.actions.get(args.get("action"));
-          if (action == null || !hasAction(n, action))
-            throw fail("ACTION_UNSUPPORTED", "Action was not listed or is no longer available");
+          String name = (String) args.get("action");
+          Integer action = old.actions.get(name);
+          if (action == null)
+            throw fail("ACTION_UNSUPPORTED", "Action was not listed on that element in the latest state");
+          // The name carries the action's label: a reused id with a new meaning is not this action.
+          if (!action.equals(target.actions.get(name)))
+            throw fail("STALE_ELEMENT", "The element's secondary actions changed; nothing sent");
+          if (!hasAction(n, action))
+            throw fail("ACTION_UNSUPPORTED", "Action is no longer available");
           accessibility(n, action, null, pkg, token);
           break;
         }
@@ -1413,7 +1428,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
       check(token, true);
       // Revalidate retained indexes before any implicit foreground change.
       if (args.containsKey("element_index"))
-        live(base.elements.get(((Number) args.get("element_index")).intValue()), observe(pkg));
+        live(base.elements.get(((Number) args.get("element_index")).intValue()), base, observe(pkg));
       activate(pkg, token);
     }
     if (name.equals("run_actions")) return batch(args, pkg, base, cap, token);

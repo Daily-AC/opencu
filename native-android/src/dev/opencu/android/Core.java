@@ -51,7 +51,7 @@ public final class Core {
   }
 
   public static final class Element {
-    public int index, window, left, top, right, bottom;
+    public int index, window, display, left, top, right, bottom;
     public String path = "", clazz = "", text = "", desc = "", id = "", pkg = "";
     public boolean visible = true,
         clickable,
@@ -116,21 +116,64 @@ public final class Core {
       return b.toString();
     }
 
+    /** Same node and same place: display, window, tree path, identity text and bounds within 6 px. */
     public boolean same(Element e) {
+      return sameNode(e) && near(e, 0, 0);
+    }
+
+    /** Same display, window, tree path, package, class, resource id, text and description. */
+    public boolean sameNode(Element e) {
       if (e == null) return false;
       boolean textCompatible = text.equals(e.text)
           || (editable && (text.equals(desc) || e.text.isEmpty() || e.text.equals(desc)));
-      return path.equals(e.path)
+      return display == e.display
+          && window == e.window
+          && path.equals(e.path)
           && pkg.equals(e.pkg)
           && clazz.equals(e.clazz)
           && id.equals(e.id)
           && textCompatible
-          && desc.equals(e.desc)
-          && Math.abs(left - e.left) <= 400
-          && Math.abs(top - e.top) <= 400
-          && Math.abs(right - e.right) <= 400
-          && Math.abs(bottom - e.bottom) <= 400;
+          && desc.equals(e.desc);
     }
+
+    /** Bounds within 6 px of this element's bounds moved by (dx, dy). */
+    boolean near(Element e, int dx, int dy) {
+      return Math.abs(left + dx - e.left) <= 6
+          && Math.abs(top + dy - e.top) <= 6
+          && Math.abs(right + dx - e.right) <= 6
+          && Math.abs(bottom + dy - e.bottom) <= 6;
+    }
+  }
+
+  /**
+   * The live element in {@code now} that {@code old} from {@code before} names, or null. A new
+   * activity invalidates every index. On an owned virtual display a window can move as a whole
+   * while its decoration insets settle; that shift (at most 400 px) is accepted only when every
+   * other element of the same window that is still present moved by the same amount.
+   */
+  public static Element live(Screen before, Element old, Screen now) {
+    if (old == null || !before.activity.equals(now.activity)) return null;
+    for (Element e : now.elements.values()) if (old.same(e)) return e;
+    if (old.display == 0) return null;
+    for (Element e : now.elements.values()) {
+      if (!old.sameNode(e)) continue;
+      int dx = e.left - old.left, dy = e.top - old.top;
+      if (Math.abs(dx) > 400 || Math.abs(dy) > 400 || !old.near(e, dx, dy)) continue;
+      if (windowShifted(before, now, old.window, dx, dy)) return e;
+    }
+    return null;
+  }
+
+  private static boolean windowShifted(Screen before, Screen now, int window, int dx, int dy) {
+    for (Element b : before.elements.values()) {
+      if (b.window != window) continue;
+      for (Element c : now.elements.values())
+        if (b.sameNode(c)) {
+          if (!b.near(c, dx, dy)) return false;
+          break;
+        }
+    }
+    return true;
   }
 
   public static final class Window {
