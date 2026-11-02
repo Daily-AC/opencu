@@ -4375,5 +4375,44 @@ public final class EngineTests {
       String out = text(engine.call("scroll", args("element_index", 1, "direction", "down", "pages", 2)));
       require(out.contains("\n- Today\n") && out.contains("\n- Tomorrow\n"), "headers lost: " + out.substring(0, Math.min(out.length(), 700)));
     });
+
+    // 11: a wheel lost on a later page left no element to read the value from: NullPointerException.
+    test("a multi-page wheel scroll whose wheel is gone on a later page ends with a notice", () -> {
+      WheelScene minute = new WheelScene("minute", 20, 0, 59);
+      minute.delayMs = 0;
+      ScriptedEngine engine = minute.engine();
+      engine.read();
+      IntConsumer wheel = engine.onObserve;
+      long[] changedAt = {0}, lastRead = {0};
+      minute.node.effects.put(FORWARD, () -> {
+        minute.wheels.get(0).step(1);
+        changedAt[0] = android.os.SystemClock.uptimeMillis();
+      });
+      engine.onObserve = n -> {
+        wheel.accept(n);
+        long now = android.os.SystemClock.uptimeMillis();
+        // The read right after a settled step opens the next page: the app has moved on by then.
+        if (changedAt[0] > 0 && now - lastRead[0] < 15 && lastRead[0] - changedAt[0] >= 80)
+          minute.scene.activity = PKG + "/.Next";
+        lastRead[0] = now;
+      };
+      String out = text(engine.call("scroll", args("element_index", 2, "direction", "down", "pages", 3)));
+      require(out.startsWith("Scrolled 1 of 3 pages; the scrolled element was not found"), "notice: " + out.split("\n")[0]);
+    });
+
+    test("an unexpected error after input was sent requires a fresh read", () -> {
+      Scene scene = new Scene();
+      FakeNode editor = focusedEditor(scene, AccessibilityNodeInfo.ACTION_SET_TEXT);
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      engine.read();
+      engine.checkHook = () -> {
+        if (!editor.performed.isEmpty()) throw new IllegalStateException("platform gone");
+      };
+      Failure f = failure(() -> engine.call("set_value", args("element_index", 1, "value", "x")));
+      require(f.code.equals("RUNTIME_ERROR") && f.getMessage().contains("read state"), f.code + ": " + f.getMessage());
+      engine.checkHook = null;
+      Failure next = failure(() -> engine.call("set_value", args("element_index", 1, "value", "y")));
+      require(next.code.equals("OBSERVATION_REQUIRED"), "after an unknown outcome: " + next.code);
+    });
   }
 }

@@ -1960,7 +1960,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
           else if (requested > 1 && !wheelPages)
             addNotice("All " + requested + " pages scrolled; there may be more: scroll again to go further.");
           if (path != null) addNotice("Scrolled with " + path + ".");
-          if (wheelPages)
+          if (wheelPages && scope != null)
             addNotice("Selected value: " + Core.wheelShort(Core.selectedValue(current, scope)) + ".");
           else if (requested > 1)
             passedOver += Core.passedOver(passed.finish(current, scope), passed.order());
@@ -2617,6 +2617,17 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
       if (!statusCall) lastCallAt = SystemClock.uptimeMillis();
       try {
         return dispatch(name, args);
+      } catch (Failure f) {
+        throw f;
+      } catch (RuntimeException e) {
+        // An unexpected error after input was sent is an unknown outcome like any other failure
+        // then: the next input needs a fresh read.
+        coordinates = null;
+        if (sent) observationRequired = true;
+        throw fail(
+            "RUNTIME_ERROR",
+            e.getClass().getSimpleName() + ": " + e.getMessage()
+                + (sent ? "; input may have reached the phone: read state before any further input" : ""));
       } finally {
         if (!statusCall) lastCallAt = SystemClock.uptimeMillis();
         armIdleTimer();
