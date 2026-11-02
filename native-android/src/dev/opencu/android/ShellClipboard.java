@@ -1,7 +1,6 @@
 package dev.opencu.android;
 
 import android.content.ClipData;
-import android.content.Context;
 import android.os.IBinder;
 import android.os.Process;
 import java.lang.reflect.InvocationTargetException;
@@ -43,8 +42,9 @@ final class ShellClipboard {
   private final Method setPrimaryClip;
   private final Method clearPrimaryClip;
 
-  ShellClipboard(Context context) {
-    callerPackage = context.getOpPackageName();
+  /** {@code callerPackage} is the package owning this process's uid, named on every call. */
+  ShellClipboard(String callerPackage) {
+    this.callerPackage = callerPackage;
     Object foundService = null;
     Method read = null, set = null, clear = null;
     try {

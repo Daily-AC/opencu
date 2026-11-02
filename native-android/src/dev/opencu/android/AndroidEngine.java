@@ -108,10 +108,12 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     Class<?> at = Class.forName("android.app.ActivityThread");
     Object activityThread = at.getMethod("systemMain").invoke(null);
     Context system = (Context) at.getMethod("getSystemContext").invoke(activityThread);
-    // Every service and clipboard call below speaks as this context's package.
-    context = serviceContext(system, android.os.Process.myUid());
-    hidden.put("packageContext", context.getOpPackageName());
-    clipboard = new ShellClipboard(context);
+    // Services are called through this package's context; the clipboard is told the package
+    // explicitly, because a package context still reports "android" as its op package.
+    String ownPackage = ownPackage(system, android.os.Process.myUid());
+    context = serviceContext(system, ownPackage);
+    hidden.put("packageContext", ownPackage);
+    clipboard = new ShellClipboard(ownPackage);
     hidden.put("ActivityThread.systemMain/getSystemContext", true);
     taskDisplay = ActivityManager.RunningTaskInfo.class.getField("displayId");
     hidden.put("TaskInfo.displayId", true);
@@ -159,22 +161,25 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
   }
 
   /**
-   * A context that names the package owning {@code uid} to system services. The system context
-   * names package "android", which services such as the display and clipboard reject from the
-   * shell uid.
+   * The package that owns {@code uid}. System services check the caller's package against its
+   * uid; the system context names package "android", which they reject from the shell uid.
    */
-  static Context serviceContext(Context system, int uid) {
+  static String ownPackage(Context system, int uid) {
     String[] packages = system.getPackageManager().getPackagesForUid(uid);
     if (packages == null || packages.length != 1)
       throw fail(
           "PACKAGE_IDENTITY_UNAVAILABLE",
           "Expected exactly one package for uid " + uid + ", found "
               + (packages == null ? "none" : String.join(", ", packages)));
+    return packages[0];
+  }
+
+  /** A context whose package name (as display services read it) is {@code ownPackage}. */
+  static Context serviceContext(Context system, String ownPackage) {
     try {
-      return system.createPackageContext(packages[0], 0);
+      return system.createPackageContext(ownPackage, 0);
     } catch (PackageManager.NameNotFoundException e) {
-      throw fail(
-          "PACKAGE_IDENTITY_UNAVAILABLE", "No context for package " + packages[0] + " of uid " + uid);
+      throw fail("PACKAGE_IDENTITY_UNAVAILABLE", "No context for package " + ownPackage);
     }
   }
 

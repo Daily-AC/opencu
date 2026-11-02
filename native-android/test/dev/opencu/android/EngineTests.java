@@ -676,9 +676,12 @@ public final class EngineTests {
     invoke(engine, "startDesktop", new Class<?>[0]);
   }
 
-  /** A context that records every package identity and service lookup asked of it. */
+  /**
+   * A context that records every package identity and service lookup asked of it. As on the
+   * platform, a package context made from the system context keeps the system's op package.
+   */
   static class FakeContext extends android.content.ContextWrapper {
-    String name;
+    String name, opName;
     android.content.pm.PackageManager packages;
     List<String> asked;
 
@@ -688,7 +691,7 @@ public final class EngineTests {
 
     static FakeContext create(String name, android.content.pm.PackageManager packages, List<String> asked) {
       FakeContext c = allocate(FakeContext.class);
-      c.name = name;
+      c.name = c.opName = name;
       c.packages = packages;
       c.asked = asked;
       return c;
@@ -696,13 +699,13 @@ public final class EngineTests {
 
     @Override
     public String getOpPackageName() {
-      asked.add(name + " getOpPackageName");
-      return name;
+      asked.add("getOpPackageName -> " + opName);
+      return opName;
     }
 
     @Override
     public String getPackageName() {
-      asked.add(name + " getPackageName");
+      asked.add("getPackageName -> " + name);
       return name;
     }
 
@@ -713,13 +716,15 @@ public final class EngineTests {
 
     @Override
     public Object getSystemService(String service) {
-      asked.add(name + " getSystemService " + service);
+      asked.add("getSystemService " + service + " as " + name);
       return null;
     }
 
     @Override
     public android.content.Context createPackageContext(String packageName, int flags) {
-      return create(packageName, packages, asked);
+      FakeContext c = create(packageName, packages, asked);
+      c.opName = opName;
+      return c;
     }
   }
 
@@ -1630,12 +1635,39 @@ public final class EngineTests {
         android.os.Build.VERSION.SDK_INT = 0;
         android.app.ActivityThread.systemContext = null;
       }
-      require(asked.stream().noneMatch(entry -> entry.startsWith("android ")), "system identity reached the platform: " + asked);
-      require(asked.contains("example.shell getOpPackageName"), "uid's package never named: " + asked);
+      require(asked.stream().noneMatch(entry -> entry.endsWith(" android")), "system identity reached the platform: " + asked);
+    });
+
+    test("every clipboard call names the package that owns the engine's uid", () -> {
+      List<String> callers = Collections.synchronizedList(new ArrayList<>());
+      android.content.IClipboard.Stub.installed =
+          new android.content.IClipboard() {
+            public android.content.ClipData getPrimaryClip(String pkg, String tag, int user, int device) {
+              callers.add("read " + pkg);
+              return null;
+            }
+
+            public void setPrimaryClip(android.content.ClipData clip, String pkg, String tag, int user, int device) {
+              callers.add("write " + pkg);
+            }
+
+            public void clearPrimaryClip(String pkg, String tag, int user, int device) {
+              callers.add("clear " + pkg);
+            }
+          };
+      try {
+        ShellClipboard clipboard = ShellClipboard.class.getDeclaredConstructor(String.class).newInstance("example.shell");
+        invoke(clipboard, "read", new Class<?>[0]);
+        clipboard.setPrimaryClip(android.content.ClipData.newPlainText("label", "text"));
+        clipboard.clearPrimaryClip();
+      } finally {
+        android.content.IClipboard.Stub.installed = null;
+      }
+      require(callers.equals(List.of("read example.shell", "write example.shell", "clear example.shell")), "calls " + callers);
     });
 
     test("the engine refuses a uid that does not map to exactly one package", () -> {
-      Method derive = AndroidEngine.class.getDeclaredMethod("serviceContext", android.content.Context.class, int.class);
+      Method derive = AndroidEngine.class.getDeclaredMethod("ownPackage", android.content.Context.class, int.class);
       derive.setAccessible(true);
       for (UidPackages packages : List.of(UidPackages.of(2000), UidPackages.of(2000, "example.one", "example.two"))) {
         FakeContext system = FakeContext.create("android", packages, new ArrayList<>());
@@ -1649,8 +1681,7 @@ public final class EngineTests {
         require(f.code.equals("PACKAGE_IDENTITY_UNAVAILABLE"), f.code);
       }
       FakeContext system = FakeContext.create("android", UidPackages.of(2000, "example.shell"), new ArrayList<>());
-      android.content.Context derived = (android.content.Context) derive.invoke(null, system, 2000);
-      require(derived.getOpPackageName().equals("example.shell"), "derived " + derived.getOpPackageName());
+      require("example.shell".equals(derive.invoke(null, system, 2000)), "derived package");
     });
 
     if (!failures.isEmpty()) {
