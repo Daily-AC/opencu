@@ -416,6 +416,11 @@ public final class EngineTests {
       return shellHook == null ? "" : shellHook.run(args);
     }
 
+    // Not annotated: older engines lack this hook and simply never call it.
+    boolean displayInputAvailable() {
+      return true;
+    }
+
     @Override
     boolean hasAction(AccessibilityNodeInfo n, int id) {
       return ((FakeNode) n).actions.contains(id);
@@ -672,6 +677,56 @@ public final class EngineTests {
       Failure f = failure(() -> engine.call("click", args("element_index", 1)));
       require(f.code.equals("OBSERVATION_REQUIRED"), f.code);
       require(engine.log.isEmpty(), "input sent: " + engine.log);
+    });
+
+    test("a tap whose input tool started and failed is never repeated as an accessibility click", () -> {
+      Scene scene = new Scene();
+      Element button = scene.add("/0", "android.widget.Button", "submit", "Submit", 100, 200, 300, 260);
+      button.clickable = true;
+      FakeNode node = scene.node(button).with(AccessibilityNodeInfo.ACTION_CLICK);
+      node.clickable = true;
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      engine.shellHook = tap -> AndroidEngine.command("/bin/sh", "-c", "exit 7");
+      engine.read();
+      Failure f = failure(() -> engine.call("click", args("element_index", 1)));
+      require(f.code.equals("ACTION_UNCONFIRMED"), f.code + ": " + f.getMessage());
+      require(node.performed.isEmpty(), "replayed as " + node.performed);
+      Failure next = failure(() -> engine.call("click", args("element_index", 1)));
+      require(next.code.equals("OBSERVATION_REQUIRED"), "after unknown outcome: " + next.code);
+    });
+
+    test("a tap whose input tool could not start falls back and says why", () -> {
+      Scene scene = new Scene();
+      Element button = scene.add("/0", "android.widget.Button", "submit", "Submit", 100, 200, 300, 260);
+      button.clickable = true;
+      FakeNode node = scene.node(button).with(AccessibilityNodeInfo.ACTION_CLICK);
+      node.clickable = true;
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      engine.shellHook = tap -> AndroidEngine.command("/nonexistent/opencu-host-input");
+      engine.read();
+      Map<String, Object> result = engine.call("click", args("element_index", 1));
+      require(node.performed.equals(List.of(AccessibilityNodeInfo.ACTION_CLICK)), "click " + node.performed);
+      require(text(result).contains("could not start"), "no reason: " + text(result).split("\n")[0]);
+    });
+
+    test("type_text without a focused editor sends nothing", () -> {
+      Scene scene = new Scene();
+      Element first = scene.add("/0", "android.widget.EditText", "first", "", 0, 100, 1080, 200);
+      Element second = scene.add("/1", "android.widget.EditText", "second", "", 0, 300, 1080, 400);
+      first.editable = second.editable = true;
+      for (Element e : List.of(first, second)) {
+        FakeNode n = scene.node(e).with(AccessibilityNodeInfo.ACTION_PASTE, AccessibilityNodeInfo.ACTION_SET_TEXT,
+            AccessibilityNodeInfo.ACTION_FOCUS);
+        n.editable = true;
+      }
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      engine.read();
+      long started = System.nanoTime();
+      Failure f = failure(() -> engine.call("type_text", args("text", "hello")));
+      require(f.code.equals("NO_FOCUSED_ELEMENT"), f.code + ": " + f.getMessage());
+      require(engine.events.isEmpty() && engine.log.isEmpty(), "input sent: " + engine.log);
+      for (FakeNode n : scene.nodes) require(n.performed.isEmpty(), "performed " + n.performed);
+      require(System.nanoTime() - started < 2_000_000_000L, "waited for a focus nobody requested");
     });
 
     if (!failures.isEmpty()) {

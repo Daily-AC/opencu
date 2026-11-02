@@ -836,6 +836,8 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
 
   private void touch(float x, float y, float tx, float ty, long duration, String pkg, long token) {
     checkTarget(token, pkg);
+    if (!displayInputAvailable())
+      throw fail("INPUT_UNAVAILABLE", "display-targeted touch injection is unavailable");
     long down = SystemClock.uptimeMillis();
     boolean pressed = false;
     try {
@@ -892,9 +894,24 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     actionConfirmed(via.injectInputEvent(event, true));
   }
 
+  private static final Method SET_DISPLAY_ID = displayIdSetter();
+
+  private static Method displayIdSetter() {
+    try {
+      return InputEvent.class.getMethod("setDisplayId", int.class);
+    } catch (Exception e) {
+      return null;
+    }
+  }
+
+  /** Whether events can carry a display id; checked before the first event of a gesture. */
+  boolean displayInputAvailable() {
+    return SET_DISPLAY_ID != null;
+  }
+
   private void setEventDisplay(InputEvent event, int display) {
     try {
-      InputEvent.class.getMethod("setDisplayId", int.class).invoke(event, display);
+      SET_DISPLAY_ID.invoke(event, display);
     } catch (Exception e) {
       throw fail("INPUT_UNAVAILABLE", "Android did not expose display-targeted input");
     }
@@ -959,10 +976,12 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
   private void clickElement(
       AccessibilityNodeInfo node, Element target, Screen state, String pkg, long token, int count, double seconds) {
     settleAfterInput(token);
-    if (touchPossible(target, state)) {
+    String unavailable = touchPossible(target, state) ? null : "its centre is covered or off-screen";
+    if (unavailable == null) {
       float[] point = center(target, state);
+      int i = 0;
       try {
-        for (int i = 0; i < count; i++) {
+        for (; i < count; i++) {
           if (count == 1 && seconds == 0) shellTap(point[0], point[1], pkg, token);
           else
             touch(
@@ -978,33 +997,55 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
         if (target.editable) waitForElementFocus(target, pkg, token);
         return;
       } catch (Failure e) {
-        if (!e.code.equals("INPUT_UNAVAILABLE")) throw e;
+        // INPUT_UNAVAILABLE is raised only before a touch starts; a touch that may have been
+        // delivered is never repeated another way.
+        if (!e.code.equals("INPUT_UNAVAILABLE") || i > 0) throw e;
+        unavailable = e.getMessage();
       }
     }
     if (!node.isClickable() && !hasAction(node, AccessibilityNodeInfo.ACTION_CLICK))
-      throw fail("INPUT_UNAVAILABLE", "A touch cannot reach this element and it has no click action");
+      throw fail(
+          "INPUT_UNAVAILABLE",
+          "A touch cannot reach this element (" + unavailable + ") and it has no click action");
     accessibility(node, AccessibilityNodeInfo.ACTION_CLICK, null, pkg, token);
-    notice = "Touch unavailable; used accessibility click fallback.";
+    notice = "Touch unavailable (" + unavailable + "); used accessibility click fallback.";
   }
 
   private void shellTap(float x, float y, String pkg, long token) {
     checkTarget(token, pkg);
-    sent = true;
+    String[] tap =
+        activeDisplay == Display.DEFAULT_DISPLAY
+            ? new String[] {"/system/bin/input", "tap", Integer.toString(Math.round(x)), Integer.toString(Math.round(y))}
+            : new String[] {
+              "/system/bin/input",
+              "-d",
+              String.valueOf(activeDisplay),
+              "tap",
+              Integer.toString(Math.round(x)),
+              Integer.toString(Math.round(y))
+            };
     try {
-      if (activeDisplay == Display.DEFAULT_DISPLAY)
-        shell(
-            "/system/bin/input", "tap", Integer.toString(Math.round(x)), Integer.toString(Math.round(y)));
-      else
-        shell(
-            "/system/bin/input",
-            "-d",
-            String.valueOf(activeDisplay),
-            "tap",
-            Integer.toString(Math.round(x)),
-            Integer.toString(Math.round(y)));
+      shell(tap);
+      sent = true;
+    } catch (IOException notStarted) {
+      // The process never started, so nothing reached the phone.
+      throw fail("INPUT_UNAVAILABLE", "the platform input tool could not start");
+    } catch (Failure f) {
+      if (f.code.equals("ENGINE_STOPPING")) throw f;
+      throw unconfirmed("platform input tool: " + f.getMessage());
     } catch (Exception e) {
-      throw fail("INPUT_UNAVAILABLE", "Android shell tap failed: " + e.getMessage());
+      throw unconfirmed("the platform input tool was interrupted");
     }
+  }
+
+  /** The input may have been delivered: never repeat it, and require a fresh read. */
+  private Failure unconfirmed(String why) {
+    sent = true;
+    observationRequired = true;
+    return fail(
+        "ACTION_UNCONFIRMED",
+        "Input may have been delivered (" + why + "). Outcome unknown; read state and do not repeat"
+            + " automatically.");
   }
 
   private void waitForElementFocus(Element target, String pkg, long token) {
@@ -1027,47 +1068,9 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
   private AccessibilityNodeInfo focused(Screen s) {
     for (Element e : s.elements.values())
       if (e.focused && e.editable && e.pkg.equals(s.target)) return nodes.get(e.index);
-    throw fail("NO_FOCUSED_ELEMENT", "No focused editable field in target app");
-  }
-
-  private AccessibilityNodeInfo focusedReady(Screen initial, String pkg, long token) {
-    Screen current = initial;
-    long deadline = SystemClock.uptimeMillis() + 6000;
-    boolean touched = false;
-    while (true) {
-      try {
-        return focused(current);
-      } catch (Failure e) {
-        if (!e.code.equals("NO_FOCUSED_ELEMENT")) throw e;
-        if (SystemClock.uptimeMillis() >= deadline) {
-          Element editable =
-              current.elements.values().stream()
-                  .filter(element -> element.editable && element.pkg.equals(pkg))
-                  .findFirst()
-                  .orElse(null);
-          AccessibilityNodeInfo node = editable == null ? null : nodes.get(editable.index);
-          if (node != null && (sent = true) && node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)) {
-            check(token, false);
-            return node;
-          }
-          throw e;
-        }
-        if (!touched) {
-          Element editable =
-              current.elements.values().stream()
-                  .filter(element -> element.editable && element.pkg.equals(pkg))
-                  .findFirst()
-                  .orElse(null);
-          if (editable != null) {
-            float[] point = center(editable, current);
-            touch(point[0], point[1], point[0], point[1], 45, pkg, token);
-            touched = true;
-          }
-        }
-        pause(100, token);
-        current = observe(pkg);
-      }
-    }
+    throw fail(
+        "NO_FOCUSED_ELEMENT",
+        "No focused editable field in target app; click the intended field first. Nothing sent");
   }
 
   private void setText(AccessibilityNodeInfo n, String value, String pkg, long token) {
@@ -1109,6 +1112,8 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
         throw fail("INVALID_ARGUMENT", "Unsupported Android key");
     }
     checkTarget(token, pkg);
+    if (!displayInputAvailable())
+      throw fail("INPUT_UNAVAILABLE", "display-targeted key injection is unavailable");
     long down = SystemClock.uptimeMillis();
     boolean pressed = false, completed = false;
     try {
@@ -1325,7 +1330,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
         break;
       case "type_text":
         {
-          n = focusedReady(now, pkg, token);
+          n = focused(now);
           String value = (String) args.get("text");
           String expected = expectedText(n, value);
           keyboardInputFailure = "";
