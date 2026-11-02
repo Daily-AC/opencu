@@ -190,11 +190,13 @@ public final class Core {
     return out;
   }
 
-  /** The selected value a wheel shows: its text, else its range value; null when it shows none. */
+  /**
+   * The selected value a wheel shows: its text; null when it shows none. A range element without
+   * text (a slider without set-progress) is no wheel.
+   */
   public static String wheelValue(Element e) {
-    if (e.password) return null;
-    if (!e.text.isEmpty()) return e.text;
-    return e.ranged ? Element.number(e.current) : null;
+    if (e.password || e.text.isEmpty()) return null;
+    return e.text;
   }
 
   private static final Pattern DIGITS = Pattern.compile("[0-9]+");

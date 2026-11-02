@@ -1967,7 +1967,8 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
             token);
         break;
       case "set_value":
-        Element wheel = enclosingWheel(target, now);
+        // An editor's value is its text: it is never stepped as a wheel around it.
+        Element wheel = target.editable ? null : enclosingWheel(target, now);
         if (wheel != null) setWheel(wheel, now, (String) args.get("value"), fence, pkg, token);
         else setValue(n, target, (String) args.get("value"), pkg, token);
         break;
@@ -2046,22 +2047,27 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
   static final long WHEEL_STEP_MS = 1_000, WHEEL_SETTLED_MS = 80;
 
   /**
-   * A wheel picker: a single-value element, neither an editor nor a set-progress range, that shows
-   * its selected value as its own text (or a range value), offers its own generic scroll actions
-   * to step it, and is focusable or has a row inside it showing that same text (the selected row
-   * of a ColorOS picker, between the rows before and after it).
+   * A wheel picker: a single-value element, neither an editor, a web view nor a set-progress range,
+   * that shows its selected value as its own text, offers its own generic scroll actions to step
+   * it, holds nothing editable and no web view (a page or a form that scrolls, whatever its title),
+   * and is focusable or has a row inside it showing that same text (the selected row of a ColorOS
+   * picker, between the rows before and after it).
    */
   private boolean isWheel(Element e, Screen s) {
     AccessibilityNodeInfo n = e == null ? null : nodes.get(e.index);
     if (n == null
         || e.editable
+        || e.clazz.contains("WebView")
         || Core.wheelValue(e) == null
         || !(hasAction(n, FORWARD) || hasAction(n, BACKWARD))
         || hasAction(n, android.R.id.accessibilityActionSetProgress)) return false;
-    if (e.focusable) return true;
-    for (Element c : s.elements.values())
-      if (c.window == e.window && c.path.startsWith(e.path + "/") && c.text.equals(e.text)) return true;
-    return false;
+    boolean row = false;
+    for (Element c : s.elements.values()) {
+      if (c.window != e.window || !c.path.startsWith(e.path + "/")) continue;
+      if (c.editable || c.clazz.contains("WebView")) return false;
+      if (c.text.equals(e.text)) row = true;
+    }
+    return e.focusable || row;
   }
 
   /** {@code e} when it is a wheel picker, else the wheel picker enclosing it (a row of it), or null. */

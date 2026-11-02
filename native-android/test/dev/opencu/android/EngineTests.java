@@ -2880,6 +2880,7 @@ public final class EngineTests {
     fourthDeviceRound();
     fifthDeviceRound();
     sixthDeviceRound();
+    releaseReview();
 
     if (!failures.isEmpty()) {
       System.out.println("Android engine host checks failed: " + failures);
@@ -4064,5 +4065,31 @@ public final class EngineTests {
       for (String line : out.substring(header).split("\n")) if (line.startsWith("- ")) rows.add(line.substring(2));
       return rows;
     }
+  }
+
+  /** Checks for what the review before release (9a55b46..d2a9dbc) found. */
+  static void releaseReview() {
+    // 1: a web view with a title, scroll actions and focus was taken for a wheel.
+    test("a web view is never a wheel, and set_value on an editor in it sets its text", () -> {
+      Scene scene = new Scene();
+      Element page = scene.add("/0", "android.webkit.WebView", "", "Search - Example", 0, 156, 1080, 2244);
+      page.focusable = page.scrollable = true;
+      page.actions.put("scroll_forward", FORWARD);
+      page.actions.put("scroll_backward", BACKWARD);
+      FakeNode pageNode = scene.node(page).with(FORWARD, BACKWARD);
+      pageNode.scrollable = true;
+      Element field = scene.add("/0/3", "android.widget.EditText", "index-kw", "", 40, 400, 1040, 520);
+      field.editable = true;
+      FakeNode fieldNode = scene.node(field).with(AccessibilityNodeInfo.ACTION_SET_TEXT);
+      fieldNode.editable = true;
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      engine.read();
+      engine.call("set_value", args("element_index", 2, "value", "opencu"));
+      require(fieldNode.setTexts.equals(List.of("opencu")) && pageNode.performed.isEmpty(),
+          "set-text " + fieldNode.setTexts + ", page actions " + pageNode.performed);
+      engine.read();
+      Failure f = failure(() -> engine.call("set_value", args("element_index", 1, "value", "3")));
+      require(f.code.equals("VALUE_NOT_SETTABLE") && pageNode.performed.isEmpty(), f.code + " " + pageNode.performed);
+    });
   }
 }
