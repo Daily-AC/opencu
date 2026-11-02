@@ -75,6 +75,16 @@ A fatal error prints exactly one stderr line `CODE: detail`, where the code is
 class and message folded to one line of at most 300 characters. It never contains
 screen or clipboard content. `doctor` also returns that line as `error`.
 
+When the phone or its adb transport is gone, the computer-side launcher (`bin/opencu
+android`) ends with its own coded stderr line, so a host does not report an engine
+fault: `DEVICE_UNAVAILABLE: adb cannot reach the phone SERIAL (adb's reason); …`.
+Before launch it ends `the engine was not started and nothing was sent`. When the
+adb connection ends while the engine runs (the launch exits with an error and adb
+no longer reports the phone as `device`), it says the connection ended while the
+engine was running and that a call in progress may or may not have reached the
+phone, so state must be read before any further input. Restoring adb is up to the
+person or host; a new connection never clears a person's stop.
+
 The Java server implements newline-delimited JSON-RPC 2.0 MCP: `initialize`,
 `notifications/initialized`, `tools/list` (opaque pagination cursor), `tools/call`
 and `ping`. Unknown methods use `-32601`; invalid params use `-32602`. Tool errors

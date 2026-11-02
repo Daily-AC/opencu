@@ -128,3 +128,32 @@ test('Android build rejects Java APIs that Android lacks', () => {
     assert.match(r.stderr,/cannot find symbol[\s\S]*ProcessHandle/);
   } finally { rmSync(dir,{recursive:true,force:true}); }
 });
+
+// Second device round, item 6a: a dropped adb connection read as ENGINE_START_FAILED.
+test('Android launcher reports DEVICE_UNAVAILABLE when adb finds no phone, before anything is sent', () => {
+  const r=launchWithFakeAdb({});
+  assert.notEqual(r.status,0);
+  assert.doesNotMatch(r.stdout,/launched/);
+  assert.match(r.stderr.trim().split('\n').pop(),/^DEVICE_UNAVAILABLE: adb cannot reach the phone \(error: no devices\/emulators found\); the engine was not started and nothing was sent$/);
+});
+
+test('Android launcher reports DEVICE_UNAVAILABLE for an offline phone, before anything is sent', () => {
+  const r=launchWithFakeAdb({FAKE_ADB_OFFLINE:'1',FAKE_ADB_STAT:'2000 644 regular file'},['--serial','phone-1']);
+  assert.notEqual(r.status,0);
+  assert.doesNotMatch(r.stdout,/launched/);
+  assert.match(r.stderr.trim().split('\n').pop(),/^DEVICE_UNAVAILABLE: adb cannot reach the phone phone-1 \(error: device offline\); the engine was not started/);
+});
+
+test('Android launcher reports DEVICE_UNAVAILABLE when the connection drops while the engine runs', () => {
+  const r=launchWithFakeAdb({FAKE_ADB_SERIAL:'phone-1',FAKE_ADB_STAT:'2000 644 regular file',FAKE_ADB_LAUNCH_EXIT:'255',FAKE_ADB_STATE_AFTER_LAUNCH:'offline'});
+  assert.notEqual(r.status,0);
+  assert.match(r.stdout,/"launched"/);
+  assert.match(r.stderr.trim().split('\n').pop(),/^DEVICE_UNAVAILABLE: adb cannot reach the phone phone-1 \(error: device offline\); the connection ended while the engine was running; a call in progress may or may not have reached the phone/);
+  for(const call of r.calls.slice(1))assert.deepEqual(call.slice(0,2),['-s','phone-1'],JSON.stringify(call));
+});
+
+test('Android launcher adds no device line when the engine fails on a reachable phone', () => {
+  const r=launchWithFakeAdb({FAKE_ADB_SERIAL:'phone-1',FAKE_ADB_STAT:'2000 644 regular file',FAKE_ADB_LAUNCH_EXIT:'1'});
+  assert.equal(r.status,1);
+  assert.doesNotMatch(r.stderr,/DEVICE_UNAVAILABLE/);
+});

@@ -113,7 +113,13 @@ An on-phone elevation host can execute
 unchanged. Stdin EOF exits the engine; stdout contains only MCP JSON lines and
 stderr carries diagnostics. A fatal error is one stderr line `CODE: detail`
 (for example `UNSUPPORTED_PLATFORM: …` or `ENGINE_START_FAILED: …`), at most 300
-characters after the code and without screen or clipboard content. Keep one connection per agent session; never
+characters after the code and without screen or clipboard content. When the phone
+or its adb transport is gone, `bin/opencu android` ends with
+`DEVICE_UNAVAILABLE: adb cannot reach the phone SERIAL (reason); …` as its last
+stderr line instead: `the engine was not started and nothing was sent` before
+launch, or, when the connection ended while the engine ran, that a call in progress
+may or may not have reached the phone. Relay that line as the call's error (not as
+`ENGINE_START_FAILED`), and treat a call that was in progress as an unknown outcome. Keep one connection per agent session; never
 reconnect to clear `USER_STOPPED`. The physical triple-volume-down stop is also
 sent as `notifications/message`, whose `params.data` contains the Linux-style
 `{event:"stop",error:{code:"USER_STOPPED",...}}` payload. Hosts must latch it even
