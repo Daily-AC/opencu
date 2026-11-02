@@ -116,3 +116,15 @@ test('Android engine never uses the clipboard', () => {
     assert.doesNotMatch(source,/ClipData|ClipDescription|ClipboardManager|IClipboard|CLIPBOARD_SERVICE|ACTION_PASTE|PrimaryClip|"clipboard"/,file);
   }
 });
+
+import { javacAndroidArgs } from '../scripts/android-toolchain.mjs';
+test('Android build rejects Java APIs that Android lacks', () => {
+  const dir=mkdtempSync(path.join(os.tmpdir(),'opencu-api-probe-'));
+  try {
+    // ProcessHandle exists in the host JDK but not on Android.
+    writeFileSync(path.join(dir,'Probe.java'),'class Probe { long pid() { return ProcessHandle.current().pid(); } }\n');
+    const r=spawnSync(path.join(java,'bin/javac'),[...javacAndroidArgs,'-d',dir,path.join(dir,'Probe.java')],{encoding:'utf8'});
+    assert.notEqual(r.status,0,'a Java API missing on Android compiled with the build arguments');
+    assert.match(r.stderr,/cannot find symbol[\s\S]*ProcessHandle/);
+  } finally { rmSync(dir,{recursive:true,force:true}); }
+});

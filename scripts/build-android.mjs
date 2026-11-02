@@ -2,23 +2,14 @@
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync, readdirSync, existsSync, rmSync } from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { buildTools as bt, androidJar as android, lambdaStubs, javacAndroidArgs as javacAndroid } from './android-toolchain.mjs';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
-const sdk=process.env.ANDROID_HOME??process.env.ANDROID_SDK_ROOT??path.join(os.homedir(),'Library/Android/sdk');
 const java=process.env.JAVA_HOME??'/opt/homebrew/opt/openjdk@21';
-const bt=path.join(sdk,'build-tools',process.env.OPENCU_ANDROID_BUILD_TOOLS??'36.1.0');
-const android=path.join(sdk,'platforms/android-34/android.jar');
 const build=path.join(root,'.build/android');mkdirSync(build,{recursive:true});
 function run(exe,args){const r=spawnSync(exe,args,{cwd:root,stdio:'inherit',env:{...process.env,JAVA_HOME:java}});if(r.error)throw r.error;if(r.status!==0)throw new Error(`${exe} exited ${r.status}`);}
-// Compile against Android's own classes, java.* included: android.jar is the boot class path, so
-// a JDK API that Android lacks fails the build instead of the phone. core-lambda-stubs.jar (from
-// build-tools, as the Android Gradle plugin uses it) only lets javac emit lambdas, which d8
-// desugars. JDK 21 accepts a custom boot class path only at language level 8.
-const lambdaStubs=path.join(bt,'core-lambda-stubs.jar');
-const javacAndroid=['-source','8','-target','8','-Xlint:-options','-bootclasspath',[android,lambdaStubs].join(path.delimiter),'-extdirs','','-encoding','UTF-8'];
 function sources(dir){return readdirSync(dir,{recursive:true}).filter(x=>x.endsWith('.java')).map(x=>path.join(dir,x));}
-for(const file of [android,path.join(bt,'core-lambda-stubs.jar'),path.join(bt,'d8'),path.join(bt,'aapt2'),path.join(java,'bin/javac')])if(!existsSync(file))throw new Error(`Missing ${file}; install the documented Android SDK/JDK toolchain`);
+for(const file of [android,lambdaStubs,path.join(bt,'d8'),path.join(bt,'aapt2'),path.join(java,'bin/javac')])if(!existsSync(file))throw new Error(`Missing ${file}; install the documented Android SDK/JDK toolchain`);
 for(const dir of ['engine-classes','engine-dex','fixture-classes','fixture-dex','generated']){rmSync(path.join(build,dir),{recursive:true,force:true});mkdirSync(path.join(build,dir),{recursive:true});}
 const version=JSON.parse(readFileSync(path.join(root,'package.json'),'utf8')).version;
 writeFileSync(path.join(build,'generated/BuildInfo.java'),`package dev.opencu.android; public final class BuildInfo { public static final String VERSION = ${JSON.stringify(version)}; }\n`);
