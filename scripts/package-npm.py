@@ -2,7 +2,7 @@
 """Stage and pack the macOS npm package from a release-signed build; never publishes.
 
 Build first with the release identity (OPENCU_RELEASE_P12 and OPENCU_RELEASE_P12_PASSWORD set), then:
-  python3 scripts/package-npm.py            -> dist/npm/opencu-<version>.tgz
+  python3 scripts/package-npm.py            -> dist/npm/z10-opencu-<version>.tgz
 npm installs carry no quarantine attribute, so the self-signed app runs; grants survive upgrades only
 while every release is signed with the same certificate (RELEASE_LEAF).
 """
@@ -14,6 +14,8 @@ import subprocess
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 # SHA-1 of the release certificate (FILES_OPENCU_RELEASE_SIGNING in the vault, created 2026-10-28).
 RELEASE_LEAF = "39ea47165e18879da6b5eb3dfe5a8440705c7f99"
+# npm refused the bare name "opencu" as too close to the unrelated "open-cu" (2026-11-02).
+NPM_NAME = "@z10/opencu"
 STAGE = ROOT / ".build/npm-stage"
 OUT = ROOT / "dist/npm"
 
@@ -39,7 +41,7 @@ def main():
     for name in ["LICENSE", "README.md"]:
         shutil.copy2(ROOT / name, STAGE / name)
     package = {
-        "name": root["name"], "version": root["version"], "description": root["description"],
+        "name": NPM_NAME, "version": root["version"], "description": root["description"],
         "type": "module", "license": root["license"],
         "bin": {"opencu": "bin/opencu"},
         "dependencies": root["dependencies"], "engines": root["engines"],

@@ -31,7 +31,7 @@ a handful of real tasks. Read [Limitations](limitations.md) before relying on it
 ## Install
 
 ```sh
-npm install -g opencu
+npm install -g @z10/opencu
 opencu setup
 opencu doctor
 ```

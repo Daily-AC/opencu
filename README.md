@@ -71,7 +71,7 @@ curl -fsSL https://github.com/Daily-AC/opencu/releases/latest/download/install.s
 **macOS** · Apple silicon, macOS 14 or later, Node.js 22+
 
 ```sh
-npm install -g opencu
+npm install -g @z10/opencu
 opencu setup    # grant Accessibility and Screen Recording once
 ```
 

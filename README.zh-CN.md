@@ -63,7 +63,7 @@ curl -fsSL https://github.com/Daily-AC/opencu/releases/latest/download/install.s
 **macOS** · Apple 芯片，macOS 14 及以上，需要 Node.js 22+
 
 ```sh
-npm install -g opencu
+npm install -g @z10/opencu
 opencu setup    # 授予一次「辅助功能」和「录屏」权限
 ```
 
