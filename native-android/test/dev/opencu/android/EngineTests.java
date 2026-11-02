@@ -470,7 +470,40 @@ public final class EngineTests {
         } catch (Exception e) {
           throw new RuntimeException(e);
         }
+      if (launcherLabels != null) return super.resolve(name);
       return name;
+    }
+
+    /** Launcher labels by package when a check resolves labels; label loads and releases counted. */
+    Map<String, String> launcherLabels;
+    int labelLoads, releases;
+
+    // Not annotated: older engines lack these hooks.
+    List<android.content.pm.ResolveInfo> launchables(android.content.pm.PackageManager pm) {
+      List<android.content.pm.ResolveInfo> out = new ArrayList<>();
+      for (String pkg : launcherLabels.keySet()) {
+        android.content.pm.ResolveInfo r = allocate(android.content.pm.ResolveInfo.class);
+        r.activityInfo = allocate(android.content.pm.ActivityInfo.class);
+        r.activityInfo.packageName = pkg;
+        r.activityInfo.name = pkg + ".Main";
+        r.activityInfo.applicationInfo = allocate(android.content.pm.ApplicationInfo.class);
+        r.activityInfo.applicationInfo.sourceDir = "/data/app/" + pkg + "/base.apk";
+        out.add(r);
+      }
+      return out;
+    }
+
+    CharSequence loadLabel(android.content.pm.ResolveInfo r, android.content.pm.PackageManager pm) {
+      labelLoads++;
+      return launcherLabels.get(r.activityInfo.packageName);
+    }
+
+    void releaseResources() {
+      releases++;
+    }
+
+    int[] displaySize(int displayId) {
+      return new int[] {scene.width, scene.height};
     }
 
     @Override
@@ -3245,6 +3278,33 @@ public final class EngineTests {
       order.put("/1", 1);
       require(Boolean.FALSE.equals(callStatic("drawnAbove", types, b, a, s)), "drawn first is below");
       require(Boolean.TRUE.equals(callStatic("drawnAbove", types, a, b, s)), "drawn last is above");
+    });
+
+    // Item 4: right after agent_desktop start the engine held 110 MB of mapped APKs from labels.
+    test("launcher labels load once per engine and their APK resources are released right after", () -> {
+      ScriptedEngine engine = ScriptedEngine.create(new Scene());
+      engine.launcherLabels = new LinkedHashMap<>();
+      for (int i = 0; i < 20; i++) engine.launcherLabels.put("example.app" + i, "App " + i);
+      engine.launcherLabels.put("example.clock", "Clock");
+      set(engine, "context", FakeContext.create("example.shell", UidPackages.of(2000, "example.shell"), new ArrayList<>()));
+      require("example.clock".equals(engine.resolve("clock")), "resolved");
+      require(engine.labelLoads == 21, "labels loaded " + engine.labelLoads);
+      require(engine.releases == 2, "releases " + engine.releases); // after 16 and at the end
+      require("example.clock".equals(engine.resolve("Clock")), "resolved again");
+      require(engine.labelLoads == 21 && engine.releases == 2,
+          "second lookup loaded " + engine.labelLoads + " labels, released " + engine.releases);
+    });
+
+    test("agent_desktop status no longer lists every launchable app", () -> {
+      Scene scene = new Scene();
+      ScriptedEngine engine = onAgentDisplay(scene);
+      engine.launcherLabels = new LinkedHashMap<>();
+      engine.launcherLabels.put("example.clock", "Clock");
+      set(engine, "ownedDisplay", new TestDisplay(5, ISOLATED));
+      String out = text(engine.call("agent_desktop", obj("action", "status")));
+      require(out.contains("\"started\":true") && out.contains("\"width\":1080"), "status: " + out);
+      require(!out.contains("\"apps\"") && !out.contains("Clock"), "status lists apps: " + out);
+      require(engine.labelLoads == 0, "labels loaded " + engine.labelLoads);
     });
 
     // Item 2d: the PGBM10's ColorOS time picker, as its nodes were read on the device.

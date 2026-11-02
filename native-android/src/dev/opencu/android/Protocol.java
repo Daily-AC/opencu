@@ -31,7 +31,7 @@ public final class Protocol {
           + " the main display's portrait size and density; while it is started all app tools target that"
           + " display and the person's main display is never activated. An app already in front on"
           + " the main display returns APP_IN_USE_BY_PERSON. agent_desktop status reports the flags"
-          + " obtained, size, apps and idle time; stop it when finished. The display stops after"
+          + " obtained, size and idle time; stop it when finished. The display stops after"
           + " five minutes without calls and the next app call returns AGENT_DESKTOP_IDLE_STOPPED."
           + " Main-display touches do not stop agent-display work, but physical volume-down stop"
           + " still latches USER_STOPPED. A locked or screen-off phone refuses agent input with"
@@ -316,9 +316,9 @@ public final class Protocol {
     add(
         "agent_desktop",
         "Start, stop or inspect the Android agent workspace. start is idempotent and creates a"
-            + " virtual display matching the main display. All app tools then read and inject on"
-            + " that display; status reports display id, size, obtained trusted/own-focus flags,"
-            + " apps and the idle deadline. stop releases it without finishing its tasks. A person"
+            + " portrait virtual display like the main display. All app tools then read and inject on"
+            + " that display; status reports display id, size, obtained trusted/own-focus flags"
+            + " and the idle deadline. stop releases it without finishing its tasks. A person"
             + " using the target app on display 0 receives APP_IN_USE_BY_PERSON. Main-display touch"
             + " does not interrupt this workspace; volume-down stop and lock rules still apply.",
         false,

@@ -232,6 +232,12 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     return SystemClock.uptimeMillis();
   }
 
+  /** A display's current size {width, height}; tests substitute the device. */
+  int[] displaySize(int displayId) {
+    Point p = sizeFor(displayId);
+    return new int[] {p.x, p.y};
+  }
+
   private Point sizeFor(int displayId) {
     Display display = displays.getDisplay(displayId);
     if (display == null) throw fail("DISPLAY_UNAVAILABLE", "Display " + displayId + " unavailable");
@@ -704,13 +710,14 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     // Package identifiers are the ordinary host path. Avoid loading every installed
     // application's label/resources just to resolve a package we already know.
     if (name.indexOf('.') > 0 && pm.getLaunchIntentForPackage(name) != null) return name;
-    Intent query = new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER);
-    List<ResolveInfo> apps = pm.queryIntentActivities(query, 0);
     Set<String> matches = new LinkedHashSet<>();
-    for (ResolveInfo r : apps) {
-      if (r.activityInfo.packageName.equals(name)) return name;
-      if (r.loadLabel(pm).toString().equalsIgnoreCase(name))
-        matches.add(r.activityInfo.packageName);
+    try {
+      for (ResolveInfo r : launchables(pm)) {
+        if (r.activityInfo.packageName.equals(name)) return name;
+        if (label(r, pm).equalsIgnoreCase(name)) matches.add(r.activityInfo.packageName);
+      }
+    } finally {
+      releaseLabelResources();
     }
     if (matches.size() > 1)
       throw fail(
@@ -719,6 +726,58 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     if (matches.isEmpty())
       throw fail("APP_NOT_FOUND", "No launchable Android package or label: " + name);
     return matches.iterator().next();
+  }
+
+  /** The launcher activities; tests substitute the device. */
+  List<ResolveInfo> launchables(PackageManager pm) {
+    return pm.queryIntentActivities(
+        new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0);
+  }
+
+  /**
+   * Launcher labels by activity and APK path, so each app's resources are loaded once per engine:
+   * loading a label maps the app's whole APK into this process until the collector frees its
+   * resources (on the PGBM10 about 110 MB for 58 apps). An updated app has a new APK path.
+   */
+  private Map<String, String> labels;
+
+  /** Labels loaded since their resources were last released. */
+  private int unreleasedLabels;
+
+  /** Labels loaded between releases, bounding how many APKs are mapped at once. */
+  static final int LABELS_PER_RELEASE = 16;
+
+  String label(ResolveInfo r, PackageManager pm) {
+    if (labels == null) labels = new HashMap<>();
+    ActivityInfo a = r.activityInfo;
+    String key =
+        a.packageName + "/" + a.name + "|" + (a.applicationInfo == null ? "" : a.applicationInfo.sourceDir);
+    String label = labels.get(key);
+    if (label == null) {
+      label = String.valueOf(loadLabel(r, pm));
+      labels.put(key, label);
+      if (++unreleasedLabels >= LABELS_PER_RELEASE) releaseLabelResources();
+    }
+    return label;
+  }
+
+  /** Loads a launcher label from the app's resources; tests substitute the device. */
+  CharSequence loadLabel(ResolveInfo r, PackageManager pm) {
+    return r.loadLabel(pm);
+  }
+
+  /** After labels were loaded, lets the collector close their resources and unmap their APKs. */
+  private void releaseLabelResources() {
+    if (unreleasedLabels == 0) return;
+    unreleasedLabels = 0;
+    releaseResources();
+  }
+
+  /** Collects and finalizes unreachable objects now; tests substitute it. */
+  void releaseResources() {
+    System.gc();
+    System.runFinalization();
+    System.gc();
   }
 
   private Map<String, Object> apps() {
@@ -736,21 +795,23 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
           displayRunning.add(task.topActivity.getPackageName());
     PackageManager pm = context.getPackageManager();
     Map<String, Object> result = new TreeMap<>();
-    for (ResolveInfo r :
-        pm.queryIntentActivities(
-            new Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0)) {
-      String pkg = r.activityInfo.packageName;
-      result.put(
-          pkg,
-          obj(
-              "label",
-              r.loadLabel(pm).toString(),
-              "package",
-              pkg,
-              "running",
-              desktopDisplay >= 0 ? displayRunning.contains(pkg) : running.contains(pkg),
-              "foreground",
-              pkg.equals(fg)));
+    try {
+      for (ResolveInfo r : launchables(pm)) {
+        String pkg = r.activityInfo.packageName;
+        result.put(
+            pkg,
+            obj(
+                "label",
+                label(r, pm),
+                "package",
+                pkg,
+                "running",
+                desktopDisplay >= 0 ? displayRunning.contains(pkg) : running.contains(pkg),
+                "foreground",
+                pkg.equals(fg)));
+      }
+    } finally {
+      releaseLabelResources();
     }
     return Protocol.textResult(Json.write(result.values()));
   }
@@ -2584,12 +2645,10 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     status.put("started", desktopDisplay >= 0);
     status.put("displayId", desktopDisplay >= 0 ? desktopDisplay : null);
     if (desktopDisplay >= 0) {
-      Point size = size();
-      status.put("width", size.x);
-      status.put("height", size.y);
-      Map<String, Object> appResult = apps();
-      Map<String, Object> appContent = map(list(appResult.get("content")).get(0));
-      status.put("apps", Json.read((String) appContent.get("text")));
+      // No app list: list_apps gives it on request, and its labels map every app's APK.
+      int[] size = displaySize(activeDisplay);
+      status.put("width", size[0]);
+      status.put("height", size[1]);
       status.put(
           "idleMsLeft", Math.max(0, desktopIdleMs - (SystemClock.uptimeMillis() - lastCallAt)));
       status.put(

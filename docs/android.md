@@ -460,7 +460,14 @@ Measured on the PGBM10 over wireless adb (10 samples each):
 | Screenshot read | 763 ms | <=800 ms |
 | Plain indexed batch click step (10 steps) | 232 ms | <=250 ms |
 
-Direct package-name resolution avoids loading other apps' labels. The final
+Direct package-name resolution avoids loading other apps' labels. Loading a
+launcher label maps that app's whole APK into the engine until the collector frees
+its resources: on the PGBM10, the 58 launchable apps' labels held about 110 MB of
+the engine's PSS (188 MB in all) right after `agent_desktop start`, which listed
+every app. The engine therefore loads each label once per connection (keyed by
+activity and APK path, so an updated app is read again), runs the collector after
+every 16 newly loaded labels and once at the end, and `agent_desktop` start and
+status no longer list apps (`list_apps` does, on request). The final
 PGBM10 samples and desktop lifecycle evidence are in the committed evidence;
 all required targets passed. Startup includes computer launcher/cache
 verification, wireless adb, MCP initialize and first tools/list answer. The evidence retains every sample and reports target misses without relaxing
