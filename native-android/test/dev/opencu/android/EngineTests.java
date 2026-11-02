@@ -632,6 +632,29 @@ public final class EngineTests {
     }
   }
 
+  static final int FORWARD = AccessibilityNodeInfo.ACTION_SCROLL_FORWARD,
+      BACKWARD = AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD;
+
+  /**
+   * A wheel picker that shows its value as its own text, as time pickers do, with a decoration
+   * child that never changes. It offers only the generic scroll actions.
+   */
+  static final class PickerScene {
+    final Scene scene = new Scene();
+    final Element wheel = scene.add("/0", "android.widget.NumberPicker", "minute", "20", 600, 900, 900, 1500);
+    final Element decoration = scene.add("/0/0", "android.widget.ImageView", "", "", 600, 900, 900, 1000);
+    final FakeNode node;
+
+    PickerScene() {
+      wheel.scrollable = true;
+      wheel.actions.put("scroll_forward", FORWARD);
+      wheel.actions.put("scroll_backward", BACKWARD);
+      decoration.desc = "Wheel edge";
+      node = scene.node(wheel).with(FORWARD, BACKWARD);
+      node.scrollable = true;
+    }
+  }
+
   /** Starts a harmless child JVM that records its pid and sleeps. */
   static String[] sleeper(java.nio.file.Path pidFile) {
     return new String[] {
@@ -1298,6 +1321,57 @@ public final class EngineTests {
       engine.read();
       Map<String, Object> result = engine.call("scroll", args("element_index", 1, "direction", "down"));
       require(rows.node.performed.isEmpty(), "sent " + rows.node.performed);
+      require(text(result).startsWith("Nothing moved"), "notice: " + text(result).split("\n")[0]);
+    });
+
+    test("a wheel picker whose new value shows late counts as moved", () -> {
+      PickerScene picker = new PickerScene();
+      long[] sent = {0};
+      picker.node.effects.put(FORWARD, () -> sent[0] = android.os.SystemClock.uptimeMillis());
+      ScriptedEngine engine = ScriptedEngine.create(picker.scene);
+      // The wheel animates first; its value changes 600 ms after the action.
+      engine.onObserve = n -> {
+        if (sent[0] > 0 && android.os.SystemClock.uptimeMillis() - sent[0] >= 600) picker.wheel.text = "21";
+      };
+      engine.read();
+      Map<String, Object> result = engine.call("scroll", args("element_index", 1, "direction", "down"));
+      require(picker.node.performed.equals(List.of(FORWARD)), "actions " + picker.node.performed);
+      require(!text(result).startsWith("Nothing moved"), "notice: " + text(result).split("\n")[0]);
+    });
+
+    test("a wheel whose only change is the selected item counts as moved", () -> {
+      PickerScene picker = new PickerScene();
+      Element[] items = {
+        picker.scene.add("/0/1", "android.widget.TextView", "", "19", 600, 900, 900, 1100),
+        picker.scene.add("/0/2", "android.widget.TextView", "", "20", 600, 1100, 900, 1300),
+        picker.scene.add("/0/3", "android.widget.TextView", "", "21", 600, 1300, 900, 1500)
+      };
+      items[1].selected = true;
+      picker.node.effects.put(FORWARD, () -> {
+        items[1].selected = false;
+        items[2].selected = true;
+      });
+      ScriptedEngine engine = ScriptedEngine.create(picker.scene);
+      engine.read();
+      Map<String, Object> result = engine.call("scroll", args("element_index", 1, "direction", "down"));
+      require(!text(result).startsWith("Nothing moved"), "notice: " + text(result).split("\n")[0]);
+    });
+
+    test("a list that bounces back at its end has not moved", () -> {
+      ListScene rows = new ListScene(DOWN);
+      long[] bounce = {0};
+      rows.node.effects.put(DOWN, () -> bounce[0] = android.os.SystemClock.uptimeMillis() + 200);
+      ScriptedEngine engine = ScriptedEngine.create(rows.scene);
+      // An overscroll spring: the rows shift and glide back to where they were within 200 ms.
+      engine.onObserve = n -> {
+        int shift = (int) Math.max(0, (bounce[0] - android.os.SystemClock.uptimeMillis()) / 4);
+        rows.first.top = 100 - shift;
+        rows.second.top = 300 - shift;
+      };
+      engine.read();
+      Map<String, Object> result =
+          engine.call("scroll", args("element_index", 1, "direction", "down", "pages", 3));
+      require(rows.node.performed.size() == 1, "pages sent: " + rows.node.performed.size());
       require(text(result).startsWith("Nothing moved"), "notice: " + text(result).split("\n")[0]);
     });
 

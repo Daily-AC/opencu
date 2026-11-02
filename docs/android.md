@@ -131,8 +131,14 @@ captured in their place.
 - `scroll`: observed scrollable element or image point; up/down/left/right and
   short aliases; `pages` (default 1, at most 20) moves further in one call.
   Indexed scrolling uses whole accessibility pages (fractional counts round up).
-  After each page the engine compares the list's content (the screen, for
-  coordinates): a page that did not move ends the call with a notice such as
+  After each page the engine waits for the content to settle and compares it with
+  the content before the page: the scrolled element's own text, description and
+  bounds and those of its descendants, with their selected and checked state (the
+  screen, for coordinates). A wheel picker's new value therefore counts wherever
+  it shows; a change that springs back, such as an overscroll bounce, does not.
+  An accessibility page is watched for 0.9 s before it counts as not moved,
+  because a picker can change its value only after animating, and a page waits at
+  most one second. A page that did not move ends the call with a notice such as
   `Scrolled 3 of 5 pages; reached the end`, or `Nothing moved; the list is at its
   end or does not scroll this way` on the first page; a page whose content changed
   counts even when the accessibility action returned false. Nothing is sent when

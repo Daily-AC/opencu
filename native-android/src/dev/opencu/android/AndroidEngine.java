@@ -1635,7 +1635,10 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
                   ty = Math.max(1, Math.min(now.height - 2, p[1] + dy));
               touch(p[0], p[1], tx, ty, 350, pkg, token);
             }
-            int outcome = scrolled(before, old, base, pkg, token);
+            int outcome =
+                scrolled(
+                    before, old, base, pkg, token,
+                    n != null ? Core.SCROLL_QUIET_ACTION_MS : Core.SCROLL_QUIET_TOUCH_MS);
             if (outcome == 0) break;
             moved++;
             if (outcome == 2) {
@@ -1690,11 +1693,19 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
   }
 
   /**
-   * Waits briefly for a scroll to show. Returns 0 when the scrolled content (or, for coordinates,
-   * the screen) is unchanged, 1 when it changed, 2 when the scrolled element itself changed.
+   * Waits for a scroll page to show and settle, and compares the settled content with {@code
+   * before}. Returns 0 when the scrolled content (or, for coordinates, the screen) ends as it was,
+   * also after a bounce, 1 when it changed, 2 when the scrolled element itself changed. Unchanged
+   * content is watched for {@code quietMs}; changed content until two reads {@link
+   * Core#SCROLL_SETTLED_MS} apart agree. One page waits at most {@link Core#SCROLL_PAGE_MS}, and
+   * never past the batch deadline.
    */
-  private int scrolled(String before, Element old, Screen base, String pkg, long token) {
-    long end = SystemClock.uptimeMillis() + 500;
+  private int scrolled(String before, Element old, Screen base, String pkg, long token, long quietMs) {
+    long start = SystemClock.uptimeMillis(), end = start + Core.SCROLL_PAGE_MS;
+    if (batchDeadline > 0) end = Math.min(end, batchDeadline);
+    String last = before;
+    long since = start;
+    boolean changed = false;
     do {
       pause(40, token);
       Screen after;
@@ -1705,9 +1716,15 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
       }
       Element live = old == null ? null : Core.live(base, old, after);
       if (old != null && live == null) return 2;
-      if (!Core.scrollContent(after, live).equals(before)) return 1;
+      String content = Core.scrollContent(after, live);
+      long now = SystemClock.uptimeMillis();
+      if (!content.equals(last)) {
+        last = content;
+        since = now;
+        changed |= !content.equals(before);
+      } else if (changed ? now - since >= Core.SCROLL_SETTLED_MS : now - start >= quietMs) break;
     } while (SystemClock.uptimeMillis() < end);
-    return 0;
+    return last.equals(before) ? 0 : 1;
   }
 
   void settleAfterInput(long token) {

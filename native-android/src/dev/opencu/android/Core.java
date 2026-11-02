@@ -32,24 +32,42 @@ public final class Core {
   }
 
   /**
-   * What a scroll would change: the scrollable's descendants (path, text, description, bounds), or
-   * its whole window when it exposes none. Without a target, the whole screen.
+   * What a scroll would change: the scrollable itself and its descendants (path, text,
+   * description, bounds, selected and checked state), or its whole window when it exposes no
+   * descendants. A wheel picker's new value therefore counts, wherever it shows. Without a target,
+   * the whole screen.
    */
   public static String scrollContent(Screen s, Element scrollable) {
     if (scrollable == null) return s.fingerprint();
     StringBuilder subtree = new StringBuilder(), window = new StringBuilder();
+    boolean descendants = false;
     for (Element e : s.elements.values()) {
       if (e.window != scrollable.window) continue;
       String line =
-          e.path + "|" + e.text + "|" + e.desc + "|" + e.left + "," + e.top + "," + e.right + "," + e.bottom + "\n";
+          e.path + "|" + e.text + "|" + e.desc + "|" + e.left + "," + e.top + "," + e.right + ","
+              + e.bottom + (e.selected ? "|selected" : "") + (e.checked ? "|checked" : "") + "\n";
       window.append(line);
-      if (e.path.startsWith(scrollable.path + "/")) subtree.append(line);
+      if (e.path.equals(scrollable.path)) subtree.append(line);
+      else if (e.path.startsWith(scrollable.path + "/")) {
+        subtree.append(line);
+        descendants = true;
+      }
     }
-    return subtree.length() > 0 ? subtree.toString() : window.toString();
+    return descendants ? subtree.toString() : window.toString();
   }
 
   /** Time allowed for one scroll page: the action, then waiting for the list to move. */
   public static final long SCROLL_PAGE_MS = 1_000;
+
+  /**
+   * How long a page whose content has not changed is watched before it counts as not moved: an
+   * accessibility scroll can take effect late (a wheel picker animates before its value changes),
+   * a touch moves the content while it is still being sent.
+   */
+  public static final long SCROLL_QUIET_ACTION_MS = 900, SCROLL_QUIET_TOUCH_MS = 500;
+
+  /** Once a page's content changed, how long it must stay unchanged to count as settled. */
+  public static final long SCROLL_SETTLED_MS = 100;
 
   /**
    * The longest a run_actions step can take: its holds, waits, scroll pages and until timeout,
