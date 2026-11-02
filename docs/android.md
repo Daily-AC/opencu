@@ -149,8 +149,9 @@ captured in their place.
   strips, held still before lifting so the list stops where the finger stopped.
   The swipe is ordinary touch input on the active display under the person rules.
   ColorOS lists were seen offering only scroll-forward part-way down, so scrolling
-  up such a list swipes. A swiped page moves about 60% of the visible list, so
-  swiped pages overlap. When a page was not sent by the element's own action, the
+  up such a list swipes. A list at its real start offers no action back either and
+  is swiped too; in an app with pull-to-refresh that swipe can start a refresh. A
+  swiped page moves about 60% of the visible list, so swiped pages overlap. When a page was not sent by the element's own action, the
   result says how it was sent.
   After each page the engine waits for the content to settle and compares it with
   the content before the page: the scrolled element's own text, description and
@@ -167,7 +168,8 @@ captured in their place.
   The scrolled element is followed from page to page even when its tree path,
   bounds or text change (a collapsing toolbar resizes a list and shifts the
   indexes, a wheel shows its next value): it is the same element, or the only one
-  in its window with its class and resource id. A new dialog or foreign window or
+  in its window with its class and resource id that still covers at least half of
+  where it was. A new dialog or foreign window or
   another foreground app still stops the call as `POPUP`; if the element can no
   longer be found (for example in a new activity) the remaining pages are not sent
   and the notice says so, such as `Scrolled 1 of 3 pages; the scrolled element was

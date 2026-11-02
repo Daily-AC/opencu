@@ -60,9 +60,10 @@ public final class Core {
   /**
    * The element of {@code now} that continues {@code prev} (an element of {@code before}) from
    * one scroll page to the next: the same element, or else the only element in its display, window
-   * and package with its class and resource id, or among several such the one at its tree path.
-   * Its path, bounds and text may change (a collapsing toolbar resizes a list, a wheel shows a new
-   * value); a new activity ends it. Null when no single element qualifies.
+   * and package with its class and resource id that still covers at least half of the smaller of
+   * the two areas, or among several such the one at its tree path. Its path, bounds and text may
+   * change (a collapsing toolbar resizes a list, a wheel shows a new value); a new activity ends it.
+   * Null when no single element qualifies.
    */
   public static Element follow(Screen before, Element prev, Screen now) {
     if (prev == null || !before.activity.equals(now.activity)) return null;
@@ -74,7 +75,8 @@ public final class Core {
           || e.window != prev.window
           || !e.pkg.equals(prev.pkg)
           || !e.clazz.equals(prev.clazz)
-          || !e.id.equals(prev.id)) continue;
+          || !e.id.equals(prev.id)
+          || !overlaps(prev, e)) continue;
       count++;
       only = e;
       if (e.path.equals(prev.path)) {
@@ -83,6 +85,16 @@ public final class Core {
       }
     }
     return count == 1 ? only : paths == 1 ? atPath : null;
+  }
+
+  /** Whether the two elements' bounds share at least half of the smaller one's area. */
+  static boolean overlaps(Element a, Element b) {
+    long w = Math.min(a.right, b.right) - Math.max(a.left, b.left),
+        h = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+    if (w <= 0 || h <= 0) return false;
+    long areaA = (long) (a.right - a.left) * (a.bottom - a.top),
+        areaB = (long) (b.right - b.left) * (b.bottom - b.top);
+    return 2 * w * h >= Math.min(areaA, areaB);
   }
 
   /** Most rows a multi-page scroll lists as passed over, and most characters shown per row. */

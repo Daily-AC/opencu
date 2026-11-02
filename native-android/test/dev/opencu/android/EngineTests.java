@@ -1725,6 +1725,25 @@ public final class EngineTests {
           "notice: " + out.split("\n")[0]);
     });
 
+    test("a multi-page scroll never moves on to another list of the same kind elsewhere", () -> {
+      Scene scene = new Scene();
+      Element first = scene.add("/0", "androidx.recyclerview.widget.RecyclerView", "", "", 0, 100, 1080, 1000);
+      Element other = scene.add("/1", "androidx.recyclerview.widget.RecyclerView", "", "", 0, 1100, 1080, 2000);
+      first.scrollable = other.scrollable = true;
+      FakeNode firstNode = scene.node(first).with(DOWN), otherNode = scene.node(other).with(DOWN);
+      firstNode.scrollable = otherNode.scrollable = true;
+      // The first list goes away after its first page, as when a section collapses.
+      firstNode.effects.put(DOWN, () -> {
+        scene.nodes.remove(scene.specs.indexOf(first));
+        scene.specs.remove(first);
+      });
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      engine.read();
+      String out = text(engine.call("scroll", args("element_index", 1, "direction", "down", "pages", 3)));
+      require(otherNode.performed.isEmpty(), "scrolled the other list " + otherNode.performed.size() + " times");
+      require(out.startsWith("Scrolled 1 of 3 pages; the scrolled element was not found"), "notice: " + out.split("\n")[0]);
+    });
+
     test("a wheel picker scrolls one value per page across many pages", () -> {
       PickerScene picker = new PickerScene();
       picker.node.effects.put(FORWARD, () ->
