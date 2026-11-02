@@ -1425,6 +1425,54 @@ public final class EngineTests {
       require(read.code.equals("DISPLAY_UNAVAILABLE"), "read: " + read.code);
     });
 
+    test("a touch before the input monitor is ready still holds off a foreground change", () -> {
+      java.nio.file.Path touched = java.nio.file.Files.createTempFile("opencu-touch", "");
+      java.nio.file.Files.delete(touched);
+      long[] reads = {0};
+      PersonMonitor monitor =
+          new PersonMonitor(
+              notice -> {},
+              () -> {
+                reads[0]++;
+                long now = android.os.SystemClock.uptimeMillis();
+                // The platform's last user activity: the touch, if it has happened yet.
+                return java.nio.file.Files.exists(touched) ? now - 100 : now - 60_000;
+              },
+              new String[] {"/bin/sh", "-c", "touch '" + touched + "'; printf 'add device 1: /dev/input/event1\\n  KEY_VOLUMEDOWN ABS_MT_POSITION_X\\n'"},
+              new String[] {"/bin/sh", "-c", "echo 'add device 1: /dev/input/event1'; exec sleep 30"});
+      try {
+        Person person = monitor.person;
+        Failure f = failure(() -> person.check(person.token(), android.os.SystemClock.uptimeMillis(), true));
+        require(f.code.equals("PERSON_ACTIVE"), f.code);
+        require(reads[0] == 1, "platform activity read " + reads[0] + " times");
+      } finally {
+        monitor.close();
+        java.nio.file.Files.deleteIfExists(touched);
+      }
+    });
+
+    test("a quiet start does not hold off the first foreground change", () -> {
+      PersonMonitor monitor =
+          new PersonMonitor(
+              notice -> {},
+              () -> android.os.SystemClock.uptimeMillis() - 60_000,
+              new String[] {"/bin/sh", "-c", "printf 'add device 1: /dev/input/event1\\n  KEY_VOLUMEDOWN ABS_MT_POSITION_X\\n'"},
+              new String[] {"/bin/sh", "-c", "echo 'add device 1: /dev/input/event1'; exec sleep 30"});
+      try {
+        Person person = monitor.person;
+        person.check(person.token(), android.os.SystemClock.uptimeMillis(), true);
+      } finally {
+        monitor.close();
+      }
+    });
+
+    test("an older platform time never hides a touch the monitor saw", () -> {
+      Person person = new Person(0);
+      person.accept("[ 10.000000] /dev/input/event2: EV_ABS ABS_MT_POSITION_X 00000100", 50_000);
+      invoke(person, "seed", new Class<?>[] {long.class}, 1_000L);
+      require(person.lastActivity == 50_000, "last activity " + person.lastActivity);
+    });
+
     if (!failures.isEmpty()) {
       System.out.println("Android engine host checks failed: " + failures);
       System.exit(1);

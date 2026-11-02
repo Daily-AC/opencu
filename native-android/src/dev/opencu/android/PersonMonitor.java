@@ -25,11 +25,14 @@ final class PersonMonitor implements AutoCloseable {
         new String[] {"/system/bin/getevent", "-lt"});
   }
 
-  /** {@code probe} lists input devices; {@code stream} prints their events (getevent formats). */
+  /**
+   * {@code probe} lists input devices; {@code stream} prints their events (getevent formats).
+   * {@code lastActivity} is read only once the stream is live: a touch before that moment is in
+   * the platform's last-activity time, and any touch after it is seen by the stream.
+   */
   PersonMonitor(
       Consumer<Map<String, Object>> output, LongSupplier lastActivity, String[] probe, String[] stream)
       throws Exception {
-    long initialActivity = lastActivity.getAsLong();
     String capabilities = AndroidEngine.command(probe);
     if (!capabilities.contains("KEY_VOLUMEDOWN") || !capabilities.contains("ABS_MT_POSITION"))
       throw fail(
@@ -41,7 +44,6 @@ final class PersonMonitor implements AutoCloseable {
         new ProcessBuilder(stream)
             .redirectError(ProcessBuilder.Redirect.INHERIT)
             .start();
-    person.lastActivity = initialActivity;
     Set<String> opened = Collections.synchronizedSet(new HashSet<>());
     Thread reader =
         new Thread(
@@ -80,6 +82,7 @@ final class PersonMonitor implements AutoCloseable {
       close();
       throw fail("PERSON_MONITOR_UNAVAILABLE", problem);
     }
+    person.seed(lastActivity.getAsLong());
   }
 
   void check(long token, boolean changingForeground, boolean desktop) {

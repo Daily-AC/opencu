@@ -401,6 +401,14 @@ public final class Core {
       return sequence;
     }
 
+    /**
+     * Seeds the last physical activity from the platform once monitoring is live. It replaces the
+     * conservative start value, but never hides a touch the monitor has already seen.
+     */
+    public synchronized void seed(long platformActivity) {
+      lastActivity = sequence == 0 ? platformActivity : Math.max(lastActivity, platformActivity);
+    }
+
     public synchronized void check(long token, long now, boolean changingForeground) {
       if (stopped)
         throw fail(
