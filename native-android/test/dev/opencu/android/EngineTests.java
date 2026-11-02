@@ -3126,6 +3126,64 @@ public final class EngineTests {
         for (int i = down ? 0 : 3; i <= (down ? 8 : 11); i++) expected.add(alarms.time(i) + " | " + alarms.label(i));
         require(rows.equals(expected), "rows " + rows + " expected " + expected);
       });
+
+    // Item 6d: 20 pages up stopped part-way without saying how many pages or why.
+    test("a multi-page scroll that a new window stops says how many pages had scrolled", () -> {
+      ListScene rows = new ListScene(DOWN);
+      rows.node.effects.put(DOWN, () -> {
+        rows.show(rows.offset + 2);
+        if (rows.offset == 4) {
+          Window dialog = new Window();
+          dialog.id = 9;
+          dialog.type = 1;
+          dialog.pkg = "example.other";
+          dialog.layer = 5;
+          dialog.right = 1080;
+          dialog.bottom = 600;
+          dialog.focused = dialog.active = true;
+          rows.scene.extraWindows.add(dialog);
+        }
+      });
+      ScriptedEngine engine = ScriptedEngine.create(rows.scene);
+      engine.read();
+      Failure f = failure(() -> engine.call("scroll", args("element_index", 1, "direction", "down", "pages", 5)));
+      require(f.code.equals("POPUP"), f.code + ": " + f.getMessage());
+      require(f.getMessage().contains("(2 of 5 pages had scrolled)"), f.getMessage());
+    });
+
+    test("a multi-page scroll that physical input stops says how many pages had scrolled", () -> {
+      ListScene rows = new ListScene(DOWN);
+      rows.node.effects.put(DOWN, () -> rows.show(rows.offset + 2));
+      ScriptedEngine engine = ScriptedEngine.create(rows.scene);
+      engine.read();
+      engine.checkHook = () -> {
+        if (rows.node.performed.size() >= 2) throw Core.fail("PERSON_ACTIVE", "Physical input detected.");
+      };
+      Failure f = failure(() -> engine.call("scroll", args("element_index", 1, "direction", "down", "pages", 4)));
+      require(f.code.equals("PERSON_ACTIVE"), f.code + ": " + f.getMessage());
+      require(f.getMessage().contains("(1 of 4 pages had scrolled)"), f.getMessage());
+    });
+
+    test("a multi-page scroll that did every page says so and that there may be more", () -> {
+      ListScene rows = new ListScene(DOWN);
+      rows.node.effects.put(DOWN, () -> rows.show(rows.offset + 2));
+      ScriptedEngine engine = ScriptedEngine.create(rows.scene);
+      engine.read();
+      String out = text(engine.call("scroll", args("element_index", 1, "direction", "down", "pages", 3)));
+      require(out.startsWith("All 3 pages scrolled; there may be more"), "notice: " + out.split("\n")[0]);
+    });
+
+    test("a swiped page covers most of the visible list, about as far as an accessibility page", () -> {
+      ListScene rows = new ListScene(FORWARD); // no way up: the page is swiped
+      ScriptedEngine engine = ScriptedEngine.create(rows.scene);
+      engine.read();
+      engine.call("scroll", args("element_index", 1, "direction", "up"));
+      List<int[]> points = motions(engine);
+      require(!points.isEmpty(), "no swipe sent");
+      int travel = points.get(points.size() - 1)[2] - points.get(0)[2];
+      int visible = 2000 - 144; // the list below the display's top strip
+      require(travel >= visible * 3 / 4, "the finger travelled " + travel + " px of " + visible);
+    });
   }
 
   /**

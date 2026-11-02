@@ -145,7 +145,7 @@ captured in their place.
   on the other axis; else its direction-specific action); the direction-specific
   action of the nearest scrolling element enclosing it (a generic one is ambiguous
   there: a horizontal pager's backward is the previous tab); otherwise a touch
-  swipe inside the element's visible part, from 80% to 20% of it, clear of windows
+  swipe inside the element's visible part, from 90% to 10% of it, clear of windows
   above it such as the keyboard and of the display's outer strips, held still
   before lifting so the list stops where the finger stopped. Once the element
   listed its own generic action for the direction (in the state the call is based
@@ -165,8 +165,9 @@ captured in their place.
   ColorOS lists were seen offering only scroll-forward part-way down, so scrolling
   up such a list swipes. A list at its real start offers no action back either and
   is swiped too; in an app with pull-to-refresh that swipe can start a refresh. A
-  swiped page moves about 60% of the visible list, so swiped pages overlap. When a page was not sent by the element's own action, the
-  result says how it was sent.
+  swiped page moves about 80% of the visible list, close to an accessibility page
+  (a whole viewport), so swiped pages overlap a little. When a page was not sent
+  by the element's own action, the result says how it was sent.
   After each page the engine waits for the content to settle and compares it with
   the content before the page: the scrolled element's own text, description and
   bounds and those of its descendants, with their selected and checked state (the
@@ -187,7 +188,12 @@ captured in their place.
   another foreground app still stops the call as `POPUP`; if the element can no
   longer be found (for example in a new activity) the remaining pages are not sent
   and the notice says so, such as `Scrolled 1 of 3 pages; the scrolled element was
-  not found on the new screen, so the rest were not sent`.
+  not found on the new screen, so the rest were not sent`. Every early end of a
+  multi-page scroll says how many pages had scrolled and why: a notice for the
+  list's end, the batch time limit or an element that is gone, and an error that
+  ends a multi-page scroll (such as `POPUP` or `PERSON_ACTIVE`) adds `(2 of 5
+  pages had scrolled)`. When every requested page moved, the notice is `All 20
+  pages scrolled; there may be more: scroll again to go further.`
   When more than one page was requested, the result lists the rows on the pages
   scrolled past, after the notice and before the state, under `Passed over while
   scrolling (N distinct rows, top to bottom; the final page is the state below):`

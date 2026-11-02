@@ -1703,125 +1703,133 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
                   "Neither the element nor an element enclosing it scrolls; nothing sent");
             advertised = advertisedScroll(scope == target ? old : counterpart(base, scope), d);
           }
-          for (int page = 0; page < requested; page++) {
-            if (page > 0
-                && batchDeadline > 0
-                && SystemClock.uptimeMillis() + Core.SCROLL_PAGE_MS > batchDeadline) {
-              stopped = "stopped at the batch time limit";
-              break;
-            }
-            if (page > 0) {
-              Screen previous = current;
-              current = observe(pkg);
-              String changed = Core.stopReason(fence, current, pkg);
-              if (changed != null) throw fail("POPUP", "Window changed during scroll: " + changed);
+          try {
+            for (int page = 0; page < requested; page++) {
+              if (page > 0
+                  && batchDeadline > 0
+                  && SystemClock.uptimeMillis() + Core.SCROLL_PAGE_MS > batchDeadline) {
+                stopped = "stopped at the batch time limit";
+                break;
+              }
+              if (page > 0) {
+                Screen previous = current;
+                current = observe(pkg);
+                String changed = Core.stopReason(fence, current, pkg);
+                if (changed != null) throw fail("POPUP", "Window changed during scroll: " + changed);
+                if (scope != null) {
+                  scope = Core.follow(previous, scope, current);
+                  if (scope == null) {
+                    stopped = "the scrolled element was not found on the new screen, so the rest were not sent";
+                    break;
+                  }
+                }
+              }
+              // Indexed: the element's own scroll action that way, else the direction's action of
+              // the nearest scrolling element enclosing it, else a swipe inside its visible part.
+              Element acted = scope;
+              int action = 0;
+              float[] swipe = null;
               if (scope != null) {
-                scope = Core.follow(previous, scope, current);
+                AccessibilityNodeInfo own = nodes.get(scope.index);
+                action = ownScrollAction(own, d);
+                if (action == FORWARD || action == BACKWARD) advertised = action;
+                else if (action == 0 && advertised != 0 && genericOnAxis(own, d)) action = advertised;
+                if (action == 0) {
+                  acted = scrollingAncestor(scope, current);
+                  if (acted != null) action = scrollAction(nodes.get(acted.index), d, true);
+                  if (action != 0) path = "the scroll-" + direction(d) + " action of an enclosing element";
+                }
+                if (action == 0) {
+                  Swipe planned = swipe(scope, current, d);
+                  if (planned.path == null) {
+                    if (page == 0)
+                      throw fail(
+                          "ACTION_UNSUPPORTED",
+                          "The element offers no scroll-" + direction(d) + " action and " + planned.why
+                              + "; nothing sent");
+                    stopped = planned.why + ", so the rest were not sent";
+                    break;
+                  }
+                  swipe = planned.path;
+                  path = "a touch swipe inside the element (it offers no scroll-" + direction(d) + " action)";
+                }
+              }
+              if (action != 0 && acted == scope && isWheel(scope, nodes.get(scope.index))) {
+                // A wheel's page is one step, and only its selected value says whether it moved.
+                String value = Core.wheelValue(scope);
+                WheelStep step =
+                    stepWheel(scope, current, action, fence, pkg, token,
+                        batchDeadline > 0 ? batchDeadline : Long.MAX_VALUE);
+                if (!step.changed) break;
+                moved++;
+                wheelValues.add(value);
+                current = step.after;
+                scope = step.wheel;
+                continue;
+              }
+              String before = Core.scrollContent(current, scope);
+              Screen pageScreen = current;
+              Element pageScope = scope;
+              checkTarget(token, pkg);
+              if (action != 0) {
+                ensureOpen();
+                sent = true;
+                // The result is not evidence either way; the list's content decides below.
+                nodes.get(acted.index).performAction(action, null);
+                check(token, false);
+              } else if (swipe != null) {
+                touch(swipe[0], swipe[1], swipe[2], swipe[3], SWIPE_MS, SWIPE_HOLD_MS, pkg, token);
+              } else {
+                float[] p = point(args, "x", "y", cap, now);
+                float dx = d.equals("l") ? now.width * .55f : d.equals("r") ? -now.width * .55f : 0,
+                    dy = d.equals("u") ? now.height * .55f : d.equals("d") ? -now.height * .55f : 0;
+                float tx = Math.max(1, Math.min(now.width - 2, p[0] + dx)),
+                    ty = Math.max(1, Math.min(now.height - 2, p[1] + dy));
+                touch(p[0], p[1], tx, ty, 350, pkg, token);
+              }
+              Page result =
+                  scrolled(
+                      before, current, scope, pkg, token,
+                      action != 0 ? Core.SCROLL_QUIET_ACTION_MS : Core.SCROLL_QUIET_TOUCH_MS);
+              if (action == 0) {
+                // A finger can set what it crosses; say so first, with the old and new values.
+                List<String> changes = Core.valueChanges(current, result.after, scope);
+                if (!changes.isEmpty()) {
+                  addNotice(
+                      "WARNING: the swipe also changed " + String.join("; ", changes)
+                          + ". Check these values and correct them if they were not meant to change.");
+                  if (result.moved) {
+                    moved++;
+                    passed.page(pageScreen, pageScope);
+                  }
+                  stopped = "the swipe changed a value outside the scrolled content, so the rest were not sent";
+                  break;
+                }
+              }
+              if (!result.moved) break;
+              moved++;
+              passed.page(pageScreen, pageScope);
+              if (scope != null) {
+                current = result.after;
+                scope = result.scope;
                 if (scope == null) {
                   stopped = "the scrolled element was not found on the new screen, so the rest were not sent";
                   break;
                 }
               }
             }
-            // Indexed: the element's own scroll action that way, else the direction's action of
-            // the nearest scrolling element enclosing it, else a swipe inside its visible part.
-            Element acted = scope;
-            int action = 0;
-            float[] swipe = null;
-            if (scope != null) {
-              AccessibilityNodeInfo own = nodes.get(scope.index);
-              action = ownScrollAction(own, d);
-              if (action == FORWARD || action == BACKWARD) advertised = action;
-              else if (action == 0 && advertised != 0 && genericOnAxis(own, d)) action = advertised;
-              if (action == 0) {
-                acted = scrollingAncestor(scope, current);
-                if (acted != null) action = scrollAction(nodes.get(acted.index), d, true);
-                if (action != 0) path = "the scroll-" + direction(d) + " action of an enclosing element";
-              }
-              if (action == 0) {
-                Swipe planned = swipe(scope, current, d);
-                if (planned.path == null) {
-                  if (page == 0)
-                    throw fail(
-                        "ACTION_UNSUPPORTED",
-                        "The element offers no scroll-" + direction(d) + " action and " + planned.why
-                            + "; nothing sent");
-                  stopped = planned.why + ", so the rest were not sent";
-                  break;
-                }
-                swipe = planned.path;
-                path = "a touch swipe inside the element (it offers no scroll-" + direction(d) + " action)";
-              }
-            }
-            if (action != 0 && acted == scope && isWheel(scope, nodes.get(scope.index))) {
-              // A wheel's page is one step, and only its selected value says whether it moved.
-              String value = Core.wheelValue(scope);
-              WheelStep step =
-                  stepWheel(scope, current, action, fence, pkg, token,
-                      batchDeadline > 0 ? batchDeadline : Long.MAX_VALUE);
-              if (!step.changed) break;
-              moved++;
-              wheelValues.add(value);
-              current = step.after;
-              scope = step.wheel;
-              continue;
-            }
-            String before = Core.scrollContent(current, scope);
-            Screen pageScreen = current;
-            Element pageScope = scope;
-            checkTarget(token, pkg);
-            if (action != 0) {
-              ensureOpen();
-              sent = true;
-              // The result is not evidence either way; the list's content decides below.
-              nodes.get(acted.index).performAction(action, null);
-              check(token, false);
-            } else if (swipe != null) {
-              touch(swipe[0], swipe[1], swipe[2], swipe[3], SWIPE_MS, SWIPE_HOLD_MS, pkg, token);
-            } else {
-              float[] p = point(args, "x", "y", cap, now);
-              float dx = d.equals("l") ? now.width * .55f : d.equals("r") ? -now.width * .55f : 0,
-                  dy = d.equals("u") ? now.height * .55f : d.equals("d") ? -now.height * .55f : 0;
-              float tx = Math.max(1, Math.min(now.width - 2, p[0] + dx)),
-                  ty = Math.max(1, Math.min(now.height - 2, p[1] + dy));
-              touch(p[0], p[1], tx, ty, 350, pkg, token);
-            }
-            Page result =
-                scrolled(
-                    before, current, scope, pkg, token,
-                    action != 0 ? Core.SCROLL_QUIET_ACTION_MS : Core.SCROLL_QUIET_TOUCH_MS);
-            if (action == 0) {
-              // A finger can set what it crosses; say so first, with the old and new values.
-              List<String> changes = Core.valueChanges(current, result.after, scope);
-              if (!changes.isEmpty()) {
-                addNotice(
-                    "WARNING: the swipe also changed " + String.join("; ", changes)
-                        + ". Check these values and correct them if they were not meant to change.");
-                if (result.moved) {
-                  moved++;
-                  passed.page(pageScreen, pageScope);
-                }
-                stopped = "the swipe changed a value outside the scrolled content, so the rest were not sent";
-                break;
-              }
-            }
-            if (!result.moved) break;
-            moved++;
-            passed.page(pageScreen, pageScope);
-            if (scope != null) {
-              current = result.after;
-              scope = result.scope;
-              if (scope == null) {
-                stopped = "the scrolled element was not found on the new screen, so the rest were not sent";
-                break;
-              }
-            }
+          } catch (Failure f) {
+            // Every early end says how far the pages got.
+            if (requested == 1) throw f;
+            throw fail(f.code, f.getMessage() + " (" + moved + " of " + requested + " pages had scrolled)");
           }
           if (moved < requested)
             addNotice(
                 stopped != null
                     ? "Scrolled " + moved + " of " + requested + " pages; " + stopped
                     : Core.scrollNotice(moved, requested));
+          else if (requested > 1)
+            addNotice("All " + requested + " pages scrolled; there may be more: scroll again to go further.");
           if (path != null) addNotice("Scrolled with " + path + ".");
           if (requested > 1)
             passedOver +=
@@ -2181,7 +2189,8 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
   private static final float[] LANES = {.5f, .3f, .7f, .15f, .85f};
 
   /**
-   * A swipe from 80% to 20% of the visible, uncovered part of {@code e} along the direction's axis
+   * A swipe from 90% to 10% of the visible, uncovered part of {@code e} along the direction's axis,
+   * so a swiped page moves about as far as an accessibility page,
    * that scrolls it in direction {@code d}. Windows above it (keyboard, dialogs) are cut away, and
    * the display's outer strips, where system gestures start, are avoided. It runs through the
    * centre, or else the first other lane across the element that crosses no window above it and
@@ -2222,8 +2231,8 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     }
     if (right <= left || bottom <= top || (vertical ? bottom - top : right - left) < SWIPE_MIN_PX)
       return new Swipe(null, "too little of it is visible to swipe");
-    float near = vertical ? top + (bottom - top) * .2f : left + (right - left) * .2f,
-        far = vertical ? top + (bottom - top) * .8f : left + (right - left) * .8f;
+    float near = vertical ? top + (bottom - top) * .1f : left + (right - left) * .1f,
+        far = vertical ? top + (bottom - top) * .9f : left + (right - left) * .9f;
     // Down and right move the finger toward the start of the axis, revealing what follows.
     boolean onward = d.equals("d") || d.equals("r");
     float from = onward ? far : near, to = onward ? near : far;
@@ -2569,7 +2578,8 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     try {
       check(token, false);
     } catch (Failure safety) {
-      return safety;
+      // The same condition again keeps the original's fuller message (how far a scroll got).
+      return safety.code.equals(original.code) ? original : safety;
     }
     return original;
   }
