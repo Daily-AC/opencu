@@ -1424,8 +1424,9 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
       if (!n.isEditable())
         throw fail(
             "VALUE_NOT_SETTABLE",
-            "The element is neither an editable field nor a settable range; nothing sent. A wheel"
-                + " picker cannot be set directly: scroll it, one value per page");
+            "The element is neither an editable field, a settable range nor a focusable wheel"
+                + " picker showing its value; nothing sent. If it is a wheel, scroll it, one value"
+                + " per page");
       setText(n, value, pkg, token);
       return;
     }
@@ -1618,11 +1619,22 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
           "Screen changed since observation: " + unexpected);
     AccessibilityNodeInfo n = null;
     Element old = null, target = null;
+    int index = 0;
     if (args.containsKey("element_index")) {
-      old = base.elements.get(((Number) args.get("element_index")).intValue());
-      target = live(old, base, now);
+      index = ((Number) args.get("element_index")).intValue();
+      old = base.elements.get(index);
+      target =
+          batchChanged != null && batchChanged.contains(index)
+              ? liveAfterOwnChange(old, base, now)
+              : live(old, base, now);
       n = nodes.get(target.index);
     }
+    // Whether this step changes the element's own value (and so maybe its text).
+    boolean ownValue =
+        n != null
+            && (method.equals("set_value")
+                || method.equals("perform_secondary_action")
+                || (method.equals("scroll") && scrolls(n)));
     checkTarget(token, pkg);
     switch (method) {
       case "click":
@@ -1732,6 +1744,19 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
                 path = "a touch swipe inside the element (it offers no scroll-" + direction(d) + " action)";
               }
             }
+            if (action != 0 && acted == scope && isWheel(scope, nodes.get(scope.index))) {
+              // A wheel's page is one step, and only its selected value says whether it moved.
+              String value = Core.wheelValue(scope);
+              WheelStep step =
+                  stepWheel(scope, current, action, fence, pkg, token,
+                      batchDeadline > 0 ? batchDeadline : Long.MAX_VALUE);
+              if (!step.changed) break;
+              moved++;
+              passed.add(value);
+              current = step.after;
+              scope = step.wheel;
+              continue;
+            }
             String before = Core.scrollContent(current, scope);
             List<String> rows = Core.rows(current, scope);
             checkTarget(token, pkg);
@@ -1799,7 +1824,8 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
             token);
         break;
       case "set_value":
-        setValue(n, target, (String) args.get("value"), pkg, token);
+        if (isWheel(target, n)) setWheel(target, now, (String) args.get("value"), fence, pkg, token);
+        else setValue(n, target, (String) args.get("value"), pkg, token);
         break;
       case "type_text":
         insertText(focused(now), (String) args.get("text"), pkg, token);
@@ -1824,8 +1850,204 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
       default:
         throw fail("METHOD_NOT_FOUND", "Unknown action");
     }
+    if (ownValue && batchChanged != null) batchChanged.add(index);
     // Standalone calls settle in afterAction; batches observe the post-action fence directly
     // to avoid paying a second idle wait for every quickly settling step.
+  }
+
+  /**
+   * Indexes of the running batch's elements whose own value an earlier step of the batch changed
+   * (set_value, a secondary action, scrolling the element itself); null outside a batch.
+   */
+  private Set<Integer> batchChanged;
+
+  /**
+   * The live element that {@code old} names after a step of this batch changed its own value: as
+   * {@link #live}, but its text may differ, since this batch changed it. Every other identity
+   * component must still hold, so anything else that changed is still STALE_ELEMENT.
+   */
+  private Element liveAfterOwnChange(Element old, Screen before, Screen now) {
+    if (old == null)
+      throw fail("STALE_ELEMENT", "Element index was not in the last returned state");
+    Element e = Core.live(before, old, now);
+    if (e == null) {
+      Element unchanged = null;
+      int count = 0;
+      for (Element c : now.elements.values()) {
+        Element was = Core.copyWithText(old, c.text);
+        if (was.sameNode(c) && was.near(c, 0, 0)) {
+          unchanged = c;
+          count++;
+        }
+      }
+      if (count == 1 && before.activity.equals(now.activity)) e = unchanged;
+    }
+    if (e != null && nodes.get(e.index) != null) {
+      if (!e.enabled) throw fail("ELEMENT_DISABLED", "Element is disabled");
+      return e;
+    }
+    throw fail("STALE_ELEMENT", Core.staleReason(before, old, now));
+  }
+
+  /** Most steps set_value turns a wheel, and the longest it may take, well inside a host's 60 s. */
+  static final int WHEEL_MAX_STEPS = 70;
+
+  static final long WHEEL_MAX_MS = 25_000;
+
+  /** How long one wheel step waits for the selected value to change; how long a new one must hold. */
+  static final long WHEEL_STEP_MS = 1_000, WHEEL_SETTLED_MS = 80;
+
+  /**
+   * A wheel picker: a focusable single-value element, neither an editor nor a set-progress range,
+   * that shows its selected value as its own text (or a range value) and offers its own generic
+   * scroll actions to step it.
+   */
+  private boolean isWheel(Element e, AccessibilityNodeInfo n) {
+    return e != null
+        && n != null
+        && e.focusable
+        && !e.editable
+        && Core.wheelValue(e) != null
+        && (hasAction(n, FORWARD) || hasAction(n, BACKWARD))
+        && !hasAction(n, android.R.id.accessibilityActionSetProgress);
+  }
+
+  /** A wheel step's outcome: the screen read after it, the wheel in it, whether its value changed. */
+  private static final class WheelStep {
+    final Screen after;
+    final Element wheel;
+    final boolean changed;
+
+    WheelStep(Screen after, Element wheel, boolean changed) {
+      this.after = after;
+      this.wheel = wheel;
+      this.changed = changed;
+    }
+  }
+
+  /**
+   * Sends {@code action} to the wheel {@code w} of {@code seen} and waits for its selected value to
+   * change and then hold for {@link #WHEEL_SETTLED_MS}. A value that has not changed after {@link
+   * #WHEEL_STEP_MS} (or at {@code deadline}) did not change. A new window ends it as POPUP; a wheel
+   * that can no longer be found, as STALE_ELEMENT.
+   */
+  private WheelStep stepWheel(
+      Element w, Screen seen, int action, Screen fence, String pkg, long token, long deadline) {
+    AccessibilityNodeInfo node = nodes.get(w.index);
+    String was = Core.wheelValue(w);
+    checkTarget(token, pkg);
+    ensureOpen();
+    sent = true;
+    // The result is not evidence either way; the value decides.
+    node.performAction(action, null);
+    check(token, false);
+    long start = SystemClock.uptimeMillis(), end = Math.min(start + WHEEL_STEP_MS, deadline);
+    String last = was;
+    long since = start;
+    Screen after;
+    Element followed;
+    while (true) {
+      pause(30, token);
+      try {
+        after = observe(pkg);
+      } catch (RuntimeException e) {
+        throw unconfirmed("the wheel could not be read after a step");
+      }
+      String changed = Core.stopReason(fence, after, pkg);
+      if (changed != null) throw fail("POPUP", "Window changed while turning the wheel: " + changed);
+      followed = Core.follow(seen, w, after);
+      if (followed == null)
+        throw fail("STALE_ELEMENT", "The wheel was not found after a step; read state before continuing");
+      String value = String.valueOf(Core.wheelValue(followed));
+      long now = SystemClock.uptimeMillis();
+      if (!value.equals(last)) {
+        last = value;
+        since = now;
+      } else if (!last.equals(was) && now - since >= WHEEL_SETTLED_MS) break;
+      if (now >= end) break;
+    }
+    return new WheelStep(after, followed, !last.equals(was));
+  }
+
+  /**
+   * Turns the wheel {@code wheel} (of {@code now}) with its own scroll actions, one step at a time
+   * and reading its value after each, until it shows {@code value}. Numbers go the short way round
+   * when the wheel's range is known, otherwise toward the number; scroll-forward is taken to
+   * increase, as on AOSP's NumberPicker, until a step shows otherwise. Other values go forward,
+   * and back once from an end. Fails with VALUE_NOT_REACHED, naming the value shown and the steps
+   * taken, after {@link #WHEEL_MAX_STEPS} steps, at {@link #WHEEL_MAX_MS} (or the batch limit), when
+   * a step changes nothing, or when the wheel comes round without showing it.
+   */
+  private void setWheel(Element wheel, Screen now, String value, Screen fence, String pkg, long token) {
+    String goal = value.trim();
+    if (goal.isEmpty()) throw fail("INVALID_ARGUMENT", "A wheel takes one of its values; nothing sent");
+    String shown = Core.wheelValue(wheel);
+    if (Core.sameWheelValue(shown, goal)) {
+      addNotice("The wheel already shows " + shown + "; nothing sent.");
+      return;
+    }
+    long deadline = SystemClock.uptimeMillis() + WHEEL_MAX_MS;
+    if (batchDeadline > 0) deadline = Math.min(deadline, batchDeadline);
+    Long to = Core.wheelNumber(goal), from = Core.wheelNumber(shown);
+    boolean numeric = to != null && from != null;
+    // +1 goes toward larger numbers (for other values: forward).
+    int toward = numeric && to < from ? -1 : 1;
+    long span = 0;
+    if (numeric && wheel.ranged && wheel.max > wheel.min) {
+      span = (long) Math.floor(wheel.max) - (long) Math.ceil(wheel.min) + 1;
+      long direct = Math.abs(to - from);
+      if (span - direct < direct) toward = -toward; // round past the end: shorter on a wheel that wraps
+    }
+    boolean forwardIncreases = true, learned = !numeric, reversed = false;
+    Set<String> met = new HashSet<>();
+    met.add(shown);
+    Element w = wheel;
+    Screen seen = now;
+    int steps = 0;
+    while (true) {
+      if (steps >= WHEEL_MAX_STEPS)
+        throw wheelNotReached(shown, goal, steps, "the step limit was reached");
+      if (SystemClock.uptimeMillis() + WHEEL_STEP_MS > deadline)
+        throw wheelNotReached(shown, goal, steps, "the time limit was reached");
+      int action = (toward > 0) == forwardIncreases ? FORWARD : BACKWARD;
+      WheelStep step = stepWheel(w, seen, action, fence, pkg, token, deadline);
+      steps++;
+      seen = step.after;
+      w = step.wheel;
+      if (!step.changed) {
+        // At an end of a wheel that does not wrap: go back the other way once.
+        if (!reversed && (!numeric || span > 0)) {
+          reversed = true;
+          toward = -toward;
+          span = 0;
+          continue;
+        }
+        throw wheelNotReached(shown, goal, steps, "a step did not change it (an end of the wheel?)");
+      }
+      String next = Core.wheelValue(w);
+      if (!learned) {
+        // The first change shows which way scroll-forward turns: away from the goal means down.
+        Long before = Core.wheelNumber(shown), after = Core.wheelNumber(next);
+        if (before != null && after != null) {
+          learned = true;
+          if (Core.wheelDistance(after, to, span) > Core.wheelDistance(before, to, span))
+            forwardIncreases = !forwardIncreases;
+        }
+      }
+      shown = next;
+      if (Core.sameWheelValue(shown, goal)) break;
+      if (!numeric && !met.add(shown))
+        throw wheelNotReached(shown, goal, steps, "the wheel came round without showing it");
+    }
+    addNotice("Set the wheel to " + shown + " in " + steps + (steps == 1 ? " step." : " steps."));
+  }
+
+  private Failure wheelNotReached(String shown, String goal, int steps, String why) {
+    return fail(
+        "VALUE_NOT_REACHED",
+        "The wheel shows " + shown + " after " + steps + (steps == 1 ? " step; " : " steps; ") + goal
+            + " was not reached: "
+            + why + ". Read state before continuing");
   }
 
   /** The element of {@code base} at {@code e}'s place: same window, tree path, class and id. */
@@ -2173,6 +2395,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
   private Map<String, Object> dispatch(String name, Map<String, Object> args) throws Exception {
     long callStart = SystemClock.uptimeMillis();
     batchDeadline = 0;
+    batchChanged = null;
     if (name.equals("agent_desktop")) return desktopCall(args);
     if (routeLost != null) throw fail("DISPLAY_UNAVAILABLE", routeLost);
     if (name.equals("list_apps")) return apps();
@@ -2363,6 +2586,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     // The limit covers the whole call, including the reads before the batch.
     long batchStart = callStart;
     batchDeadline = callStart + batchLimitMs();
+    batchChanged = new HashSet<>();
     String limitReached = "it could run past";
     Screen last = base;
     int step = 0, completed = 0;
@@ -2495,6 +2719,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
                     : "Batch stopped; remaining steps were not sent");
     }
     batchDeadline = 0;
+    batchChanged = null;
     Map<String, Object> r =
         result(last, Boolean.TRUE.equals(args.get("includeScreenshot")) && reason == null);
     try {

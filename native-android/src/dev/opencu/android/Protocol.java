@@ -220,10 +220,10 @@ public final class Protocol {
         "format");
     add(
         "set_value",
-        "Replace the complete value of an observed Android editable field using accessibility"
-            + " (Unicode supported), or set a range element (value= and range= in its line, such as"
-            + " a slider) to a number. Wheel pickers cannot be set directly: scroll them, one value"
-            + " per page. Use click for checkboxes. Returns updated state.",
+        "Set an observed Android element's whole value in one call: an editable field's text"
+            + " (accessibility, Unicode), a range element (value= range= in its line, e.g. a slider)"
+            + " to a number, or a wheel picker (a time/date column) to one of its values, stepped"
+            + " and read back. Use click for checkboxes. Returns updated state.",
         false,
         props("element_index", num(1, Integer.MAX_VALUE, true), "value", string()),
         "app",

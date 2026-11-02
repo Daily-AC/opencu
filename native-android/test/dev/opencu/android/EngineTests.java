@@ -2982,6 +2982,224 @@ public final class EngineTests {
       String out = text(engine.call("scroll", args("x", 288, "y", 400, "direction", "up")));
       require(out.contains("WARNING: the swipe also changed NumberPicker id=minute 35 -> 33"), "notice: " + out.split("\n")[1]);
     });
+
+    // Item 2: setting 07:35 on the time picker took 14 calls.
+    test("set_value turns a wheel to the value in one call, reading it after every step", () -> {
+      WheelScene minute = new WheelScene("minute", 47, 0, 59);
+      ScriptedEngine engine = minute.engine();
+      engine.read();
+      String out = text(engine.call("set_value", args("element_index", 2, "value", "35")));
+      require(minute.wheel.text.equals("35"), "value " + minute.wheel.text);
+      require(minute.node.performed.size() == 12 && minute.node.performed.stream().allMatch(a -> a == BACKWARD),
+          "actions " + minute.node.performed);
+      require(out.startsWith("Set the wheel to 35 in 12 steps."), "notice: " + out.split("\n")[0]);
+    });
+
+    test("set_value learns from the first step which way a wheel's scroll-forward turns", () -> {
+      WheelScene minute = new WheelScene("minute", 47, 0, 59);
+      minute.forwardDecreases = true;
+      ScriptedEngine engine = minute.engine();
+      engine.read();
+      engine.call("set_value", args("element_index", 2, "value", "50"));
+      require(minute.wheel.text.equals("50"), "value " + minute.wheel.text);
+      require(minute.node.performed.equals(List.of(FORWARD, BACKWARD, BACKWARD, BACKWARD, BACKWARD)),
+          "actions " + minute.node.performed);
+    });
+
+    test("set_value goes the short way round a wheel whose range is known", () -> {
+      WheelScene minute = new WheelScene("minute", 55, 0, 59);
+      minute.ranged();
+      ScriptedEngine engine = minute.engine();
+      engine.read();
+      engine.call("set_value", args("element_index", 2, "value", "05"));
+      require(minute.wheel.text.equals("05"), "value " + minute.wheel.text);
+      require(minute.node.performed.size() == 10 && minute.node.performed.stream().allMatch(a -> a == FORWARD),
+          "actions " + minute.node.performed);
+    });
+
+    test("set_value turns back from the end of a wheel that does not wrap", () -> {
+      WheelScene digit = new WheelScene("digit", 8, 0, 9);
+      digit.ranged();
+      digit.wraps = false;
+      ScriptedEngine engine = digit.engine();
+      engine.read();
+      String out = text(engine.call("set_value", args("element_index", 2, "value", "1")));
+      require(digit.wheel.text.equals("01"), "value " + digit.wheel.text);
+      require(out.startsWith("Set the wheel to 01 in 10 steps."), "notice: " + out.split("\n")[0]);
+    });
+
+    test("set_value stops with VALUE_NOT_REACHED, naming the value, when a step changes nothing", () -> {
+      WheelScene minute = new WheelScene("minute", 59, 0, 59);
+      minute.wraps = false;
+      ScriptedEngine engine = minute.engine();
+      engine.read();
+      Failure f = failure(() -> engine.call("set_value", args("element_index", 2, "value", "75")));
+      require(f.code.equals("VALUE_NOT_REACHED"), f.code + ": " + f.getMessage());
+      require(f.getMessage().contains("shows 59 after 1 step;") && f.getMessage().contains("did not change"), f.getMessage());
+      require(minute.node.performed.size() == 1, "actions " + minute.node.performed);
+    });
+
+    test("set_value stops turning a wheel after 70 steps", () -> {
+      WheelScene minute = new WheelScene("minute", 47, 0, 59);
+      minute.delayMs = 0;
+      ScriptedEngine engine = minute.engine();
+      engine.read();
+      Failure f = failure(() -> engine.call("set_value", args("element_index", 2, "value", "99")));
+      require(f.code.equals("VALUE_NOT_REACHED") && f.getMessage().contains("after 70 steps"), f.code + ": " + f.getMessage());
+      require(minute.node.performed.size() == 70, "actions " + minute.node.performed.size());
+    });
+
+    test("one batch sets the hour and minute wheels of a time with set_value", () -> {
+      WheelScene time = new WheelScene("minute", 47, 0, 59);
+      WheelScene.Wheel hour = time.addWheel("/0/2", "hour", 21, 0, 23, 100);
+      ScriptedEngine engine = time.engine();
+      engine.read();
+      Map<String, Object> result = engine.call("run_actions", args("actions", List.of(
+          obj("method", "set_value", "element_index", 3, "value", "07"),
+          obj("method", "set_value", "element_index", 2, "value", "35"))));
+      Map<String, Object> batch = map(map(result.get("_meta")).get("opencu/batch"));
+      require(Integer.valueOf(2).equals(batch.get("completed")) && batch.get("reason") == null, "batch " + batch + ": " + text(result).split("\n")[0]);
+      require(hour.element.text.equals("07") && time.wheel.text.equals("35"), "time " + hour.element.text + ":" + time.wheel.text);
+    });
+
+    test("a wheel's scroll page counts only when its selected value changed", () -> {
+      WheelScene minute = new WheelScene("minute", 59, 0, 59);
+      minute.wraps = false;
+      Element ticker = minute.scene.add("/1", "android.widget.TextView", "clock", "0", 0, 100, 1080, 200);
+      ScriptedEngine engine = minute.engine();
+      engine.read();
+      IntConsumer wheelUpdate = engine.onObserve;
+      engine.onObserve = n -> {
+        wheelUpdate.accept(n);
+        ticker.text = Integer.toString(n); // a clock elsewhere in the window ticks on every read
+      };
+      String out = text(engine.call("scroll", args("element_index", 2, "direction", "down", "pages", 3)));
+      require(minute.node.performed.equals(List.of(FORWARD)), "steps " + minute.node.performed);
+      require(out.startsWith("Nothing moved"), "notice: " + out.split("\n")[0]);
+    });
+
+    test("two steps on one wheel in a batch find it again after the first changed its value", () -> {
+      WheelScene minute = new WheelScene("minute", 20, 0, 59);
+      ScriptedEngine engine = minute.engine();
+      engine.read();
+      Map<String, Object> result = engine.call("run_actions", args("actions", List.of(
+          obj("method", "perform_secondary_action", "element_index", 2, "action", "scroll_forward"),
+          obj("method", "perform_secondary_action", "element_index", 2, "action", "scroll_forward"))));
+      Map<String, Object> batch = map(map(result.get("_meta")).get("opencu/batch"));
+      require(Integer.valueOf(2).equals(batch.get("completed")) && batch.get("reason") == null,
+          "batch " + batch + ": " + text(result).split("\n")[0]);
+      require(minute.node.performed.equals(List.of(FORWARD, FORWARD)), "actions " + minute.node.performed);
+    });
+
+    test("a batch step on an element whose text changed by itself is still stale", () -> {
+      WheelScene minute = new WheelScene("minute", 20, 0, 59);
+      Element next = minute.scene.add("/1", "android.widget.Button", "next", "Next", 100, 2000, 300, 2100);
+      next.clickable = true;
+      ScriptedEngine engine = minute.engine();
+      engine.shellHook = tap -> {
+        minute.show(30); // the app moved the wheel; this batch did not
+        return "";
+      };
+      engine.read();
+      Map<String, Object> result = engine.call("run_actions", args("actions", List.of(
+          obj("method", "click", "element_index", 3),
+          obj("method", "perform_secondary_action", "element_index", 2, "action", "scroll_forward"))));
+      Map<String, Object> batch = map(map(result.get("_meta")).get("opencu/batch"));
+      require("stale_element".equals(batch.get("reason")), "batch " + batch);
+      require(minute.node.performed.isEmpty(), "actions " + minute.node.performed);
+    });
+  }
+
+  /**
+   * A time-picker column: a focusable NumberPicker at "/0/1" under a label, showing its value as
+   * two-digit text, with scroll forward and backward. Its new value shows {@code delayMs} after a
+   * step, as a wheel that animates first. More wheels can be added beside it.
+   */
+  static final class WheelScene {
+    final class Wheel {
+      final Element element;
+      final FakeNode node;
+      final int min, max;
+      int value;
+      Integer pending;
+      long pendingAt;
+
+      Wheel(String path, String id, int value, int min, int max, int left) {
+        element = scene.add(path, "android.widget.NumberPicker", id, "", left, 900, left + 200, 1300);
+        element.focusable = true;
+        element.actions.put("scroll_forward", FORWARD);
+        element.actions.put("scroll_backward", BACKWARD);
+        node = scene.node(element).with(FORWARD, BACKWARD);
+        this.min = min;
+        this.max = max;
+        show(value);
+        node.effects.put(FORWARD, () -> step(forwardDecreases ? -1 : 1));
+        node.effects.put(BACKWARD, () -> step(forwardDecreases ? 1 : -1));
+      }
+
+      void step(int by) {
+        int next = value + by;
+        if (next > max) next = wraps ? min : max;
+        if (next < min) next = wraps ? max : min;
+        pending = next;
+        pendingAt = android.os.SystemClock.uptimeMillis() + delayMs;
+      }
+
+      void show(int v) {
+        value = v;
+        element.text = String.format(Locale.ROOT, "%02d", v);
+        node.text = element.text;
+        if (element.ranged) set(element, "current", (float) v);
+      }
+
+      void tick() {
+        if (pending != null && android.os.SystemClock.uptimeMillis() >= pendingAt) {
+          show(pending);
+          pending = null;
+        }
+      }
+    }
+
+    final Scene scene = new Scene();
+    final List<Wheel> wheels = new ArrayList<>();
+    final Element wheel;
+    final FakeNode node;
+    boolean wraps = true, forwardDecreases;
+    long delayMs = 120;
+
+    WheelScene(String id, int value, int min, int max) {
+      scene.add("/0/0", "android.widget.TextView", "", "Alarm time", 0, 800, 1080, 880);
+      Wheel w = addWheel("/0/1", id, value, min, max, 600);
+      wheel = w.element;
+      node = w.node;
+    }
+
+    Wheel addWheel(String path, String id, int value, int min, int max, int left) {
+      Wheel w = new Wheel(path, id, value, min, max, left);
+      wheels.add(w);
+      return w;
+    }
+
+    /** Gives the first wheel RangeInfo with its bounds. */
+    void ranged() {
+      Wheel w = wheels.get(0);
+      set(w.element, "ranged", true);
+      set(w.element, "min", (float) w.min);
+      set(w.element, "max", (float) w.max);
+      set(w.element, "current", (float) w.value);
+    }
+
+    void show(int value) {
+      wheels.get(0).show(value);
+    }
+
+    ScriptedEngine engine() {
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      engine.onObserve = n -> {
+        for (Wheel w : wheels) w.tick();
+      };
+      return engine;
+    }
   }
 
   /**

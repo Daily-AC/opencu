@@ -219,15 +219,26 @@ captured in their place.
   a number with the accessibility set-progress action. Range elements show
   `value=… range=min..max` in their lines; a value outside the range or not a
   number returns `INVALID_ARGUMENT` with nothing sent. Use click for a checkbox.
-  Wheel pickers (time/date pickers, `NumberPicker`) cannot be set directly:
-  Android has no standard action that sets their value. The ColorOS time wheels
-  offered only scroll forward/backward, and AOSP `NumberPicker`'s editable centre
-  takes typed text only when it loses focus, so setting that text would show a
-  value the picker has not taken. `set_value` on such a wheel returns
-  `VALUE_NOT_SETTABLE` with nothing sent; scroll it instead. Each page moves one
-  value, so one `scroll` with `pages: 15` turns a minute wheel 15 steps (`down`
-  sends scroll-forward, the next value on AOSP wheels), and one `run_actions` can
-  set every wheel of a time; check the values in the result.
+  A wheel picker (a time/date column, `NumberPicker`) is set in one call too:
+  Android has no standard action that sets its value (the ColorOS time wheels
+  offer only scroll forward/backward, and AOSP `NumberPicker`'s editable centre
+  takes typed text only when it loses focus), so `set_value` steps it with its
+  own scroll actions and reads its value after every step, until it shows the
+  requested value. A wheel here is a focusable element that is neither an editor
+  nor a set-progress range, shows its selected value as its own text (or a range
+  value) and offers scroll forward or backward. Values are compared as text, or
+  as numbers when both name one (`7` matches `07`). Numbers go toward the
+  requested number, or the short way round when the wheel's range is known;
+  scroll-forward is taken to increase, as on AOSP wheels, until the first step
+  shows otherwise. Other values go forward, and back once from an end. Each step
+  waits up to one second for the value to change and settle. The call fails with
+  `VALUE_NOT_REACHED`, naming the value shown and the steps taken, when a step
+  changes nothing (an end of the wheel), after 70 steps, after 25 seconds (or at
+  a batch's time limit), or when the wheel comes round without showing the value;
+  read state before continuing. On success the result starts `Set the wheel to 35
+  in 12 steps.` One `run_actions` can set every wheel of a time. `scroll` on a
+  wheel also steps it, one value per page, and a page counts as moved only when
+  the wheel's selected value changed.
 - `paste`: `format: "text"` only; inserts the text exactly as `type_text` does.
   The clipboard is neither read nor changed.
 - `perform_secondary_action`: only a name listed on that node, rechecked live;
@@ -236,6 +247,11 @@ captured in their place.
 - `activate_app`: explicit foreground activation under the same person rules. In
 agent-desktop mode it launches on the owned display; an app already in front on
 display 0 returns `APP_IN_USE_BY_PERSON` without input.
+
+Within one `run_actions`, a step whose element an earlier step of the same batch
+changed itself (`set_value`, a secondary action, or scrolling that element) finds
+it again with its text allowed to differ, since the batch changed it; every other
+identity component below still has to hold.
 
 Before indexed input, the engine settles, re-observes and checks activity,
 display, window, tree path, package, class, text, description, resource id and

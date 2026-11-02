@@ -162,6 +162,64 @@ public final class Core {
     return out;
   }
 
+  /** The selected value a wheel shows: its text, else its range value; null when it shows none. */
+  public static String wheelValue(Element e) {
+    if (e.password) return null;
+    if (!e.text.isEmpty()) return e.text;
+    return e.ranged ? Element.number(e.current) : null;
+  }
+
+  private static final Pattern DIGITS = Pattern.compile("[0-9]+");
+
+  /**
+   * The number a wheel value names: the value itself, or its only run of digits (as in "35 min");
+   * null for anything else.
+   */
+  public static Long wheelNumber(String value) {
+    if (value == null) return null;
+    String v = value.trim();
+    if (v.matches("-?[0-9]{1,15}")) return Long.parseLong(v);
+    Matcher m = DIGITS.matcher(v);
+    if (!m.find()) return null;
+    String digits = m.group();
+    if (m.find() || digits.length() > 15) return null;
+    return Long.parseLong(digits);
+  }
+
+  /** Whether a wheel showing {@code shown} shows {@code goal}: the same text, or the same number. */
+  public static boolean sameWheelValue(String shown, String goal) {
+    if (shown == null) return false;
+    if (shown.trim().equals(goal.trim())) return true;
+    Long a = wheelNumber(shown), b = wheelNumber(goal);
+    return a != null && a.equals(b);
+  }
+
+  /** How many steps {@code from} is from {@code to}: round the wheel when its span is known. */
+  public static long wheelDistance(long from, long to, long span) {
+    long direct = Math.abs(to - from);
+    return span > 0 ? Math.min(direct, Math.abs(span - direct)) : direct;
+  }
+
+  /** A copy of {@code e} with {@code text} as its text. */
+  static Element copyWithText(Element e, String text) {
+    Element c = new Element();
+    c.index = e.index;
+    c.window = e.window;
+    c.display = e.display;
+    c.left = e.left;
+    c.top = e.top;
+    c.right = e.right;
+    c.bottom = e.bottom;
+    c.path = e.path;
+    c.clazz = e.clazz;
+    c.text = text;
+    c.desc = e.desc;
+    c.id = e.id;
+    c.pkg = e.pkg;
+    c.editable = e.editable;
+    return c;
+  }
+
   /** Most rows a multi-page scroll lists as passed over, and most characters shown per row. */
   public static final int PASSED_ROWS = 200, ROW_CHARS = 200;
 
