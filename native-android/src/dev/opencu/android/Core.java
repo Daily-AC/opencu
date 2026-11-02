@@ -292,6 +292,9 @@ public final class Core {
   public static final class Row {
     final String key;
     final List<String> parts = new ArrayList<>();
+    /** The row's own class and id (its kind), and the fields inside it: their ids, else classes. */
+    String kind = "";
+    final Set<String> fields = new HashSet<>();
     int left = Integer.MAX_VALUE, top = Integer.MAX_VALUE, right = Integer.MIN_VALUE, bottom = Integer.MIN_VALUE;
 
     Row(String key) {
@@ -338,6 +341,8 @@ public final class Core {
       Row row = rows.get(key);
       if (row == null) rows.put(key, row = new Row(key));
       row.cover(e);
+      if (e.path.equals(key)) row.kind = e.clazz + "#" + e.id;
+      else row.fields.add(e.id.isEmpty() ? e.clazz : e.id.substring(e.id.lastIndexOf('/') + 1));
       String part = rowPart(e);
       if (!part.isEmpty()) row.parts.add(part);
     }
@@ -363,8 +368,9 @@ public final class Core {
    * than the page's whole rows may be cut
    * (ColorOS reports such a row with clipped bounds and without the children outside the list):
    * it is left out when all its parts are in another row seen during the call, the final page's
-   * included, and kept otherwise, marked {@link #CUT_MARK}, so a row cut on every page it showed
-   * on is not lost nor read as the row's whole content. Rows are
+   * included, and kept otherwise, so a row cut on every page it showed on is not lost. A kept one
+   * that lacks a field every whole row of its kind has (by child id, else class) is marked {@link
+   * #CUT_MARK}, so it is not read as the row's whole content. Rows are
    * listed top to bottom (left to right), whichever way the pages went.
    */
   public static final class Passed {
@@ -373,6 +379,9 @@ public final class Core {
     private final List<String> met = new ArrayList<>();
     private final Map<String, List<String>> parts = new HashMap<>();
     private final Set<String> cut = new HashSet<>(), whole = new HashSet<>();
+    /** Each row's kind and fields, and the fields every whole row of a kind has. */
+    private final Map<String, Row> shapes = new HashMap<>();
+    private final Map<String, Set<String>> common = new HashMap<>();
 
     public Passed(String direction) {
       backward = direction.equals("u") || direction.equals("l");
@@ -392,7 +401,25 @@ public final class Core {
         }
         if (cutOff(r, scope, reference)) cut.add(text);
         else whole.add(text);
+        shapes.putIfAbsent(text, r);
       }
+      learnFields(rows, scope);
+    }
+
+    /** Narrows each kind's common fields to those every whole row of it on this page has. */
+    private void learnFields(List<Row> rows, Element scope) {
+      for (Row r : rows) {
+        if (scope == null || r.key.equals(scope.path) || atEdge(r, scope)) continue;
+        Set<String> fields = common.get(r.kind);
+        if (fields == null) common.put(r.kind, new HashSet<>(r.fields));
+        else fields.retainAll(r.fields);
+      }
+    }
+
+    /** Whether {@code r} lacks a field that every whole row of its kind has. */
+    private boolean incomplete(Row r) {
+      Set<String> fields = common.get(r.kind);
+      return fields != null && !r.fields.containsAll(fields);
     }
 
     /** A row's size along the scrolling axis. */
@@ -430,11 +457,14 @@ public final class Core {
     public List<String> finish(Screen s, Element scope) {
       Set<String> last = new HashSet<>();
       List<List<String>> seen = new ArrayList<>(parts.values());
-      if (s != null)
-        for (Row r : rowList(s, scope)) {
+      if (s != null) {
+        List<Row> rows = rowList(s, scope);
+        for (Row r : rows) {
           last.add(r.text());
           seen.add(r.parts);
         }
+        learnFields(rows, scope);
+      }
       List<String> rows = new ArrayList<>();
       for (String text : met) {
         if (last.contains(text)) continue;
@@ -443,7 +473,10 @@ public final class Core {
         if (cut.contains(text) && !whole.contains(text))
           for (List<String> other : seen)
             if (other.size() > own.size() && other.containsAll(own)) part = true;
-        if (!part) rows.add(cut.contains(text) && !whole.contains(text) ? text + CUT_MARK : text);
+        // Kept although cut: marked only when a field is missing, since a row the edge cuts
+        // often still shows all its fields.
+        boolean partial = cut.contains(text) && !whole.contains(text) && incomplete(shapes.get(text));
+        if (!part) rows.add(partial ? text + CUT_MARK : text);
       }
       if (backward) Collections.reverse(rows);
       return rows;
@@ -453,7 +486,7 @@ public final class Core {
       return vertical ? "top to bottom" : "left to right";
     }
 
-    /** Ends a kept row that was at the list's edge wherever it showed: it may lack parts. */
+    /** Ends a kept row that the list's edge cut and that lacks a field its kind's whole rows have. */
     public static final String CUT_MARK = " (cut off at the list edge)";
 
     /** Whether {@code r} touches {@code scope}'s edge across the scrolling axis. */

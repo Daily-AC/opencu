@@ -242,8 +242,11 @@ captured in their place.
   the list (on the PGBM10, `06:45` alone where the whole row is `06:45 | 响一次 |
   关闭 [not checked]`). It is left out when all its parts are in another row seen
   during the call, the final page's included, and kept otherwise, so a row cut on
-  every page it showed on is not lost; a kept one ends ` (cut off at the list
-  edge)`, so it is not read as the row's whole content. Pieces of
+  every page it showed on is not lost. A kept one that lacks a field every whole
+  row of its kind has (compared by child resource id, else class) ends ` (cut off
+  at the list edge)`, so it is not read as the row's whole content; a row the edge
+  cut that still shows all those fields (on the PGBM10, 196 of 280 px with time,
+  label and switch) is listed as a normal row. Pieces of
   cut rows are never joined: recycled rows made joined pieces of two different
   alarms on the device. A wheel has no such list (see `set_value`). Rows are
   distinct, at most 200 rows of at most 200

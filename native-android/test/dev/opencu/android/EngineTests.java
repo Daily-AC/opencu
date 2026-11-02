@@ -2879,6 +2879,7 @@ public final class EngineTests {
     thirdDeviceRound();
     fourthDeviceRound();
     fifthDeviceRound();
+    sixthDeviceRound();
 
     if (!failures.isEmpty()) {
       System.out.println("Android engine host checks failed: " + failures);
@@ -3957,12 +3958,111 @@ public final class EngineTests {
       for (String row : rows)
         if (row.endsWith(" (cut off at the list edge)")) cut.add(row);
         else unmarked.add(row);
-      require(cut.equals(List.of(
-              "07:15 | 法定工作日 | 关闭 [not checked] (cut off at the list edge)",
-              "法定工作日 | 干饭了老铁 | 关闭 [not checked] (cut off at the list edge)")),
+      // Round 6: only a piece that lacks a field every whole row has (here its time) is marked.
+      require(cut.equals(List.of("法定工作日 | 干饭了老铁 | 关闭 [not checked] (cut off at the list edge)")),
           "cut rows " + cut + " of " + rows);
       for (String row : unmarked)
         require(row.endsWith(" | 关闭 [not checked]") && row.split(" \\| ").length >= 3, "a cut row unmarked: " + row);
     });
+  }
+
+  /** Checks for what the sixth device round (OPPO PGBM10, 2026-11-03) found. */
+  static void sixthDeviceRound() {
+    // Whole rows that the list's edge cut on every page were marked as cut off although they
+    // showed every field (the final state's first row: 196 px of 280, with time, label and switch).
+    test("only a cut row that lacks a field whole rows have is marked as cut off", () -> {
+      // A: row 06:30 shows only its time at the bottom of the first page (81 px), then all its
+      // fields at the top of the next (196 px): it is listed whole and unmarked.
+      ColorOsBoundary complete = new ColorOsBoundary(24, 0, 1941, 3800);
+      ScriptedEngine engine = complete.engine();
+      engine.read();
+      String out = text(engine.call("scroll", args("element_index", 1, "direction", "down", "pages", 2)));
+      List<String> rows = complete.summary(out);
+      require(rows.contains("06:30 | 响一次 | 关闭 [not checked]"), "the cut but complete row: " + rows);
+      require(rows.stream().noneMatch(r -> r.endsWith("(cut off at the list edge)")), "marked: " + rows);
+      // B: row 08:00 shows only its time at the bottom of the second page and, on the final page,
+      // only its label and switch: the kept time is marked.
+      ColorOsBoundary partial = new ColorOsBoundary(24, 0, 1800, 3786);
+      engine = partial.engine();
+      engine.read();
+      out = text(engine.call("scroll", args("element_index", 1, "direction", "down", "pages", 2)));
+      rows = partial.summary(out);
+      List<String> marked = new ArrayList<>();
+      for (String r : rows) if (r.endsWith(" (cut off at the list edge)")) marked.add(r);
+      require(marked.equals(List.of("08:00 (cut off at the list edge)")), "marked " + marked + " of " + rows);
+    });
+  }
+
+  /**
+   * The alarm list as the PGBM10 lays it out once its toolbar collapsed: a COUIRecyclerView id=list
+   * from y=294 to 2232; rows LinearLayout id=content_layout, 280 px tall at a 300 px pitch, each
+   * with timeDisplay (y+30..110), layout_switch (y+44..190) holding Switch id=alarm_switch "关闭"
+   * (y+90..176), and daysOfWeek_label (y+130..180). The list's edge clips a cut row and leaves out
+   * the fields outside it, as on the device: 81 px at the bottom show only the time and
+   * layout_switch. Each scroll-forward moves to the next of the given offsets.
+   */
+  static final class ColorOsBoundary {
+    static final int TOP = 294, BOTTOM = 2232;
+    static final String[] LABELS = {"响一次", "每天", "法定工作日"};
+    final Scene scene = new Scene();
+    final Element list;
+    final int count;
+    final Deque<Integer> next = new ArrayDeque<>();
+
+    ColorOsBoundary(int count, int first, int... later) {
+      this.count = count;
+      list = scene.add("/0", "androidx.recyclerview.widget.COUIRecyclerView", "list", "", 0, TOP, 1080, BOTTOM);
+      list.scrollable = true;
+      list.actions.put("scroll_forward", FORWARD);
+      FakeNode node = scene.node(list).with(FORWARD);
+      node.scrollable = true;
+      for (int o : later) next.add(o);
+      node.effects.put(FORWARD, () -> {
+        if (!next.isEmpty()) layout(next.poll());
+      });
+      layout(first);
+    }
+
+    static String time(int i) {
+      return String.format(Locale.ROOT, "%02d:%02d", 5 + i / 4, i % 4 * 15);
+    }
+
+    ScriptedEngine engine() {
+      return ScriptedEngine.create(scene);
+    }
+
+    void layout(int offset) {
+      while (scene.specs.size() > 1) {
+        scene.specs.remove(1);
+        scene.nodes.remove(1);
+      }
+      int child = 0;
+      for (int i = 0; i < count; i++) {
+        int y = TOP + 57 + 300 * i - offset;
+        if (y + 280 <= TOP || y >= BOTTOM) continue;
+        String path = "/0/" + child++;
+        scene.add(path, "android.widget.LinearLayout", "content_layout", "", 48, Math.max(y, TOP), 1032, Math.min(y + 280, BOTTOM)).clickable = true;
+        field(path + "/0", "android.widget.TextView", "timeDisplay", time(i), 90, y + 30, 380, y + 110);
+        field(path + "/1", "android.widget.TextView", "daysOfWeek_label", LABELS[i % 3], 90, y + 130, 600, y + 180);
+        if (field(path + "/2", "android.widget.LinearLayout", "layout_switch", "", 870, y + 44, 1032, y + 190) != null) {
+          Element toggle = field(path + "/2/0", "android.widget.Switch", "alarm_switch", "关闭", 870, y + 90, 984, y + 176);
+          if (toggle != null) toggle.checkable = toggle.clickable = true;
+        }
+      }
+    }
+
+    /** Adds a field with its part inside the list, or nothing when it is outside. */
+    Element field(String path, String clazz, String id, String text, int l, int t, int r, int b) {
+      if (b <= TOP || t >= BOTTOM) return null;
+      return scene.add(path, clazz, id, text, l, Math.max(t, TOP), r, Math.min(b, BOTTOM));
+    }
+
+    static List<String> summary(String out) {
+      List<String> rows = new ArrayList<>();
+      int header = out.indexOf("Passed over while scrolling (");
+      require(header >= 0, "no summary: " + out.substring(0, Math.min(out.length(), 400)));
+      for (String line : out.substring(header).split("\n")) if (line.startsWith("- ")) rows.add(line.substring(2));
+      return rows;
+    }
   }
 }
