@@ -904,6 +904,8 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     if (e.right <= 0 || e.left >= s.width || e.bottom <= 0 || e.top >= s.height) e.visible = false;
     if (e.visible && e.right > e.left && e.bottom > e.top && e.clipped())
       s.clipped.put(path, new int[] {e.fullWidth, e.fullHeight});
+    int order = n.getDrawingOrder();
+    if (order > 0) s.order.put(path, order);
     if (e.useful()) {
       e.index = s.elements.size() + 1;
       s.elements.put(e.index, e);
@@ -1269,53 +1271,103 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     return new float[] {(float) (px * s.width / cap.width), (float) (py * s.height / cap.height)};
   }
 
-  private float[] center(Element e, Screen s) {
-    int left = Math.max(0, e.left),
-        top = Math.max(0, e.top),
-        right = Math.min(s.width, e.right),
-        bottom = Math.min(s.height, e.bottom);
-    if (right <= left || bottom <= top)
-      throw fail("STALE_ELEMENT", "Element is outside the display");
-    return new float[] {(left + right) / 2f, (top + bottom) / 2f};
-  }
+  /** Points of the visible part tried for a tap, as fractions across it; the centre first. */
+  private static final float[] SPOTS = {.5f, .35f, .65f, .2f, .8f, .1f, .9f};
 
-  private boolean touchPossible(Element target, Screen s) {
-    float[] point;
-    try {
-      point = center(target, s);
-    } catch (Failure e) {
-      return false;
-    }
+  /**
+   * The point to tap {@code target} at: the centre of its visible part, or else the point of that
+   * part nearest the centre that nothing covers; null when there is none, with what covers the
+   * centre (or why there is no visible part) in {@code why[0]}. Covering are windows above the
+   * target's window, its own descendants that act on their own (clickable, editable, described)
+   * and, in its window, elements drawn above it that take touches (a floating button, a bar).
+   * When the centre is covered but another point is not, {@code why[0]} still names the cover.
+   */
+  private float[] tapPoint(Element target, Screen s, String[] why) {
     Window owner = null;
     for (Window window : s.windows) if (window.id == target.window) owner = window;
-    if (owner == null) return false;
+    int left = Math.max(0, target.left),
+        top = Math.max(0, target.top),
+        right = Math.min(s.width, target.right),
+        bottom = Math.min(s.height, target.bottom);
+    if (owner == null || right <= left || bottom <= top) {
+      why[0] = "it is off-screen";
+      return null;
+    }
+    List<float[]> points = new ArrayList<>();
+    for (float fx : SPOTS)
+      for (float fy : SPOTS)
+        points.add(new float[] {left + (right - left) * fx, top + (bottom - top) * fy});
+    float cx = (left + right) / 2f, cy = (top + bottom) / 2f;
+    points.sort(Comparator.comparingDouble(p -> Math.hypot(p[0] - cx, p[1] - cy)));
+    for (float[] p : points) {
+      String cover = coverAt(p[0], p[1], target, owner, s);
+      if (cover == null) return p;
+      if (why[0] == null) why[0] = cover;
+    }
+    return null;
+  }
+
+  /** What covers the point (x, y) of {@code target}, described, or null. */
+  private String coverAt(float x, float y, Element target, Window owner, Screen s) {
     for (Window window : s.windows) {
       if (window.layer <= owner.layer || window.id == owner.id) continue;
-      if (window.left <= point[0]
-          && point[0] < window.right
-          && window.top <= point[1]
-          && point[1] < window.bottom
+      if (window.left <= x
+          && x < window.right
+          && window.top <= y
+          && y < window.bottom
           && (window.active || window.focused || window.type != AccessibilityWindowInfo.TYPE_SYSTEM))
-        return false;
+        return "a window above it";
     }
-    for (Element candidate : s.elements.values()) {
-      if (candidate.index == target.index
-          || candidate.window != target.window
-          || !candidate.path.startsWith(target.path + "/")) continue;
-      if (candidate.left <= point[0]
-          && point[0] < candidate.right
-          && candidate.top <= point[1]
-          && point[1] < candidate.bottom
-          && (candidate.clickable || candidate.editable || !candidate.desc.isEmpty())) return false;
+    for (Element c : s.elements.values()) {
+      if (c.index == target.index || c.window != target.window || !c.visible) continue;
+      if (!(c.left <= x && x < c.right && c.top <= y && y < c.bottom)) continue;
+      if (target.path.startsWith(c.path + "/")) continue; // it encloses the target
+      boolean inside = c.path.startsWith(target.path + "/");
+      boolean covers =
+          inside
+              ? c.clickable || c.editable || !c.desc.isEmpty()
+              : takesTouch(c) && drawnAbove(c, target, s);
+      if (covers) return Core.describe(c);
     }
-    return true;
+    return null;
+  }
+
+  private boolean takesTouch(Element c) {
+    if (c.clickable || c.longClickable || c.editable || c.checkable) return true;
+    AccessibilityNodeInfo n = nodes.get(c.index);
+    return n != null && hasAction(n, AccessibilityNodeInfo.ACTION_CLICK);
+  }
+
+  /**
+   * Whether {@code b} is drawn above {@code a} in their window: a descendant is drawn over the
+   * element enclosing it; otherwise the children of their closest common ancestor decide, by the
+   * drawing order Android reports for them, or by tree order (later is above) when it reports none.
+   */
+  static boolean drawnAbove(Element b, Element a, Screen s) {
+    String[] pa = a.path.split("/", -1), pb = b.path.split("/", -1);
+    int i = 1;
+    while (i < pa.length && i < pb.length && pa[i].equals(pb[i])) i++;
+    if (i >= pb.length) return false; // b encloses a, or is a
+    if (i >= pa.length) return true; // b is inside a
+    String common = String.join("/", Arrays.copyOfRange(pa, 0, i));
+    Integer oa = s.order.get(common + "/" + pa[i]), ob = s.order.get(common + "/" + pb[i]);
+    if (oa != null && ob != null && !oa.equals(ob)) return ob > oa;
+    try {
+      return Integer.parseInt(pb[i]) > Integer.parseInt(pa[i]);
+    } catch (NumberFormatException e) {
+      return false;
+    }
   }
 
   private void clickElement(
       AccessibilityNodeInfo node, Element target, Screen state, String pkg, long token, int count, double seconds) {
-    String unavailable = touchPossible(target, state) ? null : "its centre is covered or off-screen";
+    String[] why = {null};
+    float[] point = tapPoint(target, state, why);
+    String unavailable =
+        point != null
+            ? null
+            : why[0].equals("it is off-screen") ? why[0] : "every visible point is covered by " + why[0];
     if (unavailable == null) {
-      float[] point = center(target, state);
       int i = 0;
       try {
         for (; i < count; i++) {
@@ -1331,6 +1383,10 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
                 token);
           if (i < count - 1) pause(70, token);
         }
+        if (why[0] != null)
+          addNotice(
+              "Tapped at " + Math.round(point[0]) + "," + Math.round(point[1]) + ": the centre is"
+                  + " covered by " + why[0] + ".");
         if (target.editable) waitForElementFocus(target, pkg, token);
         return;
       } catch (Failure e) {

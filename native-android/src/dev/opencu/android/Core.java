@@ -706,6 +706,8 @@ public final class Core {
     public final Map<Integer, Element> elements = new LinkedHashMap<>();
     /** Visible nodes cut by a parent's edge, also those without an element: path to own size. */
     public final Map<String, int[]> clipped = new HashMap<>();
+    /** Drawing order among its siblings, by tree path, for nodes that report one. */
+    public final Map<String, Integer> order = new HashMap<>();
 
     public String lines() {
       StringBuilder b = new StringBuilder();

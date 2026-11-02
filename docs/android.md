@@ -124,11 +124,18 @@ captured in their place.
 
 - `click`: observed `element_index` or both `x,y`; `click_count` 1–3; positive
   `duration` holds a touch for at least the platform long-press interval. Indexed
-  clicks inject a touch at the visible center first, so Android views that only
-  enter a mode on real touch behave like a person's tap. Accessibility click is
-  used only when touch is known unusable before anything is sent (the centre is
-  covered or off-screen, the input tool cannot start, or display-targeted
-  injection is missing), and the returned state says why. A touch that may have
+  clicks inject a touch, so Android views that only enter a mode on real touch
+  behave like a person's tap. The touch goes to the centre of the element's
+  visible part, or, when something drawn above covers the centre, to the
+  uncovered point of that part nearest the centre, and the result says where and
+  what covered the centre. Covering are windows above the element's window, its
+  own descendants that act on their own (clickable, editable or described), and
+  in its window elements drawn above it that take touches, such as a floating
+  action button (by the drawing order Android reports, else tree order).
+  Accessibility click is used only when touch is known unusable before anything is
+  sent (every visible point is covered, the element is off-screen, the input tool
+  cannot start, or display-targeted injection is missing), and the returned state
+  says why. A touch that may have
   been delivered (the input tool timed out, failed or was interrupted) returns
   `ACTION_UNCONFIRMED` and is never repeated another way.
 - `drag`: `from_x,from_y,to_x,to_y` from the fresh image, on the active display

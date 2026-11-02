@@ -140,8 +140,9 @@ public final class Protocol {
     add(
         "click",
         "Tap an observed Android element or fresh screenshot coordinate; duration >0 holds a long"
-            + " press (seconds). Indexed input touches the visible center first and falls back to"
-            + " accessibility click only when touch cannot reach it. Returns updated state;"
+            + " press (seconds). Indexed input touches the centre of the element's visible part, or"
+            + " the point nearest it that nothing drawn above covers (a floating button, a window);"
+            + " if every point is covered it uses the accessibility click. Returns updated state;"
             + " coordinate input returns a new JPEG. Indexed input revalidates identity and bounds before sending anything.",
         false,
         p,

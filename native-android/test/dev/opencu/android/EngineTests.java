@@ -3184,6 +3184,68 @@ public final class EngineTests {
       int visible = 2000 - 144; // the list below the display's top strip
       require(travel >= visible * 3 / 4, "the finger travelled " + travel + " px of " + visible);
     });
+
+    // Item 6e: the floating Add-alarm button covered the visible centre of the row to delete.
+    test("an indexed click taps beside a floating button that covers the element's centre", () -> {
+      Scene scene = new Scene();
+      scene.add("/0", "androidx.recyclerview.widget.RecyclerView", "alarms", "", 0, 100, 1080, 2000).scrollable = true;
+      Element row = scene.add("/0/3", "android.widget.LinearLayout", "row", "22:10", 0, 1500, 1080, 1700);
+      row.clickable = true;
+      Element fab = scene.add("/1", "android.widget.ImageButton", "add", "", 440, 1500, 640, 1700);
+      fab.clickable = true;
+      fab.desc = "Add alarm";
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      engine.read();
+      String out = text(engine.call("click", args("element_index", 2)));
+      String tap = engine.log.stream().filter(l -> l.contains(" tap ")).findFirst().orElse("none");
+      String[] xy = tap.substring(tap.lastIndexOf("tap ") + 4).split(" ");
+      int x = Integer.parseInt(xy[0]), y = Integer.parseInt(xy[1]);
+      require(y >= 1500 && y < 1700 && (x < 440 || x >= 640), "tapped under the button: " + tap);
+      require(out.startsWith("Tapped at " + x + "," + y + ": the centre is covered by ImageButton id=add"), "notice: " + out.split("\n")[0]);
+    });
+
+    test("an element covered everywhere by something drawn above it gets the accessibility click", () -> {
+      Scene scene = new Scene();
+      Element row = scene.add("/0", "android.widget.LinearLayout", "row", "22:10", 0, 1500, 1080, 1700);
+      row.clickable = true;
+      FakeNode node = scene.node(row).with(AccessibilityNodeInfo.ACTION_CLICK);
+      node.clickable = true;
+      Element sheet = scene.add("/1", "android.widget.FrameLayout", "sheet", "", 0, 1400, 1080, 2400);
+      sheet.clickable = true;
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      engine.read();
+      String out = text(engine.call("click", args("element_index", 1)));
+      require(engine.log.stream().noneMatch(l -> l.contains(" tap ")), "tapped: " + engine.log);
+      require(node.performed.equals(List.of(AccessibilityNodeInfo.ACTION_CLICK)), "actions " + node.performed);
+      require(out.contains("every visible point is covered by FrameLayout id=sheet"), "notice: " + out.split("\n")[0]);
+    });
+
+    test("a floating button's own click is not blocked by the list drawn below it", () -> {
+      Scene scene = new Scene();
+      scene.add("/0", "androidx.recyclerview.widget.RecyclerView", "alarms", "", 0, 100, 1080, 2000).scrollable = true;
+      scene.add("/0/3", "android.widget.LinearLayout", "row", "22:10", 0, 1500, 1080, 1700).clickable = true;
+      Element fab = scene.add("/1", "android.widget.ImageButton", "add", "", 440, 1500, 640, 1700);
+      fab.clickable = true;
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      engine.read();
+      engine.call("click", args("element_index", 3));
+      require(engine.log.contains("shell /system/bin/input tap 540 1600"), "tap: " + engine.log);
+    });
+
+    test("drawing order reported by Android decides which of two overlapping elements is above", () -> {
+      Screen s = new Screen();
+      Element a = new Element(), b = new Element();
+      a.path = "/0/2";
+      b.path = "/1";
+      Class<?>[] types = {Element.class, Element.class, Screen.class};
+      require(Boolean.TRUE.equals(callStatic("drawnAbove", types, b, a, s)), "later in the tree is above without an order");
+      @SuppressWarnings("unchecked")
+      Map<String, Integer> order = (Map<String, Integer>) get(s, "order");
+      order.put("/0", 2);
+      order.put("/1", 1);
+      require(Boolean.FALSE.equals(callStatic("drawnAbove", types, b, a, s)), "drawn first is below");
+      require(Boolean.TRUE.equals(callStatic("drawnAbove", types, a, b, s)), "drawn last is above");
+    });
   }
 
   /**
