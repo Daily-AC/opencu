@@ -29,7 +29,9 @@ import java.util.function.Consumer;
 
 class AndroidEngine implements Protocol.Backend, AutoCloseable {
   private final HandlerThread thread;
-  private UiAutomation automation;
+  // Volatile: shutdown sets closed before it changes the route, so a thread that sees the new
+  // route also sees closed.
+  private volatile UiAutomation automation;
   private UiAutomation mainAutomation;
   private UiAutomation desktopAutomation;
   private final Context context;
@@ -52,7 +54,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
   /** Set before anything in the current call reaches the device; a later failure needs a fresh read. */
   private boolean sent;
   private OwnedDisplay ownedDisplay;
-  private int activeDisplay = Display.DEFAULT_DISPLAY;
+  private volatile int activeDisplay = Display.DEFAULT_DISPLAY;
   private int desktopDisplay = -1;
   private int desktopFlags;
   private long desktopStartedAt;
@@ -645,12 +647,14 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     // am is a platform shell client; package/component comes from PackageManager, never
     // interpolated shell text.
     check(token, true);
+    int display = activeDisplay;
+    ensureOpen();
     sent = true;
     shell(
         "/system/bin/am",
         "start",
         "--display",
-        Integer.toString(activeDisplay),
+        Integer.toString(display),
         "-n",
         launch.getComponent().flattenToString(),
         "-a",
@@ -954,6 +958,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
   private void accessibility(
       AccessibilityNodeInfo n, int action, Bundle args, String pkg, long token) {
     checkTarget(token, pkg);
+    ensureOpen();
     sent = true;
     actionConfirmed(n.performAction(action, args));
     check(token, false);
@@ -966,6 +971,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     // The whole gesture, release included, stays on the display and connection it started on.
     UiAutomation via = automation;
     int display = activeDisplay;
+    ensureOpen();
     long down = SystemClock.uptimeMillis();
     boolean pressed = false;
     try {
@@ -1140,13 +1146,15 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
 
   private void shellTap(float x, float y, String pkg, long token) {
     checkTarget(token, pkg);
+    int display = activeDisplay;
+    ensureOpen();
     String[] tap =
-        activeDisplay == Display.DEFAULT_DISPLAY
+        display == Display.DEFAULT_DISPLAY
             ? new String[] {"/system/bin/input", "tap", Integer.toString(Math.round(x)), Integer.toString(Math.round(y))}
             : new String[] {
               "/system/bin/input",
               "-d",
-              String.valueOf(activeDisplay),
+              String.valueOf(display),
               "tap",
               Integer.toString(Math.round(x)),
               Integer.toString(Math.round(y))
@@ -1163,6 +1171,14 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     } catch (Exception e) {
       throw unconfirmed("the platform input tool was interrupted");
     }
+  }
+
+  /**
+   * Refuses to start input once shutdown began. Called after the route has been read and right
+   * before the first injection: a check that ran earlier may have blocked while the route changed.
+   */
+  private void ensureOpen() {
+    if (closed) throw fail("ENGINE_STOPPING", "Stdin closed; nothing sent");
   }
 
   /** The input may have been delivered: never repeat it, and require a fresh read. */
@@ -1243,6 +1259,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
       throw fail("INPUT_UNAVAILABLE", "display-targeted key injection is unavailable");
     UiAutomation via = automation;
     int display = activeDisplay;
+    ensureOpen();
     long down = SystemClock.uptimeMillis();
     boolean pressed = false, completed = false;
     try {
@@ -1400,6 +1417,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
               // A list at its end usually stops offering the action: nothing to send.
               if (!hasAction(n, action)) break;
               checkTarget(token, pkg);
+              ensureOpen();
               sent = true;
               // The result is not evidence either way; the list's content decides below.
               n.performAction(action, null);

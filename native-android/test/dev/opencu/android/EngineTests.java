@@ -336,7 +336,7 @@ public final class EngineTests {
     Scene scene;
     int observations;
     IntConsumer onObserve;
-    Body checkHook, resolveHook;
+    Body checkHook, resolveHook, beforeInjectHook;
     List<String> trace;
     ShellHook shellHook;
     String mainForeground;
@@ -442,6 +442,12 @@ public final class EngineTests {
 
     // Not annotated: older engines lack this hook and simply never call it.
     boolean displayInputAvailable() {
+      if (beforeInjectHook != null)
+        try {
+          beforeInjectHook.run();
+        } catch (Exception e) {
+          throw new RuntimeException(e);
+        }
       return true;
     }
 
@@ -1183,6 +1189,38 @@ public final class EngineTests {
       require(cancel.action == 3, "second event " + cancel.action);
       require(cancel.via == agent && cancel.display == 5,
           "cancel went to display " + cancel.display + (cancel.via == main ? " via the main connection" : ""));
+    });
+
+    test("a gesture stalled across shutdown never starts on the restored main route", () -> {
+      Scene scene = new Scene();
+      scene.add("/0", "android.widget.Button", "hold", "Hold", 100, 200, 300, 260).clickable = true;
+      ScriptedEngine engine = onAgentDisplay(scene);
+      engine.read();
+      CountDownLatch stalled = new CountDownLatch(1), resume = new CountDownLatch(1);
+      engine.beforeInjectHook = () -> {
+        // A platform call between the last check and the first event blocks past shutdown's wait.
+        stalled.countDown();
+        resume.await(10, TimeUnit.SECONDS);
+      };
+      Thread worker = new Thread(() -> {
+        try {
+          engine.call("click", args("element_index", 1, "duration", 0.6));
+        } catch (Throwable ignored) {
+        }
+      });
+      worker.start();
+      require(stalled.await(5, TimeUnit.SECONDS), "gesture never reached injection");
+      try {
+        engine.close();
+      } catch (Throwable ignored) {
+      }
+      require((Integer) get(engine, "activeDisplay") == 0, "shutdown did not restore the main route");
+      resume.countDown();
+      worker.join(3000);
+      reopenCommands();
+      List<String> sentOn = new ArrayList<>();
+      for (Event e : engine.events) sentOn.add(e.action + "@" + e.display);
+      require(engine.events.isEmpty(), "events after shutdown: " + sentOn);
     });
 
     test("closing waits for an in-flight gesture before releasing the agent display", () -> {
