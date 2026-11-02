@@ -159,6 +159,9 @@ public final class EngineTests {
     Map<Integer, Runnable> effects;
     List<Integer> performed;
     List<String> setTexts;
+    /** When set, paste is offered only if this clipboard held a clip at the last refresh. */
+    ClipService pasteNeedsClip;
+    boolean pasteOffered;
 
     static FakeNode create() {
       FakeNode n = allocate(FakeNode.class);
@@ -171,6 +174,11 @@ public final class EngineTests {
       n.performed = Collections.synchronizedList(new ArrayList<>());
       n.setTexts = Collections.synchronizedList(new ArrayList<>());
       return n;
+    }
+
+    boolean offers(int id) {
+      if (id == ACTION_PASTE && pasteNeedsClip != null) return pasteOffered;
+      return actions.contains(id);
     }
 
     FakeNode with(int... ids) {
@@ -186,7 +194,7 @@ public final class EngineTests {
     @Override
     public boolean performAction(int action, Bundle arguments) {
       performed.add(action);
-      if (!actions.contains(action)) return false; // Android ignores actions a node does not list.
+      if (!offers(action)) return false; // Android ignores actions a node does not list.
       if (action == ACTION_SET_TEXT && arguments != null) {
         CharSequence value = arguments.getCharSequence(ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE);
         setTexts.add(String.valueOf(value));
@@ -234,6 +242,7 @@ public final class EngineTests {
 
     @Override
     public boolean refresh() {
+      if (pasteNeedsClip != null) pasteOffered = pasteNeedsClip.clip != null;
       return refreshes;
     }
   }
@@ -444,7 +453,7 @@ public final class EngineTests {
 
     @Override
     boolean hasAction(AccessibilityNodeInfo n, int id) {
-      return ((FakeNode) n).actions.contains(id);
+      return ((FakeNode) n).offers(id);
     }
 
     @Override
@@ -1113,7 +1122,7 @@ public final class EngineTests {
       engine.read();
       Map<String, Object> result = engine.call("type_text", args("text", "hello"));
       require(node.setTexts.equals(List.of("hello")), "set-text " + node.setTexts);
-      require(service.calls.isEmpty(), "clipboard touched: " + service.calls);
+      require(service.clip == null, "clipboard left with " + service.text());
       require(text(result).contains("does not offer paste"), "no reason: " + text(result).split("\n")[0]);
     });
 
@@ -1588,6 +1597,41 @@ public final class EngineTests {
       person.accept("[ 10.000000] /dev/input/event2: EV_ABS ABS_MT_POSITION_X 00000100", 50_000);
       invoke(person, "seed", new Class<?>[] {long.class}, 1_000L);
       require(person.lastActivity == 50_000, "last activity " + person.lastActivity);
+    });
+
+    test("an editor that offers paste only while the clipboard holds a clip is pasted into", () -> {
+      ClipService service = new ClipService();
+      Scene scene = new Scene();
+      FakeNode node = focusedEditor(scene, service, AccessibilityNodeInfo.ACTION_SET_TEXT);
+      node.pasteNeedsClip = service;
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      set(engine, "clipboard", clipboard(service));
+      engine.read();
+      Map<String, Object> result = engine.call("type_text", args("text", "无线调试"));
+      require(node.performed.contains(AccessibilityNodeInfo.ACTION_PASTE) && node.setTexts.isEmpty(),
+          "not pasted: " + text(result).split("\n")[0]);
+      require(node.text.equals("无线调试"), "editor: " + node.text);
+      require(service.clip == null, "clipboard left with " + service.text());
+    });
+
+    test("the clipboard is back before set-text when the editor never offers paste", () -> {
+      ClipService service = new ClipService();
+      service.clip = android.content.ClipData.newPlainText("person", "PERSON-CLIP");
+      Scene scene = new Scene();
+      FakeNode node = focusedEditor(scene, service, AccessibilityNodeInfo.ACTION_SET_TEXT);
+      List<String> clipAtSetText = new ArrayList<>();
+      Runnable mirror = node.effects.get(AccessibilityNodeInfo.ACTION_SET_TEXT);
+      node.effects.put(AccessibilityNodeInfo.ACTION_SET_TEXT, () -> {
+        clipAtSetText.add(service.text());
+        mirror.run();
+      });
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      set(engine, "clipboard", clipboard(service));
+      engine.read();
+      Map<String, Object> result = engine.call("type_text", args("text", "hello"));
+      require(clipAtSetText.equals(List.of("PERSON-CLIP")), "clipboard during set-text: " + clipAtSetText);
+      require("PERSON-CLIP".equals(service.text()), "clipboard now " + service.text());
+      require(text(result).contains("does not offer paste"), "no reason: " + text(result).split("\n")[0]);
     });
 
     test("startup and doctor failures print one coded stderr line", () -> {

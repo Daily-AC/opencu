@@ -135,12 +135,14 @@ content is never bypassed. Screenshots can include covering windows.
 - `press_key`: back, home, enter/Return, delete/backspace, tab, recents/app_switch,
   search. No volume, power, arbitrary keycodes or modifier chords.
 - `type_text`: types into the focused editable only. Without one it returns
-  `NO_FOCUSED_ELEMENT` and sends nothing; click the intended field first. It
-  pastes, preserving Unicode, when the editor lists paste and the clipboard can be
-  read and written, and restores the previous clipboard. When paste is known
-  unusable before anything is sent, it uses accessibility set-text and the result
+  `NO_FOCUSED_ELEMENT` and sends nothing; click the intended field first. It reads
+  and keeps the clipboard, places the text there and re-reads the editor, because
+  Android editors offer paste only while the clipboard holds a clip. If the editor
+  then offers paste, it pastes (preserving Unicode) and restores the previous
+  clipboard. When paste is unusable before anything reached the app, the previous
+  clipboard is restored first and then accessibility set-text is used; the result
   says why (for example the editor does not offer paste, or the clipboard could not
-  be read). A paste that was sent but not confirmed returns `ACTION_UNCONFIRMED`
+  be read, in which case it is left untouched). A paste that was sent but not confirmed returns `ACTION_UNCONFIRMED`
   and is never followed by set-text. The postcondition still has to match or the
   call returns `TEXT_INPUT_FAILED`. It never types through the person's keyboard. An app reaction can arrive after
   the text postcondition; use `waitForText` or an `until` condition to observe it.

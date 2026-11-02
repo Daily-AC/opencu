@@ -1285,12 +1285,12 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
 
   /**
    * Pastes {@code text} into {@code n} through the clipboard. Returns null once pasted, or why paste
-   * is unusable when that is known before anything reached the app. A paste that was sent but not
-   * confirmed is ACTION_UNCONFIRMED and is never followed by another input method.
+   * is unusable when that is known before anything reached the app; the person's clipboard is back
+   * in place by then. A paste that was sent but not confirmed is ACTION_UNCONFIRMED and is never
+   * followed by another input method.
    */
   private String pasteText(AccessibilityNodeInfo n, String text, String pkg, long token) {
     if (!n.isEditable()) return "the focused node is not editable";
-    if (!hasAction(n, AccessibilityNodeInfo.ACTION_PASTE)) return "the editor does not offer paste";
     checkTarget(token, pkg);
     ShellClipboard.Snapshot previous = clipboard.read();
     if (!previous.readable)
@@ -1309,7 +1309,9 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
           return "the clipboard could not be written (" + e.getClass().getSimpleName() + ")";
         }
       }
+      // Editors offer paste only while the clipboard holds a clip, so ask once the text is there.
       if (!n.refresh()) throw fail("STALE_ELEMENT", "The focused editor went away before paste; nothing sent");
+      if (!hasAction(n, AccessibilityNodeInfo.ACTION_PASTE)) return "the editor does not offer paste";
       checkTarget(token, pkg);
       sent = true;
       actionConfirmed(n.performAction(AccessibilityNodeInfo.ACTION_PASTE));
