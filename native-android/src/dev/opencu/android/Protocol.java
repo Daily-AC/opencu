@@ -274,7 +274,8 @@ public final class Protocol {
             + " unchanged for 400 ms, default timeout 8000 ms/max 20000 ms. wait uses ms (1–15000)."
             + " Stops before further input on timeout, new popup/system dialog, unexpected"
             + " foreground app, stale element, failure, lock or person activity. Reports stopped"
-            + " step, reason and waitedMs plus final state. Coordinates must be first. A batch is"
+            + " step, reason and waitedMs plus final state. Only the first action may use"
+            + " screenshot coordinates, so a batch has at most one coordinate action. A batch is"
             + " limited to "
             + BATCH_LIMIT_MS / 1000
             + " s: it stops before a step whose holds, waits, pages and until timeout"

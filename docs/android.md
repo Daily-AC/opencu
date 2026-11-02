@@ -186,7 +186,11 @@ response; a failed screenshot leaves the last returned state in force. A success
 `run_actions {app, actions, includeScreenshot?}` accepts 1–16 input actions and
 `{"method":"wait","ms":1..15000}`. Indexes always come from the state before the
 batch. Every step reads the screen afresh right before it sends input and
-compares it with the state left by the previous step. Coordinates must be in its first action. Each action can carry:
+compares it with the state left by the previous step. Only the first action may
+use screenshot coordinates (`x,y` on `click` or `scroll`, or a `drag`), so a batch
+has at most one coordinate action; a coordinate action in any later position is
+rejected with `INVALID_ARGUMENT` (`Coordinate input must be the first batch
+action`) before anything is sent. Each action can carry:
 
 ```json
 {"until":{"text":"Fixture result ready","gone":"Loading fixture data","stable":true,"timeoutMs":8000}}
