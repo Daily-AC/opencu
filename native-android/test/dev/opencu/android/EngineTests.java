@@ -331,7 +331,8 @@ public final class EngineTests {
     Scene scene;
     int observations;
     IntConsumer onObserve;
-    Body checkHook;
+    Body checkHook, resolveHook;
+    List<String> trace;
     ShellHook shellHook;
     String mainForeground;
     List<String> log;
@@ -358,6 +359,7 @@ public final class EngineTests {
       e.mainForeground = "";
       e.log = Collections.synchronizedList(new ArrayList<>());
       e.events = Collections.synchronizedList(new ArrayList<>());
+      e.trace = Collections.synchronizedList(new ArrayList<>());
       return e;
     }
 
@@ -372,6 +374,7 @@ public final class EngineTests {
     @SuppressWarnings("unchecked")
     Screen observe(String target) {
       observations++;
+      trace.add("observe");
       if (onObserve != null) onObserve.accept(observations);
       Screen s = scene.screen();
       s.target = target;
@@ -407,16 +410,25 @@ public final class EngineTests {
     }
 
     @Override
-    void waitIdle() {}
+    void waitIdle() {
+      trace.add("idle");
+    }
 
     @Override
     String resolve(String name) {
+      if (resolveHook != null)
+        try {
+          resolveHook.run();
+        } catch (Exception e) {
+          throw new RuntimeException(e);
+        }
       return name;
     }
 
     @Override
     String shell(String... args) throws Exception {
       log.add("shell " + String.join(" ", args));
+      trace.add("shell");
       return shellHook == null ? "" : shellHook.run(args);
     }
 
@@ -943,6 +955,50 @@ public final class EngineTests {
       Protocol.validate("scroll", args("element_index", 1, "direction", "down", "pages", 5));
       Failure f = failure(() -> Protocol.validate("scroll", args("element_index", 1, "direction", "down", "pages", 6)));
       require(f.code.equals("INVALID_ARGUMENT"), f.code);
+    });
+
+    test("batch step is checked against a fresh read, not the previous step's state", () -> {
+      Scene scene = new Scene();
+      scene.add("/0", "android.widget.Button", "next", "Next", 100, 200, 300, 260).clickable = true;
+      scene.add("/1", "android.widget.Button", "send", "Send", 100, 400, 300, 460).clickable = true;
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      engine.read();
+      int[] resolves = {0};
+      engine.resolveHook = () -> {
+        // The second resolve happens just before step 2: the app opens a dialog right then.
+        if (++resolves[0] == 2) {
+          Window dialog = new Window();
+          dialog.id = 9;
+          dialog.type = 1;
+          dialog.pkg = PKG;
+          dialog.layer = 5;
+          dialog.left = 100;
+          dialog.top = 800;
+          dialog.right = 980;
+          dialog.bottom = 1400;
+          dialog.focused = dialog.active = true;
+          scene.extraWindows.add(dialog);
+        }
+      };
+      Map<String, Object> result =
+          engine.call("run_actions", args("actions", List.of(
+              obj("method", "click", "element_index", 1),
+              obj("method", "click", "element_index", 2, "until", obj("app", PKG)))));
+      long taps = engine.log.stream().filter(line -> line.contains(" tap ")).count();
+      require(taps == 1, "taps sent: " + engine.log);
+      require(String.valueOf(map(result.get("_meta")).get("opencu/batch")).contains("reason=popup"),
+          "batch: " + map(result.get("_meta")).get("opencu/batch"));
+    });
+
+    test("indexed click settles before its final read", () -> {
+      Scene scene = new Scene();
+      scene.add("/0", "android.widget.Button", "ok", "OK", 100, 200, 300, 260).clickable = true;
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      engine.read();
+      engine.trace.clear();
+      engine.call("click", args("element_index", 1));
+      List<String> before = engine.trace.subList(0, engine.trace.indexOf("shell"));
+      require(before.lastIndexOf("idle") < before.lastIndexOf("observe"), "order before tap: " + before);
     });
 
     if (!failures.isEmpty()) {

@@ -974,7 +974,6 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
 
   private void clickElement(
       AccessibilityNodeInfo node, Element target, Screen state, String pkg, long token, int count, double seconds) {
-    settleAfterInput(token);
     String unavailable = touchPossible(target, state) ? null : "its centre is covered or off-screen";
     if (unavailable == null) {
       float[] point = center(target, state);
@@ -1248,7 +1247,10 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
       pause(((Number) args.get("ms")).longValue(), token);
       return;
     }
-    Screen now = fence == base ? observe(pkg) : fence;
+    // Settle first, then read: the element is revalidated on the tree that receives the input.
+    if (method.equals("click") && args.containsKey("element_index")) settleAfterInput(token);
+    // Every step reads afresh; a fence from an earlier step can be stale by now.
+    Screen now = observe(pkg);
     String unexpected = Core.stopReason(fence, now, pkg);
     if (unexpected != null)
       throw fail(
