@@ -1464,7 +1464,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
             addNotice(
                 listChanged
                     ? "Scrolled " + moved + " of " + requested + " pages; the list changed, so scrolling stopped"
-                    : Core.scrollOutcome(moved, requested));
+                    : Core.scrollNotice(moved, requested));
           break;
         }
       case "press_key":

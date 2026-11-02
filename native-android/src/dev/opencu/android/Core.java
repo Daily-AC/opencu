@@ -23,17 +23,12 @@ public final class Core {
     return new Failure(code, message);
   }
 
+  /** Notice after a scroll, decided by whether each page's content moved. */
   public static String scrollNotice(int moved, int requested) {
-    if (moved == 0) return "Nothing scrolled; already at the end";
+    if (moved == 0) return "Nothing moved; the list is at its end or does not scroll this way";
     if (moved < requested)
       return "Scrolled " + moved + " of " + requested + " pages; reached the end";
     return "Scrolled " + moved + " of " + requested + " pages";
-  }
-
-  /** Notice for a scroll that moved fewer pages than requested. */
-  public static String scrollOutcome(int moved, int requested) {
-    if (moved == 0) return "Nothing moved; the list is at its end or does not scroll this way";
-    return scrollNotice(moved, requested);
   }
 
   /**

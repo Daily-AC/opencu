@@ -263,7 +263,7 @@ public final class OfflineTests {
     check(Core.stopReason(loading, switched, "").equals("app_switched"), "unexpected app stops");
     check(Core.stopReason(loading, switched, "another.package") == null, "expected app allowed");
     check(
-        Core.scrollNotice(0, 1).equals("Nothing scrolled; already at the end"),
+        Core.scrollNotice(0, 1).equals("Nothing moved; the list is at its end or does not scroll this way"),
         "scroll at end notice");
     check(
         Core.scrollNotice(3, 5).equals("Scrolled 3 of 5 pages; reached the end"),
