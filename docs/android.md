@@ -292,16 +292,20 @@ captured in their place.
   (previous, selected, next). A row of a wheel names the wheel too, for `set_value`
   and `scroll`. The selected value is the text of the one row marked selected,
   if any, else the wheel's own text; it is read as its leading integer when it has
-  one (`23`), and a requested number matches that number (`7` matches `07…`),
-  while other text matches a value that starts with it. Numbers go toward the
-  requested number, or the short way round when the wheel's range is known;
-  scroll-forward is taken to increase, as on AOSP wheels, until the first step
-  shows otherwise. Other values go forward, and back once from an end. Each step
-  waits up to one second for the value to change and settle. The call fails with
-  `VALUE_NOT_REACHED`, naming the value shown and the steps taken, when a step
-  changes nothing (an end of the wheel), after 70 steps, after 25 seconds (or at
-  a batch's time limit), or when the wheel comes round without showing the value;
-  read state before continuing. On success the result starts `Set the wheel to 35
+  one (`23`). A wheel that shows numbers takes a plain number (`7` matches `07…`);
+  anything else (`7 PM`, `07:35`, `5 min`) returns `VALUE_NOT_SETTABLE`, and a
+  number outside a range the wheel reports returns `INVALID_ARGUMENT`, both with
+  nothing sent. On other wheels a value matches the text or the start of it.
+  Numbers go toward the requested number, or the short way round when the wheel's
+  range is known; scroll-forward is taken to increase, as on AOSP wheels, until
+  the first step shows otherwise. Other values go forward, and from an end back the
+  other way. Each step waits up to one second for the value to change and settle.
+  The call fails with `VALUE_NOT_REACHED`, naming the value the wheel now shows and
+  the steps taken, as soon as a step goes past the number (it is not one of the
+  wheel's values, as on a wheel of five-minute steps) or the wheel goes round past
+  its end, when a step changes nothing at both ends, when the wheel comes round
+  without showing the value, after 70 steps, or after 25 seconds (or at a batch's
+  time limit); read state before continuing. On success the result starts `Set the wheel to 35
   in 12 steps.` One `run_actions` can set every wheel of a time. `scroll` on a
   wheel also steps it, one value per page (`down` is the next value: on ColorOS
   the hour went from 00 to 07 scrolling down), and a page counts as moved only when

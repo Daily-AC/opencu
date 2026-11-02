@@ -261,10 +261,26 @@ public final class Core {
     return !g.isEmpty() && s.startsWith(g);
   }
 
-  /** How many steps {@code from} is from {@code to}: round the wheel when its span is known. */
-  public static long wheelDistance(long from, long to, long span) {
-    long direct = Math.abs(to - from);
-    return span > 0 ? Math.min(direct, Math.abs(span - direct)) : direct;
+  /**
+   * Which way a wheel step from {@code from} to {@code to} went: +1 up, -1 down, 0 not at all; the
+   * shorter way round when the wheel's {@code span} of values is known.
+   */
+  public static int wheelDirection(long from, long to, long span) {
+    if (from == to) return 0;
+    if (span <= 0) return to > from ? 1 : -1;
+    long up = Math.floorMod(to - from, span);
+    return up <= span / 2 ? 1 : -1;
+  }
+
+  /**
+   * Whether a step from {@code from} to {@code to} in direction {@code way} went past {@code goal}
+   * without stopping on it: the goal lies strictly between them, round the wheel when its {@code
+   * span} is known.
+   */
+  public static boolean wheelPassed(long from, long to, long goal, int way, long span) {
+    if (span <= 0) return way > 0 ? from < goal && goal < to : to < goal && goal < from;
+    long step = Math.floorMod(way * (to - from), span), toGoal = Math.floorMod(way * (goal - from), span);
+    return toGoal > 0 && toGoal < step;
   }
 
   /** A copy of {@code e} with {@code text} as its text. */

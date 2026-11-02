@@ -3079,11 +3079,13 @@ public final class EngineTests {
     });
 
     test("set_value stops turning a wheel after 70 steps", () -> {
-      WheelScene minute = new WheelScene("minute", 47, 0, 59);
+      // Review: a goal off a wrapping wheel now stops at the wrap; a long wheel shows the limit.
+      WheelScene minute = new WheelScene("minute", 0, 0, 200);
+      minute.wraps = false;
       minute.delayMs = 0;
       ScriptedEngine engine = minute.engine();
       engine.read();
-      Failure f = failure(() -> engine.call("set_value", args("element_index", 2, "value", "99")));
+      Failure f = failure(() -> engine.call("set_value", args("element_index", 2, "value", "150")));
       require(f.code.equals("VALUE_NOT_REACHED") && f.getMessage().contains("after 70 steps"), f.code + ": " + f.getMessage());
       require(minute.node.performed.size() == 70, "actions " + minute.node.performed.size());
     });
@@ -3580,7 +3582,7 @@ public final class EngineTests {
       }
 
       void step(int by) {
-        int next = value + by;
+        int next = value + by * stepBy;
         if (next > max) next = wraps ? min : max;
         if (next < min) next = wraps ? max : min;
         pending = next;
@@ -3608,6 +3610,8 @@ public final class EngineTests {
     final FakeNode node;
     boolean wraps = true, forwardDecreases;
     long delayMs = 120;
+    /** How far one step moves the value, as on a wheel of five-minute steps. */
+    int stepBy = 1;
 
     WheelScene(String id, int value, int min, int max) {
       scene.add("/0/0", "android.widget.TextView", "", "Alarm time", 0, 800, 1080, 880);
@@ -4107,6 +4111,83 @@ public final class EngineTests {
       Map<String, Object> batch = map(map(result.get("_meta")).get("opencu/batch"));
       require("stale_element".equals(batch.get("reason")) && node.performed.size() == 1,
           "batch " + batch + "; archived " + node.performed.size() + " times");
+    });
+
+    // 2: set_value turned a numeric wheel 70 steps or 25 s for goals it could not reach.
+    test("a numeric wheel refuses a goal that is not a plain number, sending nothing", () -> {
+      WheelScene hour = new WheelScene("hour", 9, 0, 23);
+      ScriptedEngine engine = hour.engine();
+      for (String goal : List.of("7 PM", "07:35", "5 min")) {
+        engine.read();
+        Failure f = failure(() -> engine.call("set_value", args("element_index", 2, "value", goal)));
+        require(f.code.equals("VALUE_NOT_SETTABLE") && f.getMessage().contains("plain number"), goal + ": " + f.code + ": " + f.getMessage());
+      }
+      require(hour.node.performed.isEmpty(), "sent " + hour.node.performed);
+    });
+
+    test("a wheel that reports its range refuses a value outside it, sending nothing", () -> {
+      WheelScene minute = new WheelScene("minute", 40, 0, 59);
+      minute.ranged();
+      ScriptedEngine engine = minute.engine();
+      engine.read();
+      Failure f = failure(() -> engine.call("set_value", args("element_index", 2, "value", "75")));
+      require(f.code.equals("INVALID_ARGUMENT") && f.getMessage().contains("0..59"), f.code + ": " + f.getMessage());
+      require(minute.node.performed.isEmpty(), "sent " + minute.node.performed);
+    });
+
+    test("set_value stops at the first step that goes past the number", () -> {
+      WheelScene minute = new WheelScene("minute", 5, 0, 55);
+      minute.stepBy = 5; // a wheel of five-minute steps: 7 is not on it
+      ScriptedEngine engine = minute.engine();
+      engine.read();
+      Failure f = failure(() -> engine.call("set_value", args("element_index", 2, "value", "7")));
+      require(f.code.equals("VALUE_NOT_REACHED") && f.getMessage().startsWith("The wheel shows 10 after 1 step;")
+          && f.getMessage().contains("went past it"), f.code + ": " + f.getMessage());
+    });
+
+    test("set_value stops when the wheel goes round past its end without the number", () -> {
+      WheelScene minute = new WheelScene("minute", 57, 0, 59); // wraps 59 to 00, range not reported
+      ScriptedEngine engine = minute.engine();
+      engine.read();
+      Failure f = failure(() -> engine.call("set_value", args("element_index", 2, "value", "75")));
+      require(f.code.equals("VALUE_NOT_REACHED") && f.getMessage().contains("went round past its end")
+          && minute.node.performed.size() == 3, f.code + ": " + f.getMessage() + " after " + minute.node.performed.size());
+    });
+
+    test("a range element without text or set-progress is not set by stepping", () -> {
+      Scene scene = new Scene();
+      Element rating = scene.add("/0", "android.widget.RatingBar", "stars", "", 0, 300, 1080, 400);
+      rating.focusable = true;
+      rating.actions.put("scroll_forward", FORWARD);
+      rating.actions.put("scroll_backward", BACKWARD);
+      set(rating, "ranged", true);
+      set(rating, "min", 0f);
+      set(rating, "max", 5f);
+      set(rating, "current", 2f);
+      FakeNode node = scene.node(rating).with(FORWARD, BACKWARD);
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      engine.read();
+      Failure f = failure(() -> engine.call("set_value", args("element_index", 1, "value", "4")));
+      require(f.code.equals("VALUE_NOT_SETTABLE") && node.performed.isEmpty(), f.code + " " + node.performed);
+    });
+
+    // 3: from May to Mar on a month wheel that does not wrap it went to Dec and gave up at Nov.
+    test("set_value reaches a value behind the current one on a text wheel that does not wrap", () -> {
+      String[] months = {"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+      Scene scene = new Scene();
+      Element wheel = scene.add("/0", "android.widget.NumberPicker", "month", "May", 300, 900, 780, 1300);
+      wheel.focusable = true;
+      wheel.actions.put("scroll_forward", FORWARD);
+      wheel.actions.put("scroll_backward", BACKWARD);
+      FakeNode node = scene.node(wheel).with(FORWARD, BACKWARD);
+      int[] at = {4};
+      node.effects.put(FORWARD, () -> wheel.text = months[at[0] = Math.min(11, at[0] + 1)]);
+      node.effects.put(BACKWARD, () -> wheel.text = months[at[0] = Math.max(0, at[0] - 1)]);
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      engine.read();
+      String out = text(engine.call("set_value", args("element_index", 1, "value", "Mar")));
+      require(wheel.text.equals("Mar") && out.startsWith("Set the wheel to Mar in 17 steps."),
+          "value " + wheel.text + "; notice: " + out.split("\n")[0]);
     });
   }
 }

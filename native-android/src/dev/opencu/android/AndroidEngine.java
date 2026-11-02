@@ -2141,36 +2141,57 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
 
   /**
    * Turns the wheel {@code wheel} (of {@code now}) with its own scroll actions, one step at a time
-   * and reading its value after each, until it shows {@code value}. Numbers go the short way round
-   * when the wheel's range is known, otherwise toward the number; scroll-forward is taken to
-   * increase, as on AOSP's NumberPicker, until a step shows otherwise. Other values go forward,
-   * and back once from an end. Fails with VALUE_NOT_REACHED, naming the value shown and the steps
-   * taken, after {@link #WHEEL_MAX_STEPS} steps, at {@link #WHEEL_MAX_MS} (or the batch limit), when
-   * a step changes nothing, or when the wheel comes round without showing it.
+   * and reading its value after each, until it shows {@code value}.
+   *
+   * <p>A wheel that shows numbers takes a plain number (anything else, such as "7 PM" or "07:35",
+   * is refused before anything is sent), within its range when it reports one. It goes toward the
+   * number, the short way round when the range is known; scroll-forward is taken to increase, as
+   * on AOSP's NumberPicker, until the first step shows otherwise. It stops as soon as a step goes
+   * past the number (the number is not one of its values, as on a wheel of five-minute steps) or
+   * the wheel goes round past its end. A wheel of other values goes forward, and from an end back
+   * the other way.
+   *
+   * <p>Fails with VALUE_NOT_REACHED, naming the value shown and the steps taken, when it stops
+   * that way, after {@link #WHEEL_MAX_STEPS} steps, at {@link #WHEEL_MAX_MS} (or the batch limit),
+   * when a step changes nothing, or when the wheel comes round without showing the value.
    */
   private void setWheel(Element wheel, Screen now, String value, Screen fence, String pkg, long token) {
     String goal = value.trim();
     if (goal.isEmpty()) throw fail("INVALID_ARGUMENT", "A wheel takes one of its values; nothing sent");
     String shown = Core.selectedValue(now, wheel);
-    if (Core.sameWheelValue(shown, goal)) {
+    Long from = Core.wheelNumber(shown), to = null;
+    boolean numeric = from != null;
+    long span = 0;
+    if (numeric) {
+      if (!goal.matches("[+-]?[0-9]{1,15}"))
+        throw fail(
+            "VALUE_NOT_SETTABLE",
+            "This wheel shows numbers (now " + Core.wheelShort(shown) + "): give it a plain number"
+                + " such as 7; nothing sent");
+      to = Long.parseLong(goal.replace("+", ""));
+      if (wheel.ranged && wheel.max > wheel.min) {
+        if (to < wheel.min || to > wheel.max)
+          throw fail(
+              "INVALID_ARGUMENT",
+              "Value outside the wheel's range " + Element.number(wheel.min) + ".."
+                  + Element.number(wheel.max) + "; nothing sent");
+        span = (long) Math.floor(wheel.max) - (long) Math.ceil(wheel.min) + 1;
+      }
+    }
+    if (numeric ? to.equals(from) : Core.sameWheelValue(shown, goal)) {
       addNotice("The wheel already shows " + Core.wheelShort(shown) + "; nothing sent.");
       return;
     }
     long deadline = SystemClock.uptimeMillis() + WHEEL_MAX_MS;
     if (batchDeadline > 0) deadline = Math.min(deadline, batchDeadline);
-    Long to = Core.wheelNumber(goal), from = Core.wheelNumber(shown);
-    boolean numeric = to != null && from != null;
     // +1 goes toward larger numbers (for other values: forward).
     int toward = numeric && to < from ? -1 : 1;
-    long span = 0;
-    if (numeric && wheel.ranged && wheel.max > wheel.min) {
-      span = (long) Math.floor(wheel.max) - (long) Math.ceil(wheel.min) + 1;
-      long direct = Math.abs(to - from);
-      if (span - direct < direct) toward = -toward; // round past the end: shorter on a wheel that wraps
-    }
+    if (span > 0 && span - Math.abs(to - from) < Math.abs(to - from))
+      toward = -toward; // round past the end: shorter on a wheel that wraps
     boolean forwardIncreases = true, learned = !numeric, reversed = false;
+    // Values met since the last change of direction: one met again means a full turn.
     Set<String> met = new HashSet<>();
-    met.add(shown);
+    met.add(Core.wheelKey(now, wheel));
     Element w = wheel;
     Screen seen = now;
     int steps = 0;
@@ -2185,28 +2206,41 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
       seen = step.after;
       w = step.wheel;
       if (!step.changed) {
-        // At an end of a wheel that does not wrap: go back the other way once.
+        // At an end of a wheel that does not wrap: go back the other way once, when that way
+        // can still lead to the value (it lies behind, or the short way round was tried).
         if (!reversed && (!numeric || span > 0)) {
           reversed = true;
           toward = -toward;
           span = 0;
+          met.clear();
+          met.add(Core.wheelKey(seen, w));
           continue;
         }
         throw wheelNotReached(shown, goal, steps, "a step did not change it (an end of the wheel?)");
       }
       String next = Core.selectedValue(seen, w);
-      if (!learned) {
-        // The first change shows which way scroll-forward turns: away from the goal means down.
+      if (numeric) {
         Long before = Core.wheelNumber(shown), after = Core.wheelNumber(next);
-        if (before != null && after != null) {
-          learned = true;
-          if (Core.wheelDistance(after, to, span) > Core.wheelDistance(before, to, span))
-            forwardIncreases = !forwardIncreases;
+        if (before == null || after == null)
+          throw wheelNotReached(next, goal, steps, "the wheel stopped showing a number");
+        int moved = Core.wheelDirection(before, after, span);
+        if (!learned && moved != toward) {
+          // The first change shows which way scroll-forward turns.
+          forwardIncreases = !forwardIncreases;
+          met.clear();
+        } else if (moved != toward) {
+          throw wheelNotReached(next, goal, steps,
+              "it went round past its end from " + Core.wheelShort(shown) + " to " + Core.wheelShort(next));
+        } else if (Core.wheelPassed(before, after, to, moved, span)) {
+          throw wheelNotReached(next, goal, steps,
+              "it went past it from " + Core.wheelShort(shown) + " to " + Core.wheelShort(next)
+                  + ", so " + goal + " is not one of its values");
         }
+        learned = true;
       }
       shown = next;
-      if (Core.sameWheelValue(shown, goal)) break;
-      if (!numeric && !met.add(shown))
+      if (numeric ? to.equals(Core.wheelNumber(shown)) : Core.sameWheelValue(shown, goal)) break;
+      if (!met.add(Core.wheelKey(seen, w)))
         throw wheelNotReached(shown, goal, steps, "the wheel came round without showing it");
     }
     addNotice(
