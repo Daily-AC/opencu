@@ -558,6 +558,18 @@ public final class EngineTests {
       stopDesktop();
     }
 
+    /** Display 0's image when a check supplies one; otherwise the platform stub's failure. */
+    android.graphics.Bitmap mainShot;
+    /** Every request for display 0's image, whatever display was active. */
+    int mainShots;
+
+    // Not annotated: older engines take display 0's screenshot without this hook.
+    android.graphics.Bitmap mainDisplayScreenshot() {
+      mainShots++;
+      if (mainShot == null) throw new RuntimeException("Stub!"); // as android.jar's UiAutomation
+      return mainShot;
+    }
+
     @Override
     void stopDesktop() {
       log.add("stopDesktop");
@@ -683,6 +695,146 @@ public final class EngineTests {
     void release() {
       released = true;
     }
+  }
+
+  /** An agent display whose frame the check supplies; it counts every capture. */
+  static final class ScriptedFrames extends AndroidEngine.OwnedDisplay {
+    final android.graphics.Bitmap frame;
+    int captures;
+
+    ScriptedFrames(int id, android.graphics.Bitmap frame) {
+      super(null, null, null, id, ISOLATED);
+      this.frame = frame;
+    }
+
+    // Not annotated: older engines never read the agent display's own frames.
+    android.graphics.Bitmap capture(long waitMs) {
+      captures++;
+      return frame;
+    }
+  }
+
+  /** An RGBA_8888 frame as ImageReader hands it out; reading it once closed fails as on Android. */
+  static final class FakeFrame extends android.media.Image {
+    final int width, height, rowStride, format;
+    final java.nio.ByteBuffer buffer;
+    volatile boolean closed;
+
+    FakeFrame(int width, int height, int rowStride, int format, java.nio.ByteBuffer buffer) {
+      this.width = width;
+      this.height = height;
+      this.rowStride = rowStride;
+      this.format = format;
+      this.buffer = buffer;
+    }
+
+    /**
+     * Pixel (x, y) holds R=x, G=y, B=seed, A=0xff. Rows are {@code rowStride} bytes, padded with
+     * 0x77, and the last row ends without padding, as some gralloc buffers do.
+     */
+    static FakeFrame pattern(int width, int height, int rowStride, int seed) {
+      java.nio.ByteBuffer b = java.nio.ByteBuffer.allocateDirect(rowStride * (height - 1) + width * 4);
+      for (int i = 0; i < b.capacity(); i++) b.put(i, (byte) 0x77);
+      for (int y = 0; y < height; y++)
+        for (int x = 0; x < width; x++) {
+          int i = y * rowStride + x * 4;
+          b.put(i, (byte) x).put(i + 1, (byte) y).put(i + 2, (byte) seed).put(i + 3, (byte) 0xff);
+        }
+      return new FakeFrame(width, height, rowStride, android.graphics.PixelFormat.RGBA_8888, b);
+    }
+
+    static int expected(int x, int y, int seed) {
+      return 0xff000000 | x << 16 | y << 8 | seed;
+    }
+
+    private void open() {
+      if (closed) throw new IllegalStateException("Image is already closed");
+    }
+
+    @Override
+    public int getFormat() {
+      open();
+      return format;
+    }
+
+    @Override
+    public int getWidth() {
+      open();
+      return width;
+    }
+
+    @Override
+    public int getHeight() {
+      open();
+      return height;
+    }
+
+    @Override
+    public Plane[] getPlanes() {
+      open();
+      return new Plane[] {
+        new Plane() {
+          @Override
+          public int getRowStride() {
+            return rowStride;
+          }
+
+          @Override
+          public int getPixelStride() {
+            return 4;
+          }
+
+          @Override
+          public java.nio.ByteBuffer getBuffer() {
+            open();
+            return buffer; // the same buffer every time, as ImageReader's planes give it
+          }
+        }
+      };
+    }
+
+    @Override
+    public void close() {
+      closed = true;
+    }
+  }
+
+  /** Calls a static engine method by name, so checks still compile against engines without it. */
+  static Object callStatic(String name, Class<?>[] types, Object... args) throws Exception {
+    Method m;
+    try {
+      m = AndroidEngine.class.getDeclaredMethod(name, types);
+    } catch (NoSuchMethodException e) {
+      throw new AssertionError("No static method " + name + " on AndroidEngine");
+    }
+    m.setAccessible(true);
+    try {
+      return m.invoke(null, args);
+    } catch (InvocationTargetException e) {
+      if (e.getCause() instanceof Exception) throw (Exception) e.getCause();
+      throw new RuntimeException(e.getCause());
+    }
+  }
+
+  /** The coordinate grant a screenshot of {@code s} at {@code width}x{@code height} gives. */
+  static Object grant(Screen s, int width, int height) throws Exception {
+    java.lang.reflect.Constructor<?> c =
+        Class.forName("dev.opencu.android.AndroidEngine$Capture")
+            .getDeclaredConstructor(Screen.class, int.class, int.class);
+    c.setAccessible(true);
+    return c.newInstance(s, width, height);
+  }
+
+  /** The image a result carries, decoded; host bitmaps compress to a line naming their source. */
+  static String image(Map<String, Object> result) {
+    for (Object item : list(result.get("content"))) {
+      Map<String, Object> c = map(item);
+      if ("image".equals(c.get("type")))
+        return new String(
+            java.util.Base64.getDecoder().decode((String) c.get("data")),
+            java.nio.charset.StandardCharsets.UTF_8);
+    }
+    return null;
   }
 
   /** An engine on display 0 whose agent display start is scripted. */
@@ -1670,6 +1822,153 @@ public final class EngineTests {
       require(again.code.equals("DISPLAY_UNAVAILABLE"), "second start: " + again.code);
       Failure read = failure(() -> engine.call("get_app_state", args()));
       require(read.code.equals("DISPLAY_UNAVAILABLE"), "read: " + read.code);
+    });
+
+    // On Android 14 a display-bound UiAutomation's takeScreenshot still captures display 0 (seen on
+    // the PGBM10: the elements were the agent display's, the image the person's home screen).
+    test("an agent-display screenshot is the agent display's own frame, never display 0's", () -> {
+      Scene scene = new Scene();
+      scene.add("/0", "android.widget.Button", "ok", "OK", 100, 200, 300, 260).clickable = true;
+      ScriptedEngine engine = onAgentDisplay(scene);
+      engine.mainShot = android.graphics.Bitmap.of(1080, 2400, "display 0");
+      ScriptedFrames frames = new ScriptedFrames(5, android.graphics.Bitmap.of(1080, 2400, "agent display 5"));
+      set(engine, "ownedDisplay", frames);
+      Map<String, Object> r;
+      try {
+        r = engine.call("get_app_state", args("includeScreenshot", true));
+      } catch (Failure f) {
+        throw new AssertionError("no image (" + f.code + ": " + f.getMessage() + "); agent display frames read "
+            + frames.captures + " times");
+      }
+      require(!Boolean.TRUE.equals(r.get("isError")), text(r));
+      String shown = image(r);
+      require(shown != null, "no image: " + text(r));
+      require(shown.endsWith("from agent display 5"), "image came " + shown);
+      require(engine.mainShots == 0, "display 0 was captured " + engine.mainShots + " times");
+      require(frames.captures == 1, "agent display frames read " + frames.captures + " times");
+      Object display = map(map(r.get("_meta")).get("opencu/screenshot")).get("display");
+      require(Integer.valueOf(5).equals(display), "screenshot reported for display " + display);
+      // The grant it gives lands on the agent display.
+      Map<String, Object> tapped = engine.call("click", args("x", 100, "y", 200));
+      require(!engine.events.isEmpty(), "no touch sent: " + text(tapped));
+      for (Event e : engine.events) require(e.display == 5, "touch sent to display " + e.display);
+      require(engine.mainShots == 0, "display 0 was captured after the tap");
+    });
+
+    test("an agent display without a frame fails the screenshot and grants no coordinates", () -> {
+      Scene scene = new Scene();
+      scene.add("/0", "android.widget.Button", "ok", "OK", 100, 200, 300, 260).clickable = true;
+      ScriptedEngine engine = onAgentDisplay(scene);
+      engine.mainShot = android.graphics.Bitmap.of(1080, 2400, "display 0");
+      // The engine's own frame source, which has received no frame.
+      set(engine, "ownedDisplay", new AndroidEngine.OwnedDisplay(null, null, null, 5, ISOLATED));
+      Failure f = failure(() -> engine.call("get_app_state", args("includeScreenshot", true)));
+      require(f.code.equals("SCREENSHOT_FAILED"), f.code + ": " + f.getMessage());
+      require(f.getMessage().contains("agent display could not be captured"), f.getMessage());
+      require(engine.mainShots == 0, "display 0 was captured instead");
+      engine.read();
+      Failure tap = failure(() -> engine.call("click", args("x", 100, "y", 200)));
+      require(tap.code.equals("SCREENSHOT_REQUIRED"), tap.code + ": " + tap.getMessage());
+      require(engine.events.isEmpty() && engine.log.isEmpty(), "input sent: " + engine.log);
+      Failure batch =
+          failure(() -> engine.call("run_actions", args(
+              "actions", List.of(obj("method", "wait", "ms", 10)), "includeScreenshot", true)));
+      require(batch.code.equals("SCREENSHOT_FAILED"), "batch: " + batch.code);
+      require(engine.mainShots == 0, "display 0 was captured for the batch");
+      require(get(engine, "coordinates") == null, "a failed capture left a coordinate grant");
+    });
+
+    test("an agent-display state is never paired with display 0's image once the display stopped", () -> {
+      Scene scene = new Scene();
+      scene.add("/0", "android.widget.Button", "ok", "OK", 100, 200, 300, 260).clickable = true;
+      ScriptedEngine engine = onAgentDisplay(scene);
+      engine.mainShot = android.graphics.Bitmap.of(1080, 2400, "display 0");
+      Screen agentState = engine.observe(PKG);
+      // Shutdown stops the display on another thread while this response is being built.
+      engine.stopDesktop();
+      Failure f =
+          failure(() -> invoke(engine, "result", new Class<?>[] {Screen.class, boolean.class}, agentState, true));
+      require(f.code.equals("SCREENSHOT_FAILED"), f.code);
+      require(engine.mainShots == 0, "display 0 was captured for display 5's state");
+      require(get(engine, "coordinates") == null, "a grant was given");
+    });
+
+    test("a screenshot grant from display 0 does not authorize coordinates on the agent display", () -> {
+      Scene scene = new Scene();
+      scene.add("/0", "android.widget.Button", "ok", "OK", 100, 200, 300, 260).clickable = true;
+      ScriptedEngine engine = desktopEngine();
+      engine.scene = scene;
+      Screen mainState = engine.read();
+      // What a display-0 screenshot of this state granted; agent_desktop calls do not consume it.
+      set(engine, "coordinates", grant(mainState, 576, 1280));
+      engine.displayScript = requested -> new TestDisplay(5, ISOLATED);
+      startDesktop(engine);
+      scene.display = 5;
+      Failure f = failure(() -> engine.call("click", args("x", 100, "y", 200)));
+      require(engine.events.isEmpty() && engine.log.isEmpty(), "tap sent with display 0's grant: " + engine.log);
+      require(f.code.equals("STALE_SCREENSHOT"), f.code + ": " + f.getMessage());
+    });
+
+    test("the agent display keeps only its newest frame and closes every other", () -> {
+      AndroidEngine.OwnedDisplay display = new AndroidEngine.OwnedDisplay(null, null, null, 5, ISOLATED);
+      FakeFrame first = FakeFrame.pattern(4, 2, 16, 1), second = FakeFrame.pattern(4, 2, 16, 2);
+      Class<?>[] keep = {android.media.Image.class};
+      invoke(display, "keep", keep, first);
+      invoke(display, "keep", keep, second);
+      require(first.closed && !second.closed, "first closed " + first.closed + ", second closed " + second.closed);
+      android.graphics.Bitmap shot =
+          (android.graphics.Bitmap) invoke(display, "capture", new Class<?>[] {long.class}, 100L);
+      require(shot.getPixel(3, 1) == FakeFrame.expected(3, 1, 2), "not the newest frame");
+      require(!second.closed, "the kept frame was closed by reading it");
+      display.release();
+      require(second.closed, "release kept a frame open");
+      FakeFrame late = FakeFrame.pattern(4, 2, 16, 3);
+      invoke(display, "keep", keep, late);
+      require(late.closed, "a frame arriving after release was kept");
+      Failure f = failure(() -> invoke(display, "capture", new Class<?>[] {long.class}, 100L));
+      require(f.code.equals("SCREENSHOT_FAILED"), f.code);
+    });
+
+    test("an agent-display screenshot waits briefly for a first frame and fails without one", () -> {
+      AndroidEngine.OwnedDisplay display = new AndroidEngine.OwnedDisplay(null, null, null, 5, ISOLATED);
+      long start = System.nanoTime();
+      Failure none = failure(() -> invoke(display, "capture", new Class<?>[] {long.class}, 150L));
+      long waited = (System.nanoTime() - start) / 1_000_000;
+      require(none.code.equals("SCREENSHOT_FAILED"), none.code);
+      require(none.getMessage().contains("agent display could not be captured"), none.getMessage());
+      require(waited >= 140 && waited < 2000, "waited " + waited + " ms");
+      FakeFrame frame = FakeFrame.pattern(4, 2, 16, 9);
+      Thread producer = new Thread(() -> {
+        try {
+          Thread.sleep(100);
+          invoke(display, "keep", new Class<?>[] {android.media.Image.class}, frame);
+        } catch (Exception ignored) {
+        }
+      });
+      producer.start();
+      android.graphics.Bitmap shot =
+          (android.graphics.Bitmap) invoke(display, "capture", new Class<?>[] {long.class}, 3000L);
+      producer.join();
+      require(shot.getPixel(0, 0) == FakeFrame.expected(0, 0, 9), "not the frame that arrived");
+    });
+
+    test("padded frame rows become exactly the display's pixels, and a frame reads the same twice", () -> {
+      FakeFrame frame = FakeFrame.pattern(5, 3, 32, 4);
+      Class<?>[] image = {android.media.Image.class};
+      for (int round = 0; round < 2; round++) {
+        android.graphics.Bitmap b = (android.graphics.Bitmap) callStatic("frameBitmap", image, frame);
+        require(b.getWidth() == 5 && b.getHeight() == 3, "size " + b.getWidth() + "x" + b.getHeight());
+        for (int y = 0; y < 3; y++)
+          for (int x = 0; x < 5; x++)
+            require(b.getPixel(x, y) == FakeFrame.expected(x, y, 4),
+                "read " + round + " pixel " + x + "," + y + " = " + Integer.toHexString(b.getPixel(x, y)));
+      }
+      FakeFrame tight = FakeFrame.pattern(5, 3, 20, 6);
+      android.graphics.Bitmap b = (android.graphics.Bitmap) callStatic("frameBitmap", image, tight);
+      require(b.getPixel(4, 2) == FakeFrame.expected(4, 2, 6), "unpadded frame");
+      FakeFrame other = new FakeFrame(5, 3, 20, 0x23 /* YUV_420_888 */, tight.buffer);
+      Failure f = failure(() -> callStatic("frameBitmap", image, other));
+      require(f.code.equals("SCREENSHOT_FAILED"), f.code);
     });
 
     test("a touch before the input monitor is ready still holds off a foreground change", () -> {

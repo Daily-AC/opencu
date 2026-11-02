@@ -10,6 +10,8 @@ import android.content.pm.*;
 import android.graphics.*;
 import android.hardware.display.DisplayManager;
 import android.hardware.display.VirtualDisplay;
+import android.media.Image;
+import android.media.ImageReader;
 import android.os.*;
 import android.util.DisplayMetrics;
 import android.view.*;
@@ -18,6 +20,7 @@ import dev.opencu.android.Core.Window;
 import java.io.*;
 import java.lang.Process;
 import java.lang.reflect.*;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.ScheduledExecutorService;
@@ -76,11 +79,12 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
 
   private static final class Capture {
     final String app;
-    final int width, height, displayWidth, displayHeight, rotation;
+    final int display, width, height, displayWidth, displayHeight, rotation;
     final String windows;
 
     Capture(Screen s, int w, int h) {
       app = s.target;
+      display = s.displayId;
       width = w;
       height = h;
       displayWidth = s.width;
@@ -369,26 +373,146 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     }
   }
 
-  /** A virtual display owned by this engine, with the display flags Android actually granted. */
+  /** How long a screenshot waits for the agent display's first frame. */
+  static final long FRAME_WAIT_MS = 1500;
+
+  /**
+   * A virtual display owned by this engine, with the display flags Android actually granted. It
+   * renders into an ImageReader whose newest frame is kept and every older one closed at once, so
+   * the display never waits for a free buffer. These frames are the only image of this display:
+   * on Android 14 UiAutomation's screenshot captures display 0 whatever display its connection is
+   * bound to.
+   */
   static class OwnedDisplay {
     final int id, displayFlags;
     private final VirtualDisplay display;
-    private final Surface surface;
-    private final SurfaceTexture texture;
+    private final ImageReader reader;
+    private final HandlerThread frameThread;
+    /** The newest frame; guarded by this. */
+    private Image latest;
+    /** Why the last frame could not be acquired, or null; guarded by this. */
+    private String frameProblem;
+    /** Set once release begins; no frame is kept or read afterwards. Guarded by this. */
+    private boolean released;
 
-    OwnedDisplay(VirtualDisplay display, Surface surface, SurfaceTexture texture, int id, int displayFlags) {
+    OwnedDisplay(
+        VirtualDisplay display, ImageReader reader, HandlerThread frameThread, int id, int displayFlags) {
       this.display = display;
-      this.surface = surface;
-      this.texture = texture;
+      this.reader = reader;
+      this.frameThread = frameThread;
       this.id = id;
       this.displayFlags = displayFlags;
+      if (reader != null) {
+        Handler frames = new Handler(frameThread.getLooper());
+        reader.setOnImageAvailableListener(r -> drain(), frames);
+        frames.post(this::drain); // frames queued before the listener existed
+      }
+    }
+
+    /** Acquires the newest queued frame, if any, and keeps it. */
+    private synchronized void drain() {
+      if (released || reader == null) return;
+      Image next;
+      try {
+        next = reader.acquireLatestImage();
+      } catch (RuntimeException e) {
+        frameProblem = e.getClass().getSimpleName() + ": " + e.getMessage();
+        return;
+      }
+      if (next != null) keep(next);
+    }
+
+    /** Keeps {@code next} as the newest frame and closes the one it replaces. */
+    synchronized void keep(Image next) {
+      if (released) {
+        next.close();
+        return;
+      }
+      if (latest != null) latest.close();
+      latest = next;
+      frameProblem = null;
+      notifyAll();
+    }
+
+    /**
+     * A copy of this display's newest frame, waiting up to {@code waitMs} for a first one. Fails
+     * with SCREENSHOT_FAILED when there is none or it cannot be read; nothing else is ever
+     * returned in its place.
+     */
+    synchronized Bitmap capture(long waitMs) {
+      drain();
+      long end = SystemClock.uptimeMillis() + waitMs;
+      while (latest == null && !released) {
+        long left = end - SystemClock.uptimeMillis();
+        if (left <= 0) break;
+        try {
+          wait(Math.min(left, 50));
+        } catch (InterruptedException e) {
+          Thread.currentThread().interrupt();
+          break;
+        }
+        drain();
+      }
+      if (released)
+        throw fail("SCREENSHOT_FAILED", "The agent display could not be captured: it was released");
+      if (latest == null)
+        throw fail(
+            "SCREENSHOT_FAILED",
+            "The agent display could not be captured: no frame within " + waitMs + " ms"
+                + (frameProblem == null ? "" : " (" + frameProblem + ")"));
+      try {
+        return frameBitmap(latest);
+      } catch (Failure e) {
+        throw e;
+      } catch (RuntimeException e) {
+        throw fail(
+            "SCREENSHOT_FAILED",
+            "The agent display could not be captured: " + e.getClass().getSimpleName());
+      }
     }
 
     void release() {
       if (display != null) display.release();
-      if (surface != null) surface.release();
-      if (texture != null) texture.release();
+      synchronized (this) {
+        released = true;
+        if (latest != null) latest.close();
+        latest = null;
+        notifyAll();
+      }
+      if (reader != null) reader.close(); // also releases the display's surface
+      if (frameThread != null) frameThread.quitSafely();
     }
+  }
+
+  /** Copies an RGBA_8888 frame into a bitmap of the frame's size, dropping any row padding. */
+  static Bitmap frameBitmap(Image image) {
+    int width = image.getWidth(), height = image.getHeight();
+    Image.Plane[] planes = image.getPlanes();
+    if (image.getFormat() != PixelFormat.RGBA_8888
+        || planes.length != 1
+        || planes[0].getPixelStride() != 4
+        || planes[0].getRowStride() < width * 4)
+      throw fail(
+          "SCREENSHOT_FAILED",
+          "The agent display could not be captured: unexpected frame format " + image.getFormat());
+    int rowStride = planes[0].getRowStride(), row = width * 4;
+    // A duplicate: the same frame can be read again, so its buffer's position must not move.
+    ByteBuffer source = planes[0].getBuffer().duplicate();
+    source.rewind();
+    ByteBuffer pixels = source;
+    if (rowStride != row) {
+      // Padded rows; the last row may end without its padding.
+      byte[] packed = new byte[row * height];
+      for (int y = 0; y < height; y++) {
+        source.position(y * rowStride);
+        source.get(packed, y * row, row);
+      }
+      pixels = ByteBuffer.wrap(packed);
+    }
+    Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+    bitmap.copyPixelsFromBuffer(pixels);
+    bitmap.setHasAlpha(false);
+    return bitmap;
   }
 
   /** Creates a display matching display 0's size and density with the requested flags. */
@@ -396,18 +520,23 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     Point main = sizeFor(Display.DEFAULT_DISPLAY);
     DisplayMetrics metrics = new DisplayMetrics();
     displays.getDisplay(Display.DEFAULT_DISPLAY).getRealMetrics(metrics);
-    SurfaceTexture texture = new SurfaceTexture(false);
-    texture.setDefaultBufferSize(main.x, main.y);
-    Surface surface = new Surface(texture);
+    HandlerThread frameThread = new HandlerThread("opencu-frames");
+    frameThread.start();
+    ImageReader reader = null;
+    VirtualDisplay display = null;
     try {
-      VirtualDisplay display =
+      // Three images: the kept frame plus the two acquireLatestImage needs to skip to the newest.
+      reader = ImageReader.newInstance(main.x, main.y, PixelFormat.RGBA_8888, 3);
+      display =
           displays.createVirtualDisplay(
-              "OpenCU agent", main.x, main.y, metrics.densityDpi, surface, requested);
+              "OpenCU agent", main.x, main.y, metrics.densityDpi, reader.getSurface(), requested);
       Display created = display.getDisplay();
-      return new OwnedDisplay(display, surface, texture, created.getDisplayId(), created.getFlags());
+      return new OwnedDisplay(
+          display, reader, frameThread, created.getDisplayId(), created.getFlags());
     } catch (RuntimeException e) {
-      surface.release();
-      texture.release();
+      if (display != null) display.release();
+      if (reader != null) reader.close();
+      frameThread.quitSafely();
       throw e;
     }
   }
@@ -881,26 +1010,14 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     Map<String, Object> r = Protocol.textResult((notice.isEmpty() ? "" : notice + "\n") + s.text());
     Capture capture = null;
     if (screenshot) {
-      Bitmap bitmap;
-      try {
-        bitmap =
-            activeDisplay == Display.DEFAULT_DISPLAY || desktopAutomation != null
-                ? automation.takeScreenshot()
-                : (Bitmap)
-                    UiAutomation.class
-                        .getMethod("takeScreenshot", int.class)
-                        .invoke(automation, activeDisplay);
-      } catch (Exception e) {
-        throw fail(
-            "SCREENSHOT_FAILED",
-            "Screenshot on display " + activeDisplay + " failed: " + e.getClass().getSimpleName());
-      }
-      if (bitmap == null)
-        throw fail("SCREENSHOT_FAILED", "Screenshot unavailable (secure content is not bypassed)");
+      Bitmap bitmap = screenshotOf(s);
       int ow = bitmap.getWidth(), oh = bitmap.getHeight();
       if (ow != s.width || oh != s.height) {
         bitmap.recycle();
-        throw fail("STALE_SCREENSHOT", "Display geometry changed during capture");
+        throw fail(
+            "STALE_SCREENSHOT",
+            "Display geometry changed during capture (image " + ow + "x" + oh + ", display "
+                + s.width + "x" + s.height + ")");
       }
       double scale = Math.min(1, 1280.0 / Math.max(ow, oh));
       int w = (int) Math.round(ow * scale), h = (int) Math.round(oh * scale);
@@ -928,13 +1045,57 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
       capture = new Capture(s, w, h);
       r.put(
           "_meta",
-          obj("opencu/screenshot", obj("width", w, "height", h, "display", activeDisplay)));
+          obj("opencu/screenshot", obj("width", w, "height", h, "display", s.displayId)));
     }
     latest = s;
     observationRequired = false;
     coordinates = capture;
     notice = "";
     return r;
+  }
+
+  /**
+   * The pixels of the display {@code s} describes. While the agent display is started, or for a
+   * state read on it, only that display's own frames are used; display 0 is never captured in
+   * their place, so a failure is an error.
+   */
+  private Bitmap screenshotOf(Screen s) {
+    if (s.displayId != Display.DEFAULT_DISPLAY || desktopDisplay >= 0) {
+      OwnedDisplay owned = ownedDisplay;
+      if (owned == null || owned.id != s.displayId || desktopDisplay != s.displayId)
+        throw fail(
+            "SCREENSHOT_FAILED",
+            "The agent display could not be captured: display " + s.displayId
+                + " is not the started agent display; display 0 is never captured instead");
+      Bitmap frame;
+      try {
+        frame = owned.capture(FRAME_WAIT_MS);
+      } catch (Failure e) {
+        throw e;
+      } catch (Exception e) {
+        throw fail(
+            "SCREENSHOT_FAILED",
+            "The agent display could not be captured: " + e.getClass().getSimpleName());
+      }
+      if (frame == null)
+        throw fail("SCREENSHOT_FAILED", "The agent display could not be captured: no frame");
+      return frame;
+    }
+    Bitmap bitmap;
+    try {
+      bitmap = mainDisplayScreenshot();
+    } catch (Exception e) {
+      throw fail(
+          "SCREENSHOT_FAILED", "Screenshot on display 0 failed: " + e.getClass().getSimpleName());
+    }
+    if (bitmap == null)
+      throw fail("SCREENSHOT_FAILED", "Screenshot unavailable (secure content is not bypassed)");
+    return bitmap;
+  }
+
+  /** Display 0's screenshot through the main connection; tests substitute the device. */
+  Bitmap mainDisplayScreenshot() {
+    return automation.takeScreenshot();
   }
 
   private Map<String, Object> checkedResult(
@@ -1060,7 +1221,8 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
   private float[] point(Map<String, Object> args, String x, String y, Capture cap, Screen s) {
     if (cap == null || !cap.app.equals(s.target))
       throw fail("SCREENSHOT_REQUIRED", "Request a fresh screenshot before coordinate input");
-    if (cap.displayWidth != s.width
+    if (cap.display != s.displayId
+        || cap.displayWidth != s.width
         || cap.displayHeight != s.height
         || cap.rotation != s.rotation
         || !cap.windows.equals(windowIdentity(s)))

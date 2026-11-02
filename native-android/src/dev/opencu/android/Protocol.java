@@ -128,10 +128,11 @@ public final class Protocol {
     add(
         "get_app_state",
         "Start here: read an Android package name or launcher label. Ambiguous labels fail."
-            + " Launches/brings it forward only under the person rules. Returns compact"
-            + " main-display element lines, including covering windows and keyboard. Optional"
-            + " full-display JPEG (long side <=1280); text normally suffices. waitForText searches"
-            + " visible text/description only, case-sensitive.",
+            + " Launches/brings it forward only under the person rules. Returns compact element"
+            + " lines for the active display (the main display, or the agent display while"
+            + " agent_desktop is started), including covering windows and keyboard. Optional"
+            + " full-display JPEG of that same display (long side <=1280); text normally suffices."
+            + " waitForText searches visible text/description only, case-sensitive.",
         true,
         p,
         "app");

@@ -187,7 +187,9 @@ The measurements behind this section are in
   may not expose enough information. There is no OCR or keyboard replacement.
   No scope/select_text, arbitrary keycodes, power/volume tool keys or rich paste.
 - Screenshots cover the full active display, including overlays, and use scaled
-  JPEG coordinates. The agent display requires a trusted, own-focus display that
+  JPEG coordinates. Agent-display screenshots come from that display's own
+  frames, because Android 14's UiAutomation screenshot always shows display 0;
+  this path is not yet verified on a device. The agent display requires a trusted, own-focus display that
   cannot take the top focus and a local IME policy, all read back; a phone that
   cannot provide them gets `AGENT_DESKTOP_UNAVAILABLE`. External displays and
   other OEM builds are untested. Secure windows are not bypassed. Window polling can miss

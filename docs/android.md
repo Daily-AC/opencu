@@ -103,15 +103,19 @@ Password text is redacted. Traversal is bounded (depth 60, 5000 nodes per window
 and a truncated tree is labelled. Arbitrarily large apps can exceed 4 KB; 4 KB is
 a typical-screen target, not silent truncation of every response.
 
-Use `includeScreenshot: true` only when needed. Images are full-display JPEG,
-quality 80, long side at most 1280 px. The text result starts with a line such as
+Use `includeScreenshot: true` only when needed. Images are JPEG of the whole
+active display (the same display the element lines describe), quality 80, long
+side at most 1280 px. The text result starts with a line such as
 `Screenshot: 576x1280 JPEG of the 1080x2400 display; coordinates in later calls
 use this image`; screenshot dimensions are also in `_meta["opencu/screenshot"]`.
 Coordinate input uses these image pixels, not the physical display coordinates
 printed in element bounds. A screenshot grant is
 consumed on any app state/action attempt; only a successful new image renews it.
-Changed display geometry/rotation or window identity invalidates it. Secure
-content is never bypassed. Screenshots can include covering windows.
+A different display, changed display geometry/rotation or window identity
+invalidates it. Secure content is never bypassed. Screenshots can include covering
+windows. While `agent_desktop` is started, images come only from the agent
+display's own frames (see [Agent desktop](#agent-desktop)); display 0 is never
+captured in their place.
 
 - `click`: observed `element_index` or both `x,y`; `click_count` 1–3; positive
   `duration` holds a touch for at least the platform long-press interval. Indexed
@@ -232,9 +236,17 @@ are released and the main-display connection is restored; if that restoration
 fails, the connection returns `DISPLAY_UNAVAILABLE` until a new connection.
 
 The person keeps display 0. App starts use `--display <id>`, input events carry
-the active display id, screenshots and accessibility windows come from a
-separate display-bound `UiAutomation` connection, and `setDisplayImePolicy`
-keeps the IME local. Touches on display 0 do not interrupt agent-display work;
+the active display id, accessibility windows come from a separate display-bound
+`UiAutomation` connection, and `setDisplayImePolicy` keeps the IME local.
+Screenshots do not use `UiAutomation`: on Android 14 its `takeScreenshot` captures
+display 0 whatever display the connection is bound to (on the PGBM10 the element
+lines described the agent display while the image showed the person's home
+screen). The virtual display instead renders into an `ImageReader` (RGBA_8888)
+that keeps only its newest frame, and a screenshot copies that frame. If no frame
+arrives within 1.5 seconds or it cannot be read, the call returns
+`SCREENSHOT_FAILED` and grants no coordinates; display 0 is never captured
+instead. This capture path has host checks only; device verification is an owner
+follow-up. Touches on display 0 do not interrupt agent-display work;
 volume-down stop still latches `USER_STOPPED`. If the requested app is currently
 frontmost on display 0, the call returns `APP_IN_USE_BY_PERSON` before sending
 anything. Stop and EOF move owned tasks to the back and release the display.
