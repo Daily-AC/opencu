@@ -926,6 +926,13 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     e.focusable = n.isFocusable();
     e.enabled = n.isEnabled();
     e.password = n.isPassword();
+    AccessibilityNodeInfo.RangeInfo range = n.getRangeInfo();
+    if (range != null) {
+      e.ranged = true;
+      e.min = range.getMin();
+      e.max = range.getMax();
+      e.current = range.getCurrent();
+    }
     for (AccessibilityNodeInfo.AccessibilityAction a : n.getActionList()) {
       int id = a.getId();
       String label = null;
@@ -1390,6 +1397,40 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
         "No focused editable field in target app; click the intended field first. Nothing sent");
   }
 
+  /**
+   * Sets an editable field's whole text, or a range element (slider) to a number with the
+   * accessibility set-progress action. Nothing else is settable directly: Android has no standard
+   * action that sets a wheel picker's value.
+   */
+  private void setValue(AccessibilityNodeInfo n, Element target, String value, String pkg, long token) {
+    int progress = android.R.id.accessibilityActionSetProgress;
+    if (n.isEditable() || !hasAction(n, progress)) {
+      if (!n.isEditable())
+        throw fail(
+            "VALUE_NOT_SETTABLE",
+            "The element is neither an editable field nor a settable range; nothing sent. A wheel"
+                + " picker cannot be set directly: scroll it, one value per page");
+      setText(n, value, pkg, token);
+      return;
+    }
+    float number;
+    try {
+      number = Float.parseFloat(value.trim());
+    } catch (NumberFormatException e) {
+      number = Float.NaN;
+    }
+    if (Float.isNaN(number) || Float.isInfinite(number))
+      throw fail("INVALID_ARGUMENT", "A range element takes a number; nothing sent");
+    if (target.ranged && (number < target.min || number > target.max))
+      throw fail(
+          "INVALID_ARGUMENT",
+          "Value outside the element's range " + Element.number(target.min) + ".."
+              + Element.number(target.max) + "; nothing sent");
+    Bundle b = new Bundle();
+    b.putFloat(AccessibilityNodeInfo.ACTION_ARGUMENT_PROGRESS_VALUE, number);
+    accessibility(n, progress, b, pkg, token);
+  }
+
   private void setText(AccessibilityNodeInfo n, String value, String pkg, long token) {
     if (!n.isEditable() || !hasAction(n, AccessibilityNodeInfo.ACTION_SET_TEXT))
       throw fail("VALUE_NOT_SETTABLE", "Observed editor does not expose set_text");
@@ -1718,7 +1759,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
             token);
         break;
       case "set_value":
-        setText(n, (String) args.get("value"), pkg, token);
+        setValue(n, target, (String) args.get("value"), pkg, token);
         break;
       case "type_text":
         insertText(focused(now), (String) args.get("text"), pkg, token);

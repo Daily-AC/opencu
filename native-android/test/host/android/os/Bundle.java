@@ -22,4 +22,12 @@ public final class Bundle {
   public int getInt(String key) {
     return values.containsKey(key) ? (Integer) values.get(key) : 0;
   }
+
+  public void putFloat(String key, float value) {
+    values.put(key, value);
+  }
+
+  public float getFloat(String key) {
+    return values.containsKey(key) ? (Float) values.get(key) : 0f;
+  }
 }

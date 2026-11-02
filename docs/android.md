@@ -100,8 +100,8 @@ when the bound ended the wait, as on a screen that keeps animating.
 State reports foreground package/activity, main display size, IME visibility and
 a connection-local state id. Visible useful nodes get dense indexes. Pure layout
 containers, invisible and empty rectangles are omitted while useful descendants
-remain. Lines include class, text, description, resource id, flags, bounds and
-secondary action names. Covering windows and the keyboard get their own headers. Persistent status and
+remain. Lines include class, text, description, resource id, flags, a range element's
+value and range, bounds and secondary action names. Covering windows and the keyboard get their own headers. Persistent status and
 navigation bars keep their window headers, but decorative subtrees (including
 notification icon labels) are omitted.
 Password text is redacted. Traversal is bounded (depth 60, 5000 nodes per window),
@@ -198,8 +198,20 @@ captured in their place.
   the text postcondition; use `waitForText` or an `until` condition to observe it.
   These waits search visible non-editor content, so the editor's own newly typed
   value does not satisfy a reaction wait by itself.
-- `set_value`: replace an indexed editable field's entire value. Use click for
-  a checkbox. The editor must actually expose `ACTION_SET_TEXT`.
+- `set_value`: replace an indexed editable field's entire value (the editor must
+  actually expose `ACTION_SET_TEXT`), or set a range element such as a slider to
+  a number with the accessibility set-progress action. Range elements show
+  `value=… range=min..max` in their lines; a value outside the range or not a
+  number returns `INVALID_ARGUMENT` with nothing sent. Use click for a checkbox.
+  Wheel pickers (time/date pickers, `NumberPicker`) cannot be set directly:
+  Android has no standard action that sets their value. The ColorOS time wheels
+  offered only scroll forward/backward, and AOSP `NumberPicker`'s editable centre
+  takes typed text only when it loses focus, so setting that text would show a
+  value the picker has not taken. `set_value` on such a wheel returns
+  `VALUE_NOT_SETTABLE` with nothing sent; scroll it instead. Each page moves one
+  value, so one `scroll` with `pages: 15` turns a minute wheel 15 steps (`down`
+  sends scroll-forward, the next value on AOSP wheels), and one `run_actions` can
+  set every wheel of a time; check the values in the result.
 - `paste`: `format: "text"` only; inserts the text exactly as `type_text` does.
   The clipboard is neither read nor changed.
 - `perform_secondary_action`: only a name listed on that node, rechecked live;

@@ -45,7 +45,8 @@ public final class Core {
       if (e.window != scrollable.window) continue;
       String line =
           e.path + "|" + e.text + "|" + e.desc + "|" + e.left + "," + e.top + "," + e.right + ","
-              + e.bottom + (e.selected ? "|selected" : "") + (e.checked ? "|checked" : "") + "\n";
+              + e.bottom + (e.selected ? "|selected" : "") + (e.checked ? "|checked" : "")
+              + (e.ranged ? "|" + e.current : "") + "\n";
       window.append(line);
       if (e.path.equals(scrollable.path)) subtree.append(line);
       else if (e.path.startsWith(scrollable.path + "/")) {
@@ -217,6 +218,9 @@ public final class Core {
         focusable,
         enabled = true,
         password;
+    /** A range element (slider, rating, progress) and its RangeInfo bounds and value. */
+    public boolean ranged;
+    public float min, max, current;
     public final Map<String, Integer> actions = new LinkedHashMap<>();
 
     public boolean useful() {
@@ -256,6 +260,8 @@ public final class Core {
       if (focused) b.append(" focused");
       if (!enabled) b.append(" enabled=false");
       if (password) b.append(" password");
+      if (ranged)
+        b.append(" value=").append(number(current)).append(" range=").append(number(min)).append("..").append(number(max));
       b.append(" bounds=")
           .append(left)
           .append(',')
@@ -266,6 +272,13 @@ public final class Core {
           .append(bottom);
       if (!actions.isEmpty()) b.append(" actions=").append(Json.write(actions.keySet()));
       return b.toString();
+    }
+
+    /** A range value as written in element lines: whole numbers without decimals. */
+    static String number(float value) {
+      if (value == Math.rint(value) && Math.abs(value) < 1e9) return Long.toString((long) value);
+      String text = String.format(Locale.ROOT, "%.3f", value);
+      return text.replaceAll("0+$", "");
     }
 
     /** Same node and same place: display, window, tree path, identity text and bounds within 6 px. */

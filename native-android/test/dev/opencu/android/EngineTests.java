@@ -159,6 +159,7 @@ public final class EngineTests {
     Map<Integer, Runnable> effects;
     List<Integer> performed;
     List<String> setTexts;
+    List<Float> progress;
 
     static FakeNode create() {
       FakeNode n = allocate(FakeNode.class);
@@ -170,6 +171,7 @@ public final class EngineTests {
       n.effects = new HashMap<>();
       n.performed = Collections.synchronizedList(new ArrayList<>());
       n.setTexts = Collections.synchronizedList(new ArrayList<>());
+      n.progress = Collections.synchronizedList(new ArrayList<>());
       return n;
     }
 
@@ -201,6 +203,8 @@ public final class EngineTests {
         text = String.valueOf(value);
         selectionStart = selectionEnd = text.length(); // as TextView does after ACTION_SET_TEXT
       }
+      if (action == android.R.id.accessibilityActionSetProgress && arguments != null)
+        progress.add(arguments.getFloat(ACTION_ARGUMENT_PROGRESS_VALUE));
       Runnable effect = effects.get(action);
       if (effect != null) effect.run();
       return results.getOrDefault(action, true);
@@ -608,6 +612,24 @@ public final class EngineTests {
     node.editable = true;
     node.effects.put(AccessibilityNodeInfo.ACTION_SET_TEXT, () -> field.text = node.text);
     return node;
+  }
+
+  static final int SET_PROGRESS = android.R.id.accessibilityActionSetProgress;
+
+  /** A slider from 0 to 100 at 40 that offers set-progress, as SeekBar does. */
+  static Element slider(Scene scene) {
+    Element slider = scene.add("/0", "android.widget.SeekBar", "brightness", "", 0, 300, 1080, 400);
+    slider.focusable = true;
+    slider.actions.put("scroll_forward", FORWARD);
+    slider.actions.put("scroll_backward", BACKWARD);
+    if (hasField(Element.class, "ranged")) { // older engines did not read RangeInfo
+      set(slider, "ranged", true);
+      set(slider, "min", 0f);
+      set(slider, "max", 100f);
+      set(slider, "current", 40f);
+    }
+    scene.node(slider).with(FORWARD, BACKWARD, SET_PROGRESS);
+    return slider;
   }
 
   /** A scrollable list showing rows {@code offset+1} and {@code offset+2}; scrolling shifts the offset. */
@@ -1077,6 +1099,50 @@ public final class EngineTests {
       engine.read();
       engine.call("set_value", args("element_index", 1, "value", "无线调试"));
       require(node.setTexts.equals(List.of("无线调试")), "set-text: " + node.setTexts);
+    });
+
+    test("set_value sets a slider's value with set-progress", () -> {
+      Scene scene = new Scene();
+      Element slider = slider(scene);
+      FakeNode node = scene.node(slider);
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      engine.read();
+      engine.call("set_value", args("element_index", 1, "value", "37"));
+      require(node.performed.equals(List.of(SET_PROGRESS)) && node.progress.equals(List.of(37f)),
+          "actions " + node.performed + " values " + node.progress);
+    });
+
+    test("set_value refuses a slider value outside its range or not a number, sending nothing", () -> {
+      Scene scene = new Scene();
+      Element slider = slider(scene);
+      FakeNode node = scene.node(slider);
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      engine.read();
+      for (String value : List.of("101", "-1", "half")) {
+        Failure f = failure(() -> engine.call("set_value", args("element_index", 1, "value", value)));
+        require(f.code.equals("INVALID_ARGUMENT"), value + ": " + f.code + ": " + f.getMessage());
+      }
+      require(node.performed.isEmpty(), "sent " + node.performed);
+    });
+
+    test("set_value on a wheel picker says to scroll it and sends nothing", () -> {
+      PickerScene picker = new PickerScene();
+      ScriptedEngine engine = ScriptedEngine.create(picker.scene);
+      engine.read();
+      Failure f = failure(() -> engine.call("set_value", args("element_index", 1, "value", "35")));
+      require(f.code.equals("VALUE_NOT_SETTABLE"), f.code);
+      require(f.getMessage().contains("scroll it, one value per page"), f.getMessage());
+      require(picker.node.performed.isEmpty(), "sent " + picker.node.performed);
+    });
+
+    test("a range element's line shows its value and range", () -> {
+      Element e = new Element();
+      e.clazz = "android.widget.SeekBar";
+      set(e, "ranged", true);
+      set(e, "min", 0f);
+      set(e, "max", 100f);
+      set(e, "current", 37.5f);
+      require(e.line().contains(" value=37.5 range=0..100 "), e.line());
     });
 
     test("JSON rejects signed or non-hex unicode escapes and non-ASCII digits", () -> {
