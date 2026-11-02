@@ -1161,6 +1161,30 @@ public final class EngineTests {
           "release went to display " + release.display + (release.via == main ? " via the main connection" : ""));
     });
 
+    test("a long press is cancelled on the display and connection it started on", () -> {
+      Scene scene = new Scene();
+      scene.add("/0", "android.widget.Button", "hold", "Hold", 100, 200, 300, 260).clickable = true;
+      ScriptedEngine engine = onAgentDisplay(scene);
+      UiAutomation agent = (UiAutomation) get(engine, "automation"), main = (UiAutomation) get(engine, "mainAutomation");
+      engine.read();
+      boolean[] switched = {false};
+      engine.checkHook = () -> {
+        if (!engine.events.isEmpty() && !switched[0]) {
+          // Shutdown restores the main route while the touch is down.
+          switched[0] = true;
+          set(engine, "activeDisplay", 0);
+          set(engine, "automation", main);
+          throw Core.fail("ENGINE_STOPPING", "Stdin closed");
+        }
+      };
+      failure(() -> engine.call("click", args("element_index", 1, "duration", 0.6)));
+      require(engine.events.size() == 2, "events " + engine.events.size());
+      Event cancel = engine.events.get(1);
+      require(cancel.action == 3, "second event " + cancel.action);
+      require(cancel.via == agent && cancel.display == 5,
+          "cancel went to display " + cancel.display + (cancel.via == main ? " via the main connection" : ""));
+    });
+
     test("closing waits for an in-flight gesture before releasing the agent display", () -> {
       Scene scene = new Scene();
       scene.add("/0", "android.widget.TextView", "", "Agent app", 0, 100, 1080, 200);
@@ -1222,6 +1246,31 @@ public final class EngineTests {
       require(text(status).contains("\"started\":false"), "status: " + text(status));
       Failure f = failure(() -> engine.call("get_app_state", args()));
       require(f.code.equals("AGENT_DESKTOP_IDLE_STOPPED"), f.code);
+    });
+
+    test("status before the idle deadline does not postpone the idle stop", () -> {
+      Scene scene = new Scene();
+      scene.add("/0", "android.widget.TextView", "", "Agent app", 0, 100, 1080, 200);
+      ScriptedEngine engine = onAgentDisplay(scene);
+      set(engine, "desktopIdleMs", 800L);
+      ScheduledExecutorService worker = Executors.newSingleThreadScheduledExecutor();
+      try {
+        invoke(engine, "runOn", new Class<?>[] {ScheduledExecutorService.class}, worker);
+        worker.submit(() -> engine.call("get_app_state", args())).get();
+        long lastCall = System.nanoTime();
+        Thread.sleep(400);
+        // Status itself cannot render display details on the host; only its effect on the timer matters.
+        worker.submit(() -> {
+          try {
+            engine.call("agent_desktop", obj("action", "status"));
+          } catch (Throwable ignored) {
+          }
+        }).get();
+        Thread.sleep(Math.max(0, 1050 - (System.nanoTime() - lastCall) / 1_000_000));
+        require(engine.log.contains("stopDesktop"), "status postponed the idle stop");
+      } finally {
+        worker.shutdownNow();
+      }
     });
 
     test("the idle stop never runs during an in-flight action", () -> {
@@ -1352,6 +1401,29 @@ public final class EngineTests {
         Failure f = failure(() -> person.check(person.token(), android.os.SystemClock.uptimeMillis(), true));
         require(f.code.equals("PERSON_ACTIVE"), f.code);
         require(reads[0] == 1, "platform activity read " + reads[0] + " times");
+      } finally {
+        monitor.close();
+        java.nio.file.Files.deleteIfExists(touched);
+      }
+    });
+
+    test("a touch while the event stream is still starting holds off a foreground change", () -> {
+      java.nio.file.Path touched = java.nio.file.Files.createTempFile("opencu-touch", "");
+      java.nio.file.Files.delete(touched);
+      PersonMonitor monitor =
+          new PersonMonitor(
+              notice -> {},
+              () -> {
+                long now = android.os.SystemClock.uptimeMillis();
+                return java.nio.file.Files.exists(touched) ? now - 100 : now - 60_000;
+              },
+              new String[] {"/bin/sh", "-c", "printf 'add device 1: /dev/input/event1\\n  KEY_VOLUMEDOWN ABS_MT_POSITION_X\\n'"},
+              // The person touches after probing, while the stream is opening its devices.
+              new String[] {"/bin/sh", "-c", "sleep 0.3; touch '" + touched + "'; echo 'add device 1: /dev/input/event1'; exec sleep 30"});
+      try {
+        Person person = monitor.person;
+        Failure f = failure(() -> person.check(person.token(), android.os.SystemClock.uptimeMillis(), true));
+        require(f.code.equals("PERSON_ACTIVE"), f.code);
       } finally {
         monitor.close();
         java.nio.file.Files.deleteIfExists(touched);
