@@ -809,8 +809,19 @@ public final class Core {
     public boolean keyboard, truncated;
     public final List<Window> windows = new ArrayList<>();
     public final Map<Integer, Element> elements = new LinkedHashMap<>();
-    /** Drawing order among its siblings, by tree path, for nodes that report one. */
-    public final Map<String, Integer> order = new HashMap<>();
+    /**
+     * Drawing order among its siblings, for nodes that report one, by window and tree path: every
+     * window's tree starts at the same path, so a keyboard's or popup's must not stand for the app's.
+     */
+    private final Map<String, Integer> order = new HashMap<>();
+
+    public void setOrder(int window, String path, int value) {
+      order.put(window + ":" + path, value);
+    }
+
+    public Integer order(int window, String path) {
+      return order.get(window + ":" + path);
+    }
 
     public String lines() {
       StringBuilder b = new StringBuilder();

@@ -964,7 +964,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     Element e = element(n, path, w.id);
     if (e.right <= 0 || e.left >= s.width || e.bottom <= 0 || e.top >= s.height) e.visible = false;
     int order = n.getDrawingOrder();
-    if (order > 0) s.order.put(path, order);
+    if (order > 0) s.setOrder(w.id, path, order);
     if (e.useful()) {
       e.index = s.elements.size() + 1;
       s.elements.put(e.index, e);
@@ -1404,7 +1404,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     if (i >= pb.length) return false; // b encloses a, or is a
     if (i >= pa.length) return true; // b is inside a
     String common = String.join("/", Arrays.copyOfRange(pa, 0, i));
-    Integer oa = s.order.get(common + "/" + pa[i]), ob = s.order.get(common + "/" + pb[i]);
+    Integer oa = s.order(a.window, common + "/" + pa[i]), ob = s.order(b.window, common + "/" + pb[i]);
     if (oa != null && ob != null && !oa.equals(ob)) return ob > oa;
     try {
       return Integer.parseInt(pb[i]) > Integer.parseInt(pa[i]);

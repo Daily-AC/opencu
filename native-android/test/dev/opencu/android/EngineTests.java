@@ -3284,10 +3284,10 @@ public final class EngineTests {
       b.path = "/1";
       Class<?>[] types = {Element.class, Element.class, Screen.class};
       require(Boolean.TRUE.equals(callStatic("drawnAbove", types, b, a, s)), "later in the tree is above without an order");
-      @SuppressWarnings("unchecked")
-      Map<String, Integer> order = (Map<String, Integer>) get(s, "order");
-      order.put("/0", 2);
-      order.put("/1", 1);
+      // Review: orders are kept by window and path (a and b are in window 0).
+      Class<?>[] setOrder = {int.class, String.class, int.class};
+      invoke(s, "setOrder", setOrder, 0, "/0", 2);
+      invoke(s, "setOrder", setOrder, 0, "/1", 1);
       require(Boolean.FALSE.equals(callStatic("drawnAbove", types, b, a, s)), "drawn first is below");
       require(Boolean.TRUE.equals(callStatic("drawnAbove", types, a, b, s)), "drawn last is above");
     });
@@ -4188,6 +4188,35 @@ public final class EngineTests {
       String out = text(engine.call("set_value", args("element_index", 1, "value", "Mar")));
       require(wheel.text.equals("Mar") && out.startsWith("Set the wheel to Mar in 17 steps."),
           "value " + wheel.text + "; notice: " + out.split("\n")[0]);
+    });
+
+    // 4: drawing order was kept by tree path alone, and every window's tree starts at the same path.
+    test("a keyboard's drawing order does not stand for the app's at the same tree path", () -> {
+      Scene scene = new Scene();
+      scene.add("/0", "androidx.recyclerview.widget.RecyclerView", "alarms", "", 0, 100, 1080, 2000).scrollable = true;
+      Element row = scene.add("/0/3", "android.widget.LinearLayout", "row", "22:10", 0, 1500, 1080, 1700);
+      row.clickable = true;
+      Element fab = scene.add("/1", "android.widget.ImageButton", "add", "", 440, 1500, 640, 1700);
+      fab.clickable = true;
+      Window keyboard = new Window();
+      keyboard.id = 11;
+      keyboard.type = 2;
+      keyboard.layer = 9;
+      keyboard.top = 2300;
+      keyboard.right = 1080;
+      keyboard.bottom = 2400;
+      scene.extraWindows.add(keyboard);
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      Screen state = engine.read();
+      Class<?>[] setOrder = {int.class, String.class, int.class};
+      // The app draws the button over the list; the keyboard's own tree reports the reverse.
+      invoke(state, "setOrder", setOrder, 7, "/0", 1);
+      invoke(state, "setOrder", setOrder, 7, "/1", 2);
+      invoke(state, "setOrder", setOrder, 11, "/0", 2);
+      invoke(state, "setOrder", setOrder, 11, "/1", 1);
+      Class<?>[] types = {Element.class, Element.class, Screen.class};
+      require(Boolean.TRUE.equals(callStatic("drawnAbove", types, state.elements.get(3), state.elements.get(2), state)),
+          "the keyboard's order was used for the app's window");
     });
   }
 }
