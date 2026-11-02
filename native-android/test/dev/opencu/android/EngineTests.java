@@ -354,6 +354,7 @@ public final class EngineTests {
       set(e, "notice", "");
       // Field initialisers do not run for an allocated instance; mirror the ones the engine has.
       if (hasField(AndroidEngine.class, "keyboardInputFailure")) set(e, "keyboardInputFailure", "");
+      if (hasField(AndroidEngine.class, "batchBudgetMs")) set(e, "batchBudgetMs", 100_000L);
       if (hasField(AndroidEngine.class, "callLock"))
         set(e, "callLock", new java.util.concurrent.locks.ReentrantLock());
       set(e, "desktopDisplay", -1);
@@ -1086,6 +1087,45 @@ public final class EngineTests {
       require(taps == 1, "taps sent: " + engine.log);
       require(String.valueOf(map(result.get("_meta")).get("opencu/batch")).contains("reason=popup"),
           "batch: " + map(result.get("_meta")).get("opencu/batch"));
+    });
+
+    test("a batch step that could outlast the batch time limit is not started", () -> {
+      Scene scene = new Scene();
+      scene.add("/0", "android.widget.Button", "hold", "Hold", 100, 200, 300, 260).clickable = true;
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      engine.read();
+      // If anything is sent, end the call at once instead of holding for minutes.
+      engine.checkHook = () -> {
+        if (!engine.events.isEmpty() || !engine.log.isEmpty()) throw Core.fail("PERSON_ACTIVE", "test stop");
+      };
+      Map<String, Object> result =
+          engine.call("run_actions", args("actions", List.of(obj(
+              "method", "click", "element_index", 1, "click_count", 3, "duration", 30,
+              "until", obj("text", "never", "timeoutMs", 20000)))));
+      Map<String, Object> batch = map(map(result.get("_meta")).get("opencu/batch"));
+      require("time_limit".equals(batch.get("reason")) && Integer.valueOf(1).equals(batch.get("stoppedStep")),
+          "batch " + batch + " sent " + engine.events.size() + " events");
+      require(engine.events.isEmpty() && engine.log.isEmpty(), "input sent: " + engine.log);
+      require("BATCH_TIME_LIMIT".equals(map(result.get("_meta")).get("opencu/error")), "error " + result.get("_meta"));
+    });
+
+    test("a batch stops before the step that would pass its time limit", () -> {
+      Scene scene = new Scene();
+      scene.add("/0", "android.widget.TextView", "", "Ready", 0, 100, 1080, 200);
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      if (hasField(AndroidEngine.class, "batchBudgetMs")) set(engine, "batchBudgetMs", 3_000L);
+      engine.read();
+      Map<String, Object> result =
+          engine.call("run_actions", args("actions", List.of(
+              obj("method", "wait", "ms", 500), obj("method", "wait", "ms", 500), obj("method", "wait", "ms", 500))));
+      Map<String, Object> batch = map(map(result.get("_meta")).get("opencu/batch"));
+      require(Integer.valueOf(1).equals(batch.get("completed")) && Integer.valueOf(2).equals(batch.get("stoppedStep"))
+          && "time_limit".equals(batch.get("reason")), "batch " + batch);
+    });
+
+    test("run_actions description states the batch time limit", () -> {
+      String description = (String) Protocol.DEFINITIONS.get("run_actions").get("description");
+      require(description.contains("100 s") && description.contains("time_limit"), description);
     });
 
     test("indexed click settles before its final read", () -> {

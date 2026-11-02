@@ -48,6 +48,29 @@ public final class Core {
     return subtree.length() > 0 ? subtree.toString() : window.toString();
   }
 
+  /**
+   * The longest a run_actions step can take: its holds, waits, scroll pages and until timeout,
+   * plus two seconds for reading and settling.
+   */
+  public static long stepMaxMs(Map<String, Object> a) {
+    String method = (String) a.get("method");
+    long ms = 2_000;
+    if (method.equals("wait")) ms += ((Number) a.get("ms")).longValue();
+    if (method.equals("click")) {
+      int count = ((Number) a.getOrDefault("click_count", 1)).intValue();
+      double seconds = ((Number) a.getOrDefault("duration", 0)).doubleValue();
+      ms += count * (seconds > 0 ? Math.max(600, (long) (seconds * 1000)) : 45) + 70L * (count - 1) + 1_500;
+    }
+    if (method.equals("press_key")) ms += (long) (((Number) a.getOrDefault("duration", .05)).doubleValue() * 1000);
+    if (method.equals("drag")) ms += 450;
+    if (method.equals("scroll")) ms += (long) Math.ceil(((Number) a.getOrDefault("pages", 1)).doubleValue()) * 1_000;
+    if (a.containsKey("until")) {
+      Map<?, ?> until = (Map<?, ?>) a.get("until");
+      ms += until.containsKey("timeoutMs") ? ((Number) until.get("timeoutMs")).longValue() : 8_000;
+    }
+    return ms;
+  }
+
   public static String screenshotNotice(int imageWidth, int imageHeight, int displayWidth, int displayHeight) {
     return "Screenshot: "
         + imageWidth

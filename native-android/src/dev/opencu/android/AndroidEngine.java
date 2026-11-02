@@ -1729,9 +1729,13 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     return original;
   }
 
+  /** A whole batch ends well inside a host's two-minute call limit. */
+  private long batchBudgetMs = 100_000;
+
   private Map<String, Object> batch(
       Map<String, Object> args, String pkg, Screen base, Capture cap, long token) {
     List<Object> actions = list(args.get("actions"));
+    long batchStart = SystemClock.uptimeMillis();
     Screen last = base;
     int step = 0, completed = 0;
     long waited = 0, started = 0;
@@ -1744,6 +1748,12 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
         step++;
         Map<String, Object> a = map(raw);
         String method = (String) a.get("method");
+        if (SystemClock.uptimeMillis() - batchStart + Core.stepMaxMs(a) > batchBudgetMs) {
+          // Nothing of this step is sent: it could run past the batch's time limit.
+          reason = "time_limit";
+          waited = 0;
+          break;
+        }
         Map<String, Object> until = a.containsKey("until") ? map(a.get("until")) : obj();
         String expected = until.containsKey("app") ? resolve((String) until.get("app")) : "";
         if (!expected.isEmpty()) {
@@ -1822,10 +1832,15 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
             fail(
                 reason.equals("timeout")
                     ? "WAIT_TIMEOUT"
-                    : reason.equals("system_dialog")
-                        ? "SYSTEM_DIALOG"
-                        : reason.equals("popup") ? "POPUP" : "APP_SWITCHED",
-                "Batch stopped; remaining steps were not sent");
+                    : reason.equals("time_limit")
+                        ? "BATCH_TIME_LIMIT"
+                        : reason.equals("system_dialog")
+                            ? "SYSTEM_DIALOG"
+                            : reason.equals("popup") ? "POPUP" : "APP_SWITCHED",
+                reason.equals("time_limit")
+                    ? "Batch stopped before step " + step + ", which could run past the "
+                        + batchBudgetMs / 1000 + " s batch limit; remaining steps were not sent"
+                    : "Batch stopped; remaining steps were not sent");
     }
     Map<String, Object> r =
         result(last, Boolean.TRUE.equals(args.get("includeScreenshot")) && reason == null);

@@ -191,9 +191,15 @@ the new foreground for later non-indexed actions; it does not give old indexes
 new meanings or renew coordinates. New activities within the same app are not
 classified as dialogs solely for changing window id.
 
+A batch is limited to 100 seconds, inside a host's two-minute call limit. Before
+each step the engine adds the step's longest possible time (holds, `ms`, scroll
+pages, the `until` timeout and two seconds for reading) to the time used so far;
+if that would pass the limit, the step is not sent and the batch stops with reason
+`time_limit` and `BATCH_TIME_LIMIT`.
+
 `_meta["opencu/batch"]` reports `completed`, one-based `stoppedStep`, `reason` and
 `waitedMs` for the last step (including action time), followed by the final state.
-Typical reasons: `timeout`, `popup`, `system_dialog`, `app_switched`,
+Typical reasons: `timeout`, `time_limit`, `popup`, `system_dialog`, `app_switched`,
 `stale_element`, `person_active`, `user_stopped`, `screen_locked`. Earlier input
 may have executed. Never retry the stopped sequence automatically.
 
