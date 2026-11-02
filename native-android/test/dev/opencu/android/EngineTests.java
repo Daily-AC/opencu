@@ -263,6 +263,8 @@ public final class EngineTests {
     final List<Window> extraWindows = new ArrayList<>();
     String foreground = PKG, activity = PKG + "/.Main";
     int display, width = 1080, height = 2400, window = 7;
+    /** Whether the read stops at the node or depth limit, as a huge tree does. */
+    boolean truncated;
 
     Element add(String path, String clazz, String id, String text, int l, int t, int r, int b) {
       Element e = new Element();
@@ -293,6 +295,7 @@ public final class EngineTests {
       s.width = width;
       s.height = height;
       s.displayId = display;
+      s.truncated = truncated;
       Window w = new Window();
       w.id = window;
       w.type = 1;
@@ -4217,6 +4220,17 @@ public final class EngineTests {
       Class<?>[] types = {Element.class, Element.class, Screen.class};
       require(Boolean.TRUE.equals(callStatic("drawnAbove", types, state.elements.get(3), state.elements.get(2), state)),
           "the keyboard's order was used for the app's window");
+    });
+
+    // 5: swipe lanes were chosen on a tree cut short at the node or depth limit.
+    test("no swipe is chosen on a tree cut short at its limit: the error says why, nothing sent", () -> {
+      ListScene rows = new ListScene(FORWARD); // no way up: an upward scroll would swipe
+      rows.scene.truncated = true;
+      ScriptedEngine engine = ScriptedEngine.create(rows.scene);
+      engine.read();
+      Failure f = failure(() -> engine.call("scroll", args("element_index", 1, "direction", "up")));
+      require(f.code.equals("ACTION_UNSUPPORTED") && f.getMessage().contains("cut short"), f.code + ": " + f.getMessage());
+      require(engine.events.isEmpty() && engine.log.isEmpty(), "input sent: " + engine.log);
     });
   }
 }

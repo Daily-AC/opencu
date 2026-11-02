@@ -2401,6 +2401,11 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
    * element in the way.
    */
   private Swipe swipe(Element e, Screen s, String d) {
+    if (s.truncated)
+      return new Swipe(
+          null,
+          "the screen's tree was cut short at its node or depth limit, so a swipe could cross"
+              + " something the engine cannot see");
     Window owner = null;
     for (Window w : s.windows) if (w.id == e.window) owner = w;
     if (owner == null) return new Swipe(null, "its window is gone");

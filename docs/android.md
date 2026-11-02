@@ -176,7 +176,9 @@ captured in their place.
   replaced by a swipe. A swipe runs through the centre, or else through another
   lane across the element, and never comes within a finger's reach (24 px) of an
   element a swipe could set: a wheel, slider, nested scroller or anything with a
-  range or its own scroll actions. When no lane is clear, the call returns
+  range or its own scroll actions. On a tree cut short at its node or depth limit
+  no swipe is chosen, since something unseen could be in the way. When no lane is
+  clear, the call returns
   `ACTION_UNSUPPORTED` naming that element, with nothing sent (or, after earlier
   pages, ends with a notice). After any swipe, a value that changed outside the
   scrolled element (a checked state, a range value, an editor's text or a wheel's
