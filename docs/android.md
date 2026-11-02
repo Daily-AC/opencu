@@ -317,9 +317,11 @@ agent-desktop mode it launches on the owned display; an app already in front on
 display 0 returns `APP_IN_USE_BY_PERSON` without input.
 
 Within one `run_actions`, a step whose element an earlier step of the same batch
-changed itself (`set_value`, a secondary action, or scrolling that element) finds
-it again with its text allowed to differ, since the batch changed it; every other
-identity component below still has to hold.
+changed the value of (`set_value`, or a wheel picker's own scroll-forward/backward
+or `scroll`, also through one of its rows) finds it again with its text allowed to
+differ, since the batch changed it; every other identity component below still
+has to hold. Other secondary actions (dismiss, delete, custom ones) do not loosen
+this check.
 
 Before indexed input, the engine settles, re-observes and checks activity,
 display, window, tree path, package, class, text, description, resource id and

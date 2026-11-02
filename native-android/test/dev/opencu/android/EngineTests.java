@@ -4091,5 +4091,22 @@ public final class EngineTests {
       Failure f = failure(() -> engine.call("set_value", args("element_index", 1, "value", "3")));
       require(f.code.equals("VALUE_NOT_SETTABLE") && pageNode.performed.isEmpty(), f.code + " " + pageNode.performed);
     });
+
+    // 6: any secondary action loosened the check of that element for later steps of the batch.
+    test("a custom secondary action does not let a later batch step accept the element's new text", () -> {
+      Scene scene = new Scene();
+      Element row = scene.add("/0", "android.widget.LinearLayout", "row", "Message from Ann", 0, 100, 1080, 300);
+      row.actions.put("action_16777217:Archive", 16777217);
+      FakeNode node = scene.node(row).with(16777217);
+      node.effects.put(16777217, () -> row.text = "Message from Bob"); // another row moved into its place
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      engine.read();
+      Map<String, Object> result = engine.call("run_actions", args("actions", List.of(
+          obj("method", "perform_secondary_action", "element_index", 1, "action", "action_16777217:Archive"),
+          obj("method", "perform_secondary_action", "element_index", 1, "action", "action_16777217:Archive"))));
+      Map<String, Object> batch = map(map(result.get("_meta")).get("opencu/batch"));
+      require("stale_element".equals(batch.get("reason")) && node.performed.size() == 1,
+          "batch " + batch + "; archived " + node.performed.size() + " times");
+    });
   }
 }

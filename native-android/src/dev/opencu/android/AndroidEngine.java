@@ -1746,13 +1746,17 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
               : live(old, base, now);
       n = nodes.get(target.index);
     }
-    // Whether this step changes the element's own value (and so maybe its text), and the wheel
-    // picker it turns when it is a row of one.
+    // Whether this step changes the element's own value (and so maybe its text): set_value, or a
+    // wheel's own scroll actions or scroll. Other actions (dismiss, delete, custom) do not loosen
+    // later steps' check of it. Also the wheel picker it turns when it is a row of one.
+    String secondary = method.equals("perform_secondary_action") ? (String) args.get("action") : "";
     boolean ownValue =
         n != null
             && (method.equals("set_value")
-                || method.equals("perform_secondary_action")
-                || (method.equals("scroll") && scrolls(n)));
+                || ((method.equals("scroll")
+                        || secondary.equals("scroll_forward")
+                        || secondary.equals("scroll_backward"))
+                    && enclosingWheel(target, now) != null));
     Element turnedWheel =
         n != null && (method.equals("set_value") || method.equals("scroll"))
             ? enclosingWheel(target, now)
