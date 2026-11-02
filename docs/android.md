@@ -410,8 +410,10 @@ reads back every increment. The owner completed the initial OEM installation
 confirmation; subsequent streamed fixture installs succeeded without UI input.
 
 Known unverified boundaries include custom editors that ignore accessibility
-set-text, coordinate drag/long press, custom secondary actions, custom/WebView
-trees, secure
+set-text, coordinate drag/long press, custom secondary actions, the scroll
+fallbacks (an enclosing element's action and the touch swipe), wheel-picker
+paging, the stable final-state wait and set-progress (host checks only so far),
+custom/WebView trees, secure
 screenshot behavior, orientation changes, physical stop and EOF during blocked
 Binder calls. The fixture suite covers Unicode set_value, `type_text` with ASCII
 and Chinese text, indexed clicks and
