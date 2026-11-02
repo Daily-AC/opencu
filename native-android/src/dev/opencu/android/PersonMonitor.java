@@ -44,7 +44,7 @@ final class PersonMonitor implements AutoCloseable {
         // getevent reports unreadable devices on stderr; the engine's own stderr must start with
         // its coded line, and readiness below decides whether monitoring works.
         new ProcessBuilder(stream)
-            .redirectError(ProcessBuilder.Redirect.DISCARD)
+            .redirectError(ProcessBuilder.Redirect.to(new File("/dev/null")))
             .start();
     Set<String> opened = Collections.synchronizedSet(new HashSet<>());
     Thread reader =
