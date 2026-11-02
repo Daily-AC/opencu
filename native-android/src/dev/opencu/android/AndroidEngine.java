@@ -537,23 +537,37 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
    * turned now, and its density, with the requested flags.
    */
   OwnedDisplay createOwnedDisplay(int requested) {
+    int[] main = mainDisplayGeometry();
+    int[] size = naturalSize(main[0], main[1], main[2]);
+    return openOwnedDisplay(size[0], size[1], main[3], requested);
+  }
+
+  /** Display 0's current {width, height, rotation, density}; tests substitute the device. */
+  int[] mainDisplayGeometry() {
     Display mainDisplay = displays.getDisplay(Display.DEFAULT_DISPLAY);
     if (mainDisplay == null) throw fail("DISPLAY_UNAVAILABLE", "Display 0 unavailable");
     Point current = new Point();
     mainDisplay.getRealSize(current);
-    int[] size = naturalSize(current.x, current.y, mainDisplay.getRotation());
     DisplayMetrics metrics = new DisplayMetrics();
     mainDisplay.getRealMetrics(metrics);
+    return new int[] {current.x, current.y, mainDisplay.getRotation(), metrics.densityDpi};
+  }
+
+  /**
+   * Creates a {@code width} x {@code height} virtual display at {@code dpi} with the requested
+   * flags, rendering into its own frame reader; tests substitute the device.
+   */
+  OwnedDisplay openOwnedDisplay(int width, int height, int dpi, int requested) {
     HandlerThread frameThread = new HandlerThread("opencu-frames");
     frameThread.start();
     ImageReader reader = null;
     VirtualDisplay display = null;
     try {
       // Three images: the kept frame plus the two acquireLatestImage needs to skip to the newest.
-      reader = ImageReader.newInstance(size[0], size[1], PixelFormat.RGBA_8888, 3);
+      reader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 3);
       display =
           displays.createVirtualDisplay(
-              "OpenCU agent", size[0], size[1], metrics.densityDpi, reader.getSurface(), requested);
+              "OpenCU agent", width, height, dpi, reader.getSurface(), requested);
       Display created = display.getDisplay();
       return new OwnedDisplay(
           display, reader, frameThread, created.getDisplayId(), created.getFlags());

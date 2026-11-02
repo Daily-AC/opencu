@@ -4416,5 +4416,33 @@ public final class EngineTests {
       Failure next = failure(() -> engine.call("set_value", args("element_index", 1, "value", "y")));
       require(next.code.equals("OBSERVATION_REQUIRED"), "after an unknown outcome: " + next.code);
     });
+
+    // 14: the portrait-size check covered naturalSize only, not that the display is made with it.
+    test("the agent display is created in portrait while display 0 is turned landscape", () -> {
+      GeometryEngine engine = allocate(GeometryEngine.class);
+      engine.geometry = new int[] {2400, 1080, 1, 440}; // a landscape game on display 0
+      Object display = invoke(engine, "createOwnedDisplay", new Class<?>[] {int.class}, ISOLATED);
+      require(display instanceof TestDisplay, "display " + display);
+      require(Arrays.equals(engine.opened, new int[] {1080, 2400, 440}), "opened " + Arrays.toString(engine.opened));
+    });
+  }
+
+  /** An engine whose display 0 and virtual-display creation are scripted. */
+  static class GeometryEngine extends AndroidEngine {
+    int[] geometry, opened;
+
+    GeometryEngine() throws Exception {
+      super(null);
+    }
+
+    // Not annotated: older engines read display 0 and create the display without these hooks.
+    int[] mainDisplayGeometry() {
+      return geometry;
+    }
+
+    AndroidEngine.OwnedDisplay openOwnedDisplay(int width, int height, int dpi, int requested) {
+      opened = new int[] {width, height, dpi};
+      return new TestDisplay(5, requested);
+    }
   }
 }
