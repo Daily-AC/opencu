@@ -139,14 +139,28 @@ captured in their place.
   so or offers a scroll action), otherwise the nearest enclosing element that
   scrolls, so a row's index scrolls its list; an element with neither returns
   `ACTION_UNSUPPORTED` with nothing sent. Each page uses, in order: that
-  element's scroll action for the direction (the direction-specific one, or
-  generic forward/backward as down/right and up/left unless the element offers
-  direction-specific actions on the other axis only); the direction-specific
+  element's own scroll action for the direction (generic forward/backward as
+  down/right and up/left, which is what its line lists and what some views such
+  as wheel pickers handle, unless the element offers direction-specific actions
+  on the other axis; else its direction-specific action); the direction-specific
   action of the nearest scrolling element enclosing it (a generic one is ambiguous
   there: a horizontal pager's backward is the previous tab); otherwise a touch
-  swipe through the centre of the element's visible part, from 80% to 20% of it,
-  clear of windows above it such as the keyboard and of the display's outer
-  strips, held still before lifting so the list stops where the finger stopped.
+  swipe inside the element's visible part, from 80% to 20% of it, clear of windows
+  above it such as the keyboard and of the display's outer strips, held still
+  before lifting so the list stops where the finger stopped. Once the element
+  listed its own generic action for the direction (in the state the call is based
+  on, or on an earlier page), that action keeps being sent even when the element
+  stops listing it, and the content decides whether the page moved; it is never
+  replaced by a swipe. A swipe runs through the centre, or else through another
+  lane across the element, and never comes within a finger's reach (24 px) of an
+  element a swipe could set: a wheel, slider, nested scroller or anything with a
+  range or its own scroll actions. When no lane is clear, the call returns
+  `ACTION_UNSUPPORTED` naming that element, with nothing sent (or, after earlier
+  pages, ends with a notice). After any swipe, a value that changed outside the
+  scrolled element (a checked state, a range value, an editor's text or a wheel's
+  selected value, matched by place and the text around it) is reported first in
+  the result, such as `WARNING: the swipe also changed Switch id=vibrate not
+  checked -> checked`, and no further pages are sent.
   The swipe is ordinary touch input on the active display under the person rules.
   ColorOS lists were seen offering only scroll-forward part-way down, so scrolling
   up such a list swipes. A list at its real start offers no action back either and

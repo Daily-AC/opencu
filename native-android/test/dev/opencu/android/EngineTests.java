@@ -2861,5 +2861,159 @@ public final class EngineTests {
       require(Arrays.equals((int[]) callStatic("naturalSize", types, 1080, 2400, 0), new int[] {1080, 2400}), "rotation 0");
       require(Arrays.equals((int[]) callStatic("naturalSize", types, 1080, 2400, 2), new int[] {1080, 2400}), "rotation 180");
     });
+
+    // Item 1: a swipe fallback set a form's minute wheel from 35 to 33 without an error.
+    test("scroll keeps sending the element's own scroll-backward after it stops listing it, never a swipe", () -> {
+      FormScene form = new FormScene(2);
+      ScriptedEngine engine = ScriptedEngine.create(form.scene);
+      engine.read();
+      String out = text(engine.call("scroll", args("element_index", 1, "direction", "up", "pages", 3)));
+      require(engine.events.isEmpty(), "swiped: " + engine.log);
+      require(form.node.performed.equals(List.of(BACKWARD, BACKWARD, BACKWARD)), "actions " + form.node.performed);
+      require(out.startsWith("Scrolled 2 of 3 pages; reached the end"), "notice: " + out.split("\n")[0]);
+    });
+
+    test("scroll sends the scroll-backward the element listed in the state read before, never a swipe", () -> {
+      FormScene form = new FormScene(1);
+      ScriptedEngine engine = ScriptedEngine.create(form.scene);
+      engine.read(); // the agent's state lists scroll_forward and scroll_backward
+      form.stopListingBackward(); // by the time of the call (another step changed the form) it lists forward only
+      String out = text(engine.call("scroll", args("element_index", 1, "direction", "up")));
+      require(engine.events.isEmpty(), "swiped: " + engine.log);
+      require(form.node.performed.equals(List.of(BACKWARD)), "actions " + form.node.performed);
+      require(out.startsWith("Nothing moved"), "notice: " + out.split("\n")[0]);
+    });
+
+    test("a scroll sends the generic scroll action an element's line lists before a hidden directional one", () -> {
+      PickerScene picker = new PickerScene();
+      // The wheel also carries scroll-down/up, which its line does not show and it ignores.
+      picker.node.with(DOWN, UP);
+      picker.node.effects.put(FORWARD, () -> picker.wheel.text = Integer.toString(Integer.parseInt(picker.wheel.text) + 1));
+      ScriptedEngine engine = ScriptedEngine.create(picker.scene);
+      engine.read();
+      String out = text(engine.call("scroll", args("element_index", 1, "direction", "down", "pages", 2)));
+      require(picker.node.performed.equals(List.of(FORWARD, FORWARD)), "actions " + picker.node.performed);
+      require(picker.wheel.text.equals("22"), "value " + picker.wheel.text + "; notice: " + out.split("\n")[0]);
+    });
+
+    for (String kind : List.of("wheel", "slider", "nested list"))
+      test("a swipe never crosses a " + kind + ": the error names it and nothing is sent", () -> {
+        ListScene rows = new ListScene(FORWARD); // offers no way up: an upward scroll swipes
+        Element blocker;
+        if (kind.equals("wheel")) {
+          blocker = rows.scene.add("/0/2", "android.widget.NumberPicker", "minute", "35", 0, 900, 1080, 1300);
+          blocker.focusable = true;
+          blocker.actions.put("scroll_forward", FORWARD);
+          blocker.actions.put("scroll_backward", BACKWARD);
+          rows.scene.node(blocker).with(FORWARD, BACKWARD);
+        } else if (kind.equals("slider")) {
+          blocker = rows.scene.add("/0/2", "android.widget.SeekBar", "volume", "", 0, 900, 1080, 1000);
+          rows.scene.node(blocker).with(SET_PROGRESS);
+        } else {
+          blocker = rows.scene.add("/0/2", "android.widget.HorizontalScrollView", "chips", "", 0, 900, 1080, 1100);
+          blocker.scrollable = true;
+          rows.scene.node(blocker).with(RIGHT);
+        }
+        ScriptedEngine engine = ScriptedEngine.create(rows.scene);
+        engine.read();
+        Failure f = failure(() -> engine.call("scroll", args("element_index", 1, "direction", "up")));
+        require(f.code.equals("ACTION_UNSUPPORTED"), f.code + ": " + f.getMessage());
+        String name = blocker.clazz.substring(blocker.clazz.lastIndexOf('.') + 1);
+        require(f.getMessage().contains(name) && f.getMessage().contains("nothing sent"), f.getMessage());
+        require(engine.events.isEmpty() && engine.log.isEmpty(), "input sent: " + engine.log);
+      });
+
+    test("a swipe goes beside a wheel in the middle of the list", () -> {
+      ListScene rows = new ListScene(FORWARD);
+      Element wheel = rows.scene.add("/0/2", "android.widget.NumberPicker", "minute", "35", 300, 900, 780, 1300);
+      wheel.focusable = true;
+      wheel.actions.put("scroll_forward", FORWARD);
+      wheel.actions.put("scroll_backward", BACKWARD);
+      FakeNode wheelNode = rows.scene.node(wheel).with(FORWARD, BACKWARD);
+      ScriptedEngine engine = ScriptedEngine.create(rows.scene);
+      engine.read();
+      engine.call("scroll", args("element_index", 1, "direction", "up"));
+      List<int[]> points = motions(engine);
+      require(!points.isEmpty(), "no swipe sent");
+      for (int[] p : points)
+        require(p[1] < 300 - 24 || p[1] > 780 + 24, "the finger came within reach of the wheel: " + engine.log);
+      require(wheelNode.performed.isEmpty(), "wheel got " + wheelNode.performed);
+    });
+
+    test("a swipe that changed a switch it crossed says so with the old and new value and stops", () -> {
+      ListScene rows = new ListScene(FORWARD);
+      Element label = rows.scene.add("/0/2/0", "android.widget.TextView", "", "Vibrate", 0, 1100, 800, 1200);
+      Element toggle = rows.scene.add("/0/2/1", "android.widget.Switch", "vibrate", "", 800, 1100, 1080, 1200);
+      toggle.checkable = toggle.clickable = true;
+      ScriptedEngine engine = ScriptedEngine.create(rows.scene);
+      int[] lifts = {0};
+      engine.onObserve = n -> {
+        long ups = engine.events.stream().filter(e -> e.action == 1).count();
+        for (; lifts[0] < ups; lifts[0]++) {
+          rows.show(rows.offset + 2);
+          toggle.checked = !toggle.checked; // the finger's path flipped it
+        }
+      };
+      engine.read();
+      String out = text(engine.call("scroll", args("element_index", 1, "direction", "up", "pages", 3)));
+      require(lifts[0] == 1, "swipes sent: " + lifts[0]);
+      require(out.startsWith("WARNING: the swipe also changed Switch id=vibrate not checked -> checked"), "notice: " + out.split("\n")[0]);
+      require(out.contains("Scrolled 1 of 3 pages"), "pages not stated: " + out.split("\n")[0]);
+      require(label.text.equals("Vibrate"), "label");
+    });
+
+    test("a coordinate scroll that turned a wheel says so with the old and new value", () -> {
+      Scene scene = new Scene();
+      Element wheel = scene.add("/1/0", "android.widget.NumberPicker", "minute", "35", 300, 900, 780, 1300);
+      wheel.focusable = true;
+      wheel.actions.put("scroll_forward", FORWARD);
+      wheel.actions.put("scroll_backward", BACKWARD);
+      scene.node(wheel).with(FORWARD, BACKWARD);
+      scene.add("/1/1", "android.widget.TextView", "", "minutes", 800, 1000, 1000, 1100);
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      engine.mainShot = android.graphics.Bitmap.of(1080, 2400, "display 0");
+      Screen state = engine.read();
+      set(engine, "coordinates", grant(state, 576, 1280));
+      int[] lifts = {0};
+      engine.onObserve = n -> {
+        long ups = engine.events.stream().filter(e -> e.action == 1).count();
+        for (; lifts[0] < ups; lifts[0]++) wheel.text = "33";
+      };
+      String out = text(engine.call("scroll", args("x", 288, "y", 400, "direction", "up")));
+      require(out.contains("WARNING: the swipe also changed NumberPicker id=minute 35 -> 33"), "notice: " + out.split("\n")[1]);
+    });
+  }
+
+  /**
+   * A form in a ScrollView at "/0" that lists scroll forward and backward while it can still go
+   * up; it shows "Row N" at its top and goes up one row per scroll-backward. At row 0 it stops
+   * listing scroll-backward and the action does nothing, as a ScrollView at its top.
+   */
+  static final class FormScene {
+    final Scene scene = new Scene();
+    final Element form = scene.add("/0", "android.widget.ScrollView", "form", "", 0, 100, 1080, 2000);
+    final Element row = scene.add("/0/0", "android.widget.TextView", "", "", 0, 300, 1080, 500);
+    final FakeNode node;
+    int offset;
+
+    FormScene(int offset) {
+      this.offset = offset;
+      row.text = "Row " + offset;
+      form.scrollable = true;
+      form.actions.put("scroll_forward", FORWARD);
+      form.actions.put("scroll_backward", BACKWARD);
+      node = scene.node(form).with(FORWARD, BACKWARD);
+      node.scrollable = true;
+      node.effects.put(BACKWARD, () -> {
+        this.offset--;
+        row.text = "Row " + this.offset;
+        if (this.offset == 0) stopListingBackward();
+      });
+    }
+
+    void stopListingBackward() {
+      node.actions.remove(BACKWARD);
+      form.actions.remove("scroll_backward");
+    }
   }
 }

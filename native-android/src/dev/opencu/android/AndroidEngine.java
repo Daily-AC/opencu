@@ -1670,12 +1670,17 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
           // otherwise the nearest scrolling element enclosing it. It is followed from page to
           // page even when its path, bounds or text change (a collapsing toolbar, a wheel's value).
           Element scope = null;
-          if (n != null) {
+          // The element's own generic scroll action for this direction once it offered it, in the
+          // state this call is based on or on an earlier page. It stays in use when the element stops
+          // listing it, and the content decides whether a page moved: a swipe is never sent instead.
+          int advertised = 0;
+          if (target != null) {
             scope = scrollScope(target, now);
             if (scope == null)
               throw fail(
                   "ACTION_UNSUPPORTED",
                   "Neither the element nor an element enclosing it scrolls; nothing sent");
+            advertised = advertisedScroll(scope == target ? old : counterpart(base, scope), d);
           }
           for (int page = 0; page < requested; page++) {
             if (page > 0
@@ -1703,23 +1708,27 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
             int action = 0;
             float[] swipe = null;
             if (scope != null) {
-              action = scrollAction(nodes.get(scope.index), d, false);
+              AccessibilityNodeInfo own = nodes.get(scope.index);
+              action = ownScrollAction(own, d);
+              if (action == FORWARD || action == BACKWARD) advertised = action;
+              else if (action == 0 && advertised != 0 && genericOnAxis(own, d)) action = advertised;
               if (action == 0) {
                 acted = scrollingAncestor(scope, current);
                 if (acted != null) action = scrollAction(nodes.get(acted.index), d, true);
                 if (action != 0) path = "the scroll-" + direction(d) + " action of an enclosing element";
               }
               if (action == 0) {
-                swipe = swipe(scope, current, d);
-                if (swipe == null) {
+                Swipe planned = swipe(scope, current, d);
+                if (planned.path == null) {
                   if (page == 0)
                     throw fail(
                         "ACTION_UNSUPPORTED",
-                        "The element offers no scroll-" + direction(d) + " action and too little of it"
-                            + " is visible to swipe; nothing sent");
-                  stopped = "too little of the element is visible to swipe, so the rest were not sent";
+                        "The element offers no scroll-" + direction(d) + " action and " + planned.why
+                            + "; nothing sent");
+                  stopped = planned.why + ", so the rest were not sent";
                   break;
                 }
+                swipe = planned.path;
                 path = "a touch swipe inside the element (it offers no scroll-" + direction(d) + " action)";
               }
             }
@@ -1746,6 +1755,21 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
                 scrolled(
                     before, current, scope, pkg, token,
                     action != 0 ? Core.SCROLL_QUIET_ACTION_MS : Core.SCROLL_QUIET_TOUCH_MS);
+            if (action == 0) {
+              // A finger can set what it crosses; say so first, with the old and new values.
+              List<String> changes = Core.valueChanges(current, result.after, scope);
+              if (!changes.isEmpty()) {
+                addNotice(
+                    "WARNING: the swipe also changed " + String.join("; ", changes)
+                        + ". Check these values and correct them if they were not meant to change.");
+                if (result.moved) {
+                  moved++;
+                  passed.addAll(rows);
+                }
+                stopped = "the swipe changed a value outside the scrolled content, so the rest were not sent";
+                break;
+              }
+            }
             if (!result.moved) break;
             moved++;
             passed.addAll(rows);
@@ -1804,6 +1828,23 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     // to avoid paying a second idle wait for every quickly settling step.
   }
 
+  /** The element of {@code base} at {@code e}'s place: same window, tree path, class and id. */
+  private static Element counterpart(Screen base, Element e) {
+    for (Element b : base.elements.values())
+      if (b.window == e.window && b.path.equals(e.path) && b.clazz.equals(e.clazz) && b.id.equals(e.id))
+        return b;
+    return null;
+  }
+
+  /** The generic scroll action for {@code d} that {@code e}'s line listed, or 0. */
+  private static int advertisedScroll(Element e, String d) {
+    if (e == null) return 0;
+    boolean onward = d.equals("d") || d.equals("r");
+    return e.actions.containsKey(onward ? "scroll_forward" : "scroll_backward")
+        ? (onward ? FORWARD : BACKWARD)
+        : 0;
+  }
+
   /** Platform ids of the generic and direction-specific accessibility scroll actions. */
   private static final int FORWARD = AccessibilityNodeInfo.ACTION_SCROLL_FORWARD,
       BACKWARD = AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD,
@@ -1847,34 +1888,75 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
   }
 
   /**
-   * The accessibility action that scrolls {@code n} in direction {@code d}, or 0. The
-   * direction-specific action always matches. Generic forward/backward is taken as down/right and
-   * up/left only on the element itself ({@code directionalOnly} false), and not when it offers
-   * direction-specific actions on the other axis alone: on an enclosing element it is ambiguous,
-   * since a horizontal pager's backward is left.
+   * The direction-specific action that scrolls an enclosing element {@code n} in direction {@code
+   * d}, or 0. A generic forward/backward is ambiguous there: a horizontal pager's backward is left.
    */
   private int scrollAction(AccessibilityNodeInfo n, String d, boolean directionalOnly) {
-    int wanted = d.equals("d") ? DOWN : d.equals("u") ? UP : d.equals("l") ? LEFT : RIGHT;
+    int wanted = directional(d);
     if (hasAction(n, wanted)) return wanted;
-    if (directionalOnly) return 0;
-    boolean vertical = d.equals("d") || d.equals("u");
-    boolean thisAxis = vertical ? hasAction(n, UP) || hasAction(n, DOWN) : hasAction(n, LEFT) || hasAction(n, RIGHT);
-    boolean otherAxis = vertical ? hasAction(n, LEFT) || hasAction(n, RIGHT) : hasAction(n, UP) || hasAction(n, DOWN);
-    if (otherAxis && !thisAxis) return 0;
-    int generic = d.equals("d") || d.equals("r") ? FORWARD : BACKWARD;
-    return hasAction(n, generic) ? generic : 0;
+    return directionalOnly ? 0 : ownScrollAction(n, d);
+  }
+
+  private static int directional(String d) {
+    return d.equals("d") ? DOWN : d.equals("u") ? UP : d.equals("l") ? LEFT : RIGHT;
   }
 
   /**
-   * A swipe {x0, y0, x1, y1} from 80% to 20% of the visible, uncovered part of {@code e} along the
-   * direction's axis, through its centre, that scrolls it in direction {@code d}; or null when too
-   * little of it is visible. Windows above it (keyboard, dialogs) are cut away, and the display's
-   * outer strips, where system gestures start, are avoided.
+   * Whether {@code n}'s generic forward/backward scroll moves along {@code d}'s axis: it offers no
+   * direction-specific action on the other axis. With such actions on the other axis only, the
+   * generic ones belong to that axis (a horizontal list's forward is right); with actions on both
+   * axes they are ambiguous.
    */
-  private float[] swipe(Element e, Screen s, String d) {
+  private boolean genericOnAxis(AccessibilityNodeInfo n, String d) {
+    boolean vertical = d.equals("d") || d.equals("u");
+    return vertical
+        ? !hasAction(n, LEFT) && !hasAction(n, RIGHT)
+        : !hasAction(n, UP) && !hasAction(n, DOWN);
+  }
+
+  /**
+   * The action that scrolls the element {@code n} itself in direction {@code d}, or 0: its generic
+   * forward (down/right) or backward (up/left) when that moves along this axis, else its
+   * direction-specific action. The generic action comes first: it is the one the element's line
+   * lists and perform_secondary_action sends, and some views (wheel pickers) handle only it.
+   */
+  private int ownScrollAction(AccessibilityNodeInfo n, String d) {
+    int generic = d.equals("d") || d.equals("r") ? FORWARD : BACKWARD;
+    if (genericOnAxis(n, d) && hasAction(n, generic)) return generic;
+    int wanted = directional(d);
+    return hasAction(n, wanted) ? wanted : 0;
+  }
+
+  /** A planned swipe: its path {x0, y0, x1, y1}, or null and why no swipe is possible. */
+  private static final class Swipe {
+    final float[] path;
+    final String why;
+
+    Swipe(float[] path, String why) {
+      this.path = path;
+      this.why = why;
+    }
+  }
+
+  /** How far a finger is taken to reach on either side of its path, in pixels. */
+  static final int FINGER_PX = 24;
+
+  /** Where across the visible part a swipe may run, tried in this order: centre first. */
+  private static final float[] LANES = {.5f, .3f, .7f, .15f, .85f};
+
+  /**
+   * A swipe from 80% to 20% of the visible, uncovered part of {@code e} along the direction's axis
+   * that scrolls it in direction {@code d}. Windows above it (keyboard, dialogs) are cut away, and
+   * the display's outer strips, where system gestures start, are avoided. It runs through the
+   * centre, or else the first other lane across the element that crosses no window above it and
+   * no element that a swipe could set (a wheel, slider, nested scroller: anything with a range or
+   * its own scroll actions). Without such a lane there is no swipe, and the reason names the
+   * element in the way.
+   */
+  private Swipe swipe(Element e, Screen s, String d) {
     Window owner = null;
     for (Window w : s.windows) if (w.id == e.window) owner = w;
-    if (owner == null) return null;
+    if (owner == null) return new Swipe(null, "its window is gone");
     int left = Math.max(Math.max(e.left, 0), owner.left),
         top = Math.max(Math.max(e.top, 0), owner.top),
         right = Math.min(Math.min(e.right, s.width), owner.right),
@@ -1903,20 +1985,57 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
       right = Math.min(right, Math.round(s.width * .9f));
     }
     if (right <= left || bottom <= top || (vertical ? bottom - top : right - left) < SWIPE_MIN_PX)
-      return null;
-    float cx = (left + right) / 2f, cy = (top + bottom) / 2f;
+      return new Swipe(null, "too little of it is visible to swipe");
     float near = vertical ? top + (bottom - top) * .2f : left + (right - left) * .2f,
         far = vertical ? top + (bottom - top) * .8f : left + (right - left) * .8f;
     // Down and right move the finger toward the start of the axis, revealing what follows.
     boolean onward = d.equals("d") || d.equals("r");
     float from = onward ? far : near, to = onward ? near : far;
-    float[] p = vertical ? new float[] {cx, from, cx, to} : new float[] {from, cy, to, cy};
-    for (Window w : above)
-      for (int i = 0; i <= 2; i++) {
-        float x = p[0] + (p[2] - p[0]) * i / 2, y = p[1] + (p[3] - p[1]) * i / 2;
-        if (w.left <= x && x < w.right && w.top <= y && y < w.bottom) return null;
-      }
-    return p;
+    Element blocker = null;
+    lanes:
+    for (float lane : LANES) {
+      float across = vertical ? left + (right - left) * lane : top + (bottom - top) * lane;
+      float[] p = vertical ? new float[] {across, from, across, to} : new float[] {from, across, to, across};
+      for (Window w : above)
+        for (int i = 0; i <= 2; i++) {
+          float x = p[0] + (p[2] - p[0]) * i / 2, y = p[1] + (p[3] - p[1]) * i / 2;
+          if (w.left <= x && x < w.right && w.top <= y && y < w.bottom) continue lanes;
+        }
+      Element inTheWay = settableAcross(p, e, s);
+      if (inTheWay == null) return new Swipe(p, null);
+      if (blocker == null) blocker = inTheWay;
+    }
+    return new Swipe(
+        null,
+        blocker == null
+            ? "windows above it cover where a swipe would go"
+            : "a swipe inside it would cross " + Core.describe(blocker) + ", which a swipe can change");
+  }
+
+  /**
+   * The first element within a finger's reach of the swipe path {@code p}, in {@code scope}'s
+   * window, that a swipe could set, other than {@code scope} and the elements enclosing it; or null.
+   */
+  private Element settableAcross(float[] p, Element scope, Screen s) {
+    float x0 = Math.min(p[0], p[2]) - FINGER_PX, x1 = Math.max(p[0], p[2]) + FINGER_PX,
+        y0 = Math.min(p[1], p[3]) - FINGER_PX, y1 = Math.max(p[1], p[3]) + FINGER_PX;
+    for (Element c : s.elements.values()) {
+      if (c.window != scope.window || c.index == scope.index || scope.path.startsWith(c.path + "/"))
+        continue;
+      if (c.right <= x0 || c.left >= x1 || c.bottom <= y0 || c.top >= y1) continue;
+      if (swipeSettable(c)) return c;
+    }
+    return null;
+  }
+
+  /** Whether a swipe across {@code c} could change it: a range, or it scrolls or steps itself. */
+  private boolean swipeSettable(Element c) {
+    if (c.ranged || c.scrollable) return true;
+    if (c.actions.containsKey("scroll_forward") || c.actions.containsKey("scroll_backward")) return true;
+    AccessibilityNodeInfo n = nodes.get(c.index);
+    if (n == null) return false;
+    if (scrolls(n)) return true;
+    return hasAction(n, android.R.id.accessibilityActionSetProgress);
   }
 
   /** A scroll page's outcome: whether it moved, the settled screen and the scope as found in it. */

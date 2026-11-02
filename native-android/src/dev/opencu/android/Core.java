@@ -97,6 +97,71 @@ public final class Core {
     return 2 * w * h >= Math.min(areaA, areaB);
   }
 
+  /** An element for a message: class, resource id, text unless a password, and bounds. */
+  public static String describe(Element e) {
+    StringBuilder b = new StringBuilder(label(e));
+    if (!e.text.isEmpty() && !e.password) b.append(" text=").append(Json.write(e.text));
+    return b.append(" at ").append(e.left).append(',').append(e.top).append(',').append(e.right)
+        .append(',').append(e.bottom).toString();
+  }
+
+  /** An element's class and resource id, as its line shows them. */
+  static String label(Element e) {
+    String name = e.clazz.substring(e.clazz.lastIndexOf('.') + 1);
+    return e.id.isEmpty() ? name : name + " id=" + e.id.substring(e.id.lastIndexOf('/') + 1);
+  }
+
+  /**
+   * The value an element holds, or null when it holds none: a range's number, an editor's text, a
+   * checkable's state, or the selected value a wheel picker shows as its text. Passwords have none.
+   */
+  public static String value(Element e) {
+    if (e.password) return null;
+    if (e.ranged) return Element.number(e.current);
+    if (e.editable) return e.text;
+    if (e.checkable) return e.checked ? "checked" : "not checked";
+    if (!e.text.isEmpty()
+        && (e.actions.containsKey("scroll_forward") || e.actions.containsKey("scroll_backward")))
+      return e.text;
+    return null;
+  }
+
+  /**
+   * The values that changed from {@code before} to {@code after}, as "Class id=… old -> new",
+   * other than {@code scope}'s own. A control is the same one when its window, tree path, class
+   * and resource id match and so does the text around it (the other non-value text under its
+   * parent), so a recycled list row that now shows another item is not taken for it.
+   */
+  public static List<String> valueChanges(Screen before, Screen after, Element scope) {
+    Map<String, Element> was = controls(before, scope), now = controls(after, scope);
+    List<String> changes = new ArrayList<>();
+    for (Map.Entry<String, Element> entry : was.entrySet()) {
+      Element a = entry.getValue(), b = now.get(entry.getKey());
+      if (a == null || b == null) continue;
+      String from = value(a), to = value(b);
+      if (!from.equals(to)) changes.add(label(b) + " " + from + " -> " + to);
+    }
+    return changes;
+  }
+
+  /** The value-holding elements of {@code s} by identity; an identity found twice maps to null. */
+  private static Map<String, Element> controls(Screen s, Element scope) {
+    Map<String, Element> out = new LinkedHashMap<>();
+    for (Element e : s.elements.values()) {
+      if (value(e) == null) continue;
+      if (scope != null && e.window == scope.window && e.path.equals(scope.path)) continue;
+      String parent = e.path.substring(0, Math.max(0, e.path.lastIndexOf('/'))) + "/";
+      StringBuilder around = new StringBuilder();
+      for (Element o : s.elements.values())
+        if (o != e && o.window == e.window && o.path.startsWith(parent) && value(o) == null)
+          around.append(o.text).append('\u0001').append(o.desc).append('\u0002');
+      String key =
+          e.display + "|" + e.window + "|" + e.path + "|" + e.clazz + "|" + e.id + "|" + around;
+      out.put(key, out.containsKey(key) ? null : e);
+    }
+    return out;
+  }
+
   /** Most rows a multi-page scroll lists as passed over, and most characters shown per row. */
   public static final int PASSED_ROWS = 200, ROW_CHARS = 200;
 
