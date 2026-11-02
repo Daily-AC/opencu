@@ -48,6 +48,8 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
   private String notice = "";
   private String keyboardInputFailure = "";
   private boolean observationRequired;
+  /** Set before anything in the current call reaches the device; a later failure needs a fresh read. */
+  private boolean sent;
   private OwnedDisplay ownedDisplay;
   private int activeDisplay = Display.DEFAULT_DISPLAY;
   private int desktopDisplay = -1;
@@ -518,6 +520,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     // am is a platform shell client; package/component comes from PackageManager, never
     // interpolated shell text.
     check(token, true);
+    sent = true;
     shell(
         "/system/bin/am",
         "start",
@@ -735,12 +738,13 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     return s;
   }
 
+  /**
+   * Builds the response for {@code s}. Its indexes and screenshot grant become current only once
+   * the whole response exists; a failed capture leaves the last returned state in force.
+   */
   private Map<String, Object> result(Screen s, boolean screenshot) {
-    latest = s;
-    observationRequired = false;
-    coordinates = null;
     Map<String, Object> r = Protocol.textResult((notice.isEmpty() ? "" : notice + "\n") + s.text());
-    notice = "";
+    Capture capture = null;
     if (screenshot) {
       Bitmap bitmap;
       try {
@@ -786,11 +790,15 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
                   "data",
                   android.util.Base64.encodeToString(
                       data.toByteArray(), android.util.Base64.NO_WRAP)));
-      coordinates = new Capture(s, w, h);
+      capture = new Capture(s, w, h);
       r.put(
           "_meta",
           obj("opencu/screenshot", obj("width", w, "height", h, "display", activeDisplay)));
     }
+    latest = s;
+    observationRequired = false;
+    coordinates = capture;
+    notice = "";
     return r;
   }
 
@@ -821,6 +829,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
   private void accessibility(
       AccessibilityNodeInfo n, int action, Bundle args, String pkg, long token) {
     checkTarget(token, pkg);
+    sent = true;
     actionConfirmed(n.performAction(action, args));
     check(token, false);
   }
@@ -849,6 +858,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
   }
 
   private void motion(long down, int action, float x, float y) {
+    sent = true;
     sendMotion(automation, activeDisplay, down, action, x, y);
   }
 
@@ -979,6 +989,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
 
   private void shellTap(float x, float y, String pkg, long token) {
     checkTarget(token, pkg);
+    sent = true;
     try {
       if (activeDisplay == Display.DEFAULT_DISPLAY)
         shell(
@@ -1035,7 +1046,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
                   .findFirst()
                   .orElse(null);
           AccessibilityNodeInfo node = editable == null ? null : nodes.get(editable.index);
-          if (node != null && node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)) {
+          if (node != null && (sent = true) && node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)) {
             check(token, false);
             return node;
           }
@@ -1102,6 +1113,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     boolean pressed = false, completed = false;
     try {
       pressed = true;
+      sent = true;
       sendKey(automation, activeDisplay, down, down, KeyEvent.ACTION_DOWN, code, 0);
       pause((long) (seconds * 1000), token);
       checkTarget(token, pkg);
@@ -1146,6 +1158,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
         return false;
       }
       checkTarget(token, pkg);
+      sent = true;
       if (!n.performAction(AccessibilityNodeInfo.ACTION_PASTE)) {
         keyboardInputFailure = "Focused editor rejected ACTION_PASTE";
         return false;
@@ -1280,6 +1293,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
                         ? AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
                         : AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD;
               checkTarget(token, pkg);
+              sent = true;
               if (!n.performAction(action, null)) {
                 notice = Core.scrollNotice(moved, requested);
                 break;
@@ -1392,6 +1406,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     Capture cap = coordinates;
     coordinates = null;
     notice = "";
+    sent = false;
     long token = person.token();
     if (!name.equals("get_app_state")) check(token, false);
     String pkg = resolve((String) args.get("app"));
@@ -1424,15 +1439,15 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     if (latest == null || !latest.target.equals(pkg) || observationRequired)
       throw fail("OBSERVATION_REQUIRED", "Read get_app_state for this app before input");
     Screen base = latest;
-    if (!foreground()[0].equals(pkg)) {
-      check(token, true);
-      // Revalidate retained indexes before any implicit foreground change.
-      if (args.containsKey("element_index"))
-        live(base.elements.get(((Number) args.get("element_index")).intValue()), base, observe(pkg));
-      activate(pkg, token);
-    }
-    if (name.equals("run_actions")) return batch(args, pkg, base, cap, token);
     try {
+      if (!foreground()[0].equals(pkg)) {
+        check(token, true);
+        // Revalidate retained indexes before any implicit foreground change.
+        if (args.containsKey("element_index"))
+          live(base.elements.get(((Number) args.get("element_index")).intValue()), base, observe(pkg));
+        activate(pkg, token);
+      }
+      if (name.equals("run_actions")) return batch(args, pkg, base, cap, token);
       perform(name, args, pkg, base, base, cap, token);
       check(token, false);
       Map<String, Object> r =
@@ -1442,7 +1457,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     } catch (Failure e) {
       coordinates = null;
       e = priorityFailure(e, token);
-      if (e.code.equals("PERSON_ACTIVE") || e.code.equals("ACTION_UNCONFIRMED"))
+      if (sent || e.code.equals("PERSON_ACTIVE") || e.code.equals("ACTION_UNCONFIRMED"))
         observationRequired = true;
       throw e;
     }

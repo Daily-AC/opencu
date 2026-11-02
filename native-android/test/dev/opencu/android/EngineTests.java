@@ -631,6 +631,49 @@ public final class EngineTests {
       require(node.performed.equals(List.of(16777217)), "performed " + node.performed);
     });
 
+    test("failed screenshot keeps the last returned state in force", () -> {
+      Scene scene = new Scene();
+      scene.add("/0", "android.widget.Button", "", "Alpha", 0, 100, 1080, 200).clickable = true;
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      Screen previous = engine.read();
+      Screen unseen = engine.observe(PKG);
+      Failure f =
+          failure(() -> invoke(engine, "result", new Class<?>[] {Screen.class, boolean.class}, unseen, true));
+      require(f.code.equals("SCREENSHOT_FAILED"), f.code);
+      require(get(engine, "latest") == previous, "unreturned state was published");
+    });
+
+    test("index from the last returned state is not resolved against an unreturned read", () -> {
+      Scene scene = new Scene();
+      Element first = scene.add("/0", "android.widget.Button", "", "Alpha", 0, 100, 1080, 200);
+      Element second = scene.add("/1", "android.widget.Button", "", "Beta", 0, 300, 1080, 400);
+      first.clickable = second.clickable = true;
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      engine.read();
+      first.text = "Beta";
+      second.text = "Alpha";
+      Failure capture = failure(() -> engine.call("get_app_state", args("includeScreenshot", true)));
+      require(capture.code.equals("SCREENSHOT_FAILED"), capture.code);
+      Failure f = failure(() -> engine.call("click", args("element_index", 1)));
+      require(f.code.equals("STALE_ELEMENT"), f.code + ": " + f.getMessage() + " " + engine.log);
+      require(engine.log.isEmpty(), "input sent: " + engine.log);
+    });
+
+    test("failed screenshot after batch input requires a fresh read", () -> {
+      Scene scene = new Scene();
+      scene.add("/0", "android.widget.Button", "", "Alpha", 0, 100, 1080, 200).clickable = true;
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      engine.read();
+      Failure capture =
+          failure(() -> engine.call("run_actions", args(
+              "actions", List.of(obj("method", "click", "element_index", 1)), "includeScreenshot", true)));
+      require(capture.code.equals("SCREENSHOT_FAILED"), capture.code);
+      engine.log.clear();
+      Failure f = failure(() -> engine.call("click", args("element_index", 1)));
+      require(f.code.equals("OBSERVATION_REQUIRED"), f.code);
+      require(engine.log.isEmpty(), "input sent: " + engine.log);
+    });
+
     if (!failures.isEmpty()) {
       System.out.println("Android engine host checks failed: " + failures);
       System.exit(1);
