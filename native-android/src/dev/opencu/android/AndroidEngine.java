@@ -20,8 +20,11 @@ import java.lang.Process;
 import java.lang.reflect.*;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
 
 class AndroidEngine implements Protocol.Backend, AutoCloseable {
@@ -362,27 +365,69 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     observationRequired = false;
   }
 
+  private static final Set<Process> children = new HashSet<>();
+  private static boolean commandsStopped;
+
+  /**
+   * Runs a platform client and returns its output. Throws IOException only when the process could
+   * not start; once started, the child is killed and reaped on every exit path, interruption
+   * included, so it cannot outlive the call.
+   */
   static String command(String... args) throws Exception {
-    Process p = new ProcessBuilder(args).redirectErrorStream(true).start();
-    ByteArrayOutputStream out = new ByteArrayOutputStream();
-    Thread drain =
-        new Thread(
-            () -> {
-              try {
-                p.getInputStream().transferTo(out);
-              } catch (IOException ignored) {
-              }
-            });
-    drain.setDaemon(true);
-    drain.start();
-    if (!p.waitFor(5, TimeUnit.SECONDS)) {
-      p.destroyForcibly();
-      throw fail("RUNTIME_ERROR", "Android command timed out");
+    Process p;
+    synchronized (children) {
+      if (commandsStopped) throw fail("ENGINE_STOPPING", "Engine is stopping; command not started");
+      p = new ProcessBuilder(args).redirectErrorStream(true).start();
+      children.add(p);
     }
-    drain.join(1000);
-    String text = out.toString(StandardCharsets.UTF_8.name());
-    if (p.exitValue() != 0) throw fail("RUNTIME_ERROR", "Android command failed: " + text.trim());
-    return text;
+    try {
+      ByteArrayOutputStream out = new ByteArrayOutputStream();
+      Thread drain =
+          new Thread(
+              () -> {
+                try {
+                  p.getInputStream().transferTo(out);
+                } catch (IOException ignored) {
+                }
+              });
+      drain.setDaemon(true);
+      drain.start();
+      if (!p.waitFor(5, TimeUnit.SECONDS)) throw fail("RUNTIME_ERROR", "Android command timed out");
+      drain.join(1000);
+      String text = new String(out.toByteArray(), StandardCharsets.UTF_8);
+      if (p.exitValue() != 0) throw fail("RUNTIME_ERROR", "Android command failed: " + text.trim());
+      return text;
+    } finally {
+      if (p.isAlive()) {
+        p.destroyForcibly();
+        try {
+          p.waitFor(500, TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+          Thread.currentThread().interrupt();
+        }
+      }
+      synchronized (children) {
+        children.remove(p);
+      }
+    }
+  }
+
+  /** Kills every running platform client and refuses new ones; waits up to {@code millis}. */
+  static void stopCommands(long millis) {
+    List<Process> running;
+    synchronized (children) {
+      commandsStopped = true;
+      running = new ArrayList<>(children);
+    }
+    for (Process p : running) p.destroyForcibly();
+    long end = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(millis);
+    for (Process p : running)
+      try {
+        p.waitFor(Math.max(0, end - System.nanoTime()), TimeUnit.NANOSECONDS);
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+        return;
+      }
   }
 
   /** Runs a platform shell client for this engine; tests substitute the device. */
@@ -837,30 +882,33 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     checkTarget(token, pkg);
     if (!displayInputAvailable())
       throw fail("INPUT_UNAVAILABLE", "display-targeted touch injection is unavailable");
+    // The whole gesture, release included, stays on the display and connection it started on.
+    UiAutomation via = automation;
+    int display = activeDisplay;
     long down = SystemClock.uptimeMillis();
     boolean pressed = false;
     try {
       pressed = true;
-      motion(down, MotionEvent.ACTION_DOWN, x, y);
+      motion(via, display, down, MotionEvent.ACTION_DOWN, x, y);
       long end = down + duration;
       while (SystemClock.uptimeMillis() < end) {
         pause(Math.min(16, end - SystemClock.uptimeMillis()), token);
         checkTarget(token, pkg);
         float f = Math.min(1, (SystemClock.uptimeMillis() - down) / (float) Math.max(1, duration));
         if (x != tx || y != ty)
-          motion(down, MotionEvent.ACTION_MOVE, x + (tx - x) * f, y + (ty - y) * f);
+          motion(via, display, down, MotionEvent.ACTION_MOVE, x + (tx - x) * f, y + (ty - y) * f);
       }
       checkTarget(token, pkg);
-      motion(down, MotionEvent.ACTION_UP, tx, ty);
+      motion(via, display, down, MotionEvent.ACTION_UP, tx, ty);
       pressed = false;
     } finally {
-      if (pressed) motion(down, MotionEvent.ACTION_CANCEL, x, y);
+      if (pressed) motion(via, display, down, MotionEvent.ACTION_CANCEL, x, y);
     }
   }
 
-  private void motion(long down, int action, float x, float y) {
+  private void motion(UiAutomation via, int display, long down, int action, float x, float y) {
     sent = true;
-    sendMotion(automation, activeDisplay, down, action, x, y);
+    sendMotion(via, display, down, action, x, y);
   }
 
   /** Injects one touch event through {@code via} onto {@code display}. */
@@ -1112,20 +1160,22 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     checkTarget(token, pkg);
     if (!displayInputAvailable())
       throw fail("INPUT_UNAVAILABLE", "display-targeted key injection is unavailable");
+    UiAutomation via = automation;
+    int display = activeDisplay;
     long down = SystemClock.uptimeMillis();
     boolean pressed = false, completed = false;
     try {
       pressed = true;
       sent = true;
-      sendKey(automation, activeDisplay, down, down, KeyEvent.ACTION_DOWN, code, 0);
+      sendKey(via, display, down, down, KeyEvent.ACTION_DOWN, code, 0);
       pause((long) (seconds * 1000), token);
       checkTarget(token, pkg);
       completed = true;
     } finally {
       if (pressed)
         sendKey(
-            automation,
-            activeDisplay,
+            via,
+            display,
             down,
             SystemClock.uptimeMillis(),
             KeyEvent.ACTION_UP,
@@ -1162,16 +1212,18 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     if (!previous.readable)
       return "the clipboard could not be read (" + previous.problem + "), so it was not used";
     OwedClip owed = new OwedClip(previous, "OpenCU-" + UUID.randomUUID());
-    synchronized (clipboardLock) {
-      owedClip = owed;
-    }
     try {
       checkTarget(token, pkg);
-      try {
-        clipboard.setPrimaryClip(ClipData.newPlainText(owed.marker, text));
-        owed.written = true;
-      } catch (Exception e) {
-        return "the clipboard could not be written (" + e.getClass().getSimpleName() + ")";
+      synchronized (clipboardLock) {
+        // Shutdown settles the clipboard under this lock; never write once it has begun.
+        if (closed) throw fail("ENGINE_STOPPING", "Stdin closed");
+        owedClip = owed;
+        try {
+          clipboard.setPrimaryClip(ClipData.newPlainText(owed.marker, text));
+          owed.written = true;
+        } catch (Exception e) {
+          return "the clipboard could not be written (" + e.getClass().getSimpleName() + ")";
+        }
       }
       if (!n.refresh()) throw fail("STALE_ELEMENT", "The focused editor went away before paste; nothing sent");
       checkTarget(token, pkg);
@@ -1453,16 +1505,70 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     }
   }
 
+  /** Calls, idle stops and shutdown take turns; shutdown waits a bounded time for a call. */
+  private final ReentrantLock callLock = new ReentrantLock();
+  /** The connection's serialized execution context, where the idle timer also runs. */
+  private ScheduledExecutorService serial;
+  private ScheduledFuture<?> idleTimer;
+  private boolean idleStopped;
+
+  void runOn(ScheduledExecutorService serial) {
+    this.serial = serial;
+  }
+
   public Map<String, Object> call(String name, Map<String, Object> args) throws Exception {
-    long now = SystemClock.uptimeMillis();
-    if (desktopDisplay >= 0 && !name.equals("agent_desktop") && now - lastCallAt >= desktopIdleMs) {
-      stopDesktop();
-      throw fail(
-          "AGENT_DESKTOP_IDLE_STOPPED",
-          "The Android agent display stopped after five idle minutes");
+    callLock.lock();
+    try {
+      if (closed) throw fail("ENGINE_STOPPING", "Stdin closed");
+      if (idleTimer != null) idleTimer.cancel(false);
+      boolean statusCall = name.equals("agent_desktop") && "status".equals(args.get("action"));
+      if (idleExpired()) stopIdleDesktop();
+      if (!name.equals("agent_desktop") && idleStopped) {
+        idleStopped = false;
+        throw fail(
+            "AGENT_DESKTOP_IDLE_STOPPED",
+            "The Android agent display stopped after five idle minutes");
+      }
+      if (!statusCall) lastCallAt = SystemClock.uptimeMillis();
+      try {
+        return dispatch(name, args);
+      } finally {
+        if (!statusCall) lastCallAt = SystemClock.uptimeMillis();
+        armIdleTimer();
+      }
+    } finally {
+      callLock.unlock();
     }
-    boolean statusCall = name.equals("agent_desktop") && "status".equals(args.get("action"));
-    if (!statusCall) lastCallAt = now;
+  }
+
+  private boolean idleExpired() {
+    return desktopDisplay >= 0 && SystemClock.uptimeMillis() - lastCallAt >= desktopIdleMs;
+  }
+
+  private void stopIdleDesktop() {
+    stopDesktop();
+    idleStopped = true;
+  }
+
+  /** Schedules the idle stop on the serialized context, so it never runs during a call. */
+  private void armIdleTimer() {
+    if (serial == null || closed || desktopDisplay < 0) return;
+    long delay = Math.max(0, desktopIdleMs - (SystemClock.uptimeMillis() - lastCallAt));
+    idleTimer = serial.schedule(this::idleCheck, delay, TimeUnit.MILLISECONDS);
+  }
+
+  private void idleCheck() {
+    callLock.lock();
+    try {
+      if (closed || desktopDisplay < 0) return;
+      if (idleExpired()) stopIdleDesktop();
+      else armIdleTimer();
+    } finally {
+      callLock.unlock();
+    }
+  }
+
+  private Map<String, Object> dispatch(String name, Map<String, Object> args) throws Exception {
     if (name.equals("agent_desktop")) return desktopCall(args);
     if (name.equals("list_apps")) return apps();
     Capture cap = coordinates;
@@ -1527,6 +1633,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
 
   private Map<String, Object> desktopCall(Map<String, Object> args) {
     String action = (String) args.get("action");
+    if (!action.equals("status")) idleStopped = false;
     if (action.equals("start")) {
       try {
         startDesktop();
@@ -1748,26 +1855,45 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     return r;
   }
 
-  public synchronized void close() {
-    if (closed) return;
-    closed = true;
-    if (monitor != null) monitor.close();
-    // disconnect can block on Binder. EOF must still terminate within two seconds.
-    Thread cleanup =
-        new Thread(
-            () -> {
-              stopDesktop();
-              try {
-                UiAutomation.class.getDeclaredMethod("disconnect").invoke(mainAutomation);
-              } catch (Exception ignored) {
-              }
-            });
-    cleanup.setDaemon(true);
-    cleanup.start();
-    try {
-      cleanup.join(250);
-    } catch (InterruptedException ignored) {
+  /**
+   * Ends the connection: refuses further work, kills running platform clients, lets an in-flight
+   * call unwind (bounded), puts back a clipboard it still owes, then releases the displays. EOF must
+   * still finish within two seconds even when a Binder call blocks.
+   */
+  public void close() {
+    synchronized (this) {
+      if (closed) return;
+      closed = true;
     }
+    if (monitor != null) monitor.close();
+    stopCommands(400);
+    boolean quiet = false;
+    try {
+      quiet = callLock.tryLock(1000, TimeUnit.MILLISECONDS);
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+    }
+    try {
+      if (idleTimer != null) idleTimer.cancel(false);
+      restoreClipboard();
+      // Route changes wait for in-flight input; a gesture keeps its own target either way.
+      Thread cleanup = new Thread(this::releaseRoutes, "opencu-close");
+      cleanup.setDaemon(true);
+      cleanup.start();
+      try {
+        cleanup.join(250);
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+      }
+    } finally {
+      if (quiet) callLock.unlock();
+    }
+  }
+
+  /** Releases the agent display and the main connection; may block on Binder. */
+  void releaseRoutes() {
+    stopDesktop();
+    disconnectAutomation(mainAutomation);
     thread.quitSafely();
   }
 }

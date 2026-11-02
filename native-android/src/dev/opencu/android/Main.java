@@ -4,6 +4,7 @@ import java.io.*;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public final class Main {
   private static final PrintWriter output =
@@ -28,21 +29,33 @@ public final class Main {
         System.exit(0);
       }
       Protocol protocol = new Protocol(engine, BuildInfo.VERSION);
-      ThreadPoolExecutor worker =
-          new ThreadPoolExecutor(
+      // One serialized worker runs every call and the engine's idle timer.
+      ScheduledThreadPoolExecutor worker =
+          new ScheduledThreadPoolExecutor(
               1,
-              1,
-              0,
-              TimeUnit.MILLISECONDS,
-              new ArrayBlockingQueue<>(32),
               r -> {
                 Thread t = new Thread(r, "opencu-mcp");
                 t.setDaemon(true);
                 return t;
               });
+      engine.runOn(worker);
+      AtomicInteger queued = new AtomicInteger();
       // The reader remains live while a call waits: EOF cancels even a long in-flight batch.
       Reader reader = new InputStreamReader(System.in, StandardCharsets.UTF_8);
-      Framing.read(reader, request -> worker.execute(() -> emit(protocol.handle(request))));
+      Framing.read(
+          reader,
+          request -> {
+            if (queued.incrementAndGet() > 32)
+              throw new IllegalStateException("More than 32 MCP requests are queued");
+            worker.execute(
+                () -> {
+                  try {
+                    emit(protocol.handle(request));
+                  } finally {
+                    queued.decrementAndGet();
+                  }
+                });
+          });
       engine.close();
       worker.shutdownNow();
       System.exit(0);

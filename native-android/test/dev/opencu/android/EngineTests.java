@@ -350,6 +350,8 @@ public final class EngineTests {
       // Field initialisers do not run for an allocated instance; mirror the ones the engine has.
       if (hasField(AndroidEngine.class, "keyboardInputFailure")) set(e, "keyboardInputFailure", "");
       if (hasField(AndroidEngine.class, "clipboardLock")) set(e, "clipboardLock", new Object());
+      if (hasField(AndroidEngine.class, "callLock"))
+        set(e, "callLock", new java.util.concurrent.locks.ReentrantLock());
       set(e, "desktopDisplay", -1);
       set(e, "activeDisplay", 0);
       set(e, "desktopIdleMs", 300_000L);
@@ -454,6 +456,11 @@ public final class EngineTests {
       log.add("key " + action + " code " + code + " flags " + flags + " display " + display);
     }
 
+    // Not annotated: the platform release is replaced by the stop the test records.
+    void releaseRoutes() {
+      stopDesktop();
+    }
+
     @Override
     void stopDesktop() {
       log.add("stopDesktop");
@@ -539,6 +546,56 @@ public final class EngineTests {
     }
   }
 
+  /** Starts a harmless child JVM that records its pid and sleeps. */
+  static String[] sleeper(java.nio.file.Path pidFile) {
+    return new String[] {
+      System.getProperty("java.home") + "/bin/java",
+      "-cp",
+      System.getProperty("java.class.path"),
+      EngineTests.class.getName(),
+      "child",
+      pidFile.toString()
+    };
+  }
+
+  static ProcessHandle awaitChild(java.nio.file.Path pidFile) throws Exception {
+    long limit = System.nanoTime() + 5_000_000_000L;
+    while (!java.nio.file.Files.exists(pidFile) || java.nio.file.Files.readString(pidFile).isEmpty()) {
+      require(System.nanoTime() < limit, "child did not start");
+      Thread.sleep(10);
+    }
+    return ProcessHandle.of(Long.parseLong(java.nio.file.Files.readString(pidFile).trim())).orElseThrow();
+  }
+
+  static boolean exits(ProcessHandle child, long millis) throws Exception {
+    try {
+      child.onExit().get(millis, TimeUnit.MILLISECONDS);
+      return true;
+    } catch (TimeoutException e) {
+      return false;
+    }
+  }
+
+  static void reopenCommands() throws Exception {
+    if (hasField(AndroidEngine.class, "commandsStopped")) {
+      Field f = field(AndroidEngine.class, "commandsStopped");
+      f.set(null, false);
+    }
+  }
+
+  /** An engine on owned virtual display 5 with distinct main and agent connections. */
+  static ScriptedEngine onAgentDisplay(Scene scene) {
+    scene.display = 5;
+    ScriptedEngine engine = ScriptedEngine.create(scene);
+    set(engine, "mainAutomation", allocate(UiAutomation.class));
+    set(engine, "automation", allocate(UiAutomation.class));
+    set(engine, "desktopAutomation", get(engine, "automation"));
+    set(engine, "activeDisplay", 5);
+    set(engine, "desktopDisplay", 5);
+    set(engine, "lastCallAt", android.os.SystemClock.uptimeMillis());
+    return engine;
+  }
+
   static Map<String, Object> args(Object... pairs) {
     Map<String, Object> a = obj("app", PKG);
     a.putAll(obj(pairs));
@@ -546,6 +603,11 @@ public final class EngineTests {
   }
 
   public static void main(String[] argv) throws Exception {
+    if (argv.length == 2 && argv[0].equals("child")) {
+      java.nio.file.Files.writeString(java.nio.file.Path.of(argv[1]), Long.toString(ProcessHandle.current().pid()));
+      Thread.sleep(10_000);
+      return;
+    }
     if (argv.length > 0) only = argv[0];
 
     test("indexed click taps the visible centre through the platform input tool", () -> {
@@ -999,6 +1061,209 @@ public final class EngineTests {
       engine.call("click", args("element_index", 1));
       List<String> before = engine.trace.subList(0, engine.trace.indexOf("shell"));
       require(before.lastIndexOf("idle") < before.lastIndexOf("observe"), "order before tap: " + before);
+    });
+
+    test("an interrupted command does not leave its child running", () -> {
+      java.nio.file.Path pidFile = java.nio.file.Files.createTempFile("opencu-child", ".pid");
+      java.util.concurrent.atomic.AtomicReference<Throwable> error = new java.util.concurrent.atomic.AtomicReference<>();
+      Thread worker = new Thread(() -> {
+        try {
+          AndroidEngine.command(sleeper(pidFile));
+        } catch (Throwable t) {
+          error.set(t);
+        }
+      });
+      worker.start();
+      ProcessHandle child = awaitChild(pidFile);
+      try {
+        worker.interrupt();
+        worker.join(2000);
+        require(error.get() instanceof InterruptedException, "worker: " + error.get());
+        require(exits(child, 1000), "child still running after its command was interrupted");
+      } finally {
+        child.destroyForcibly();
+        worker.join(1000);
+        java.nio.file.Files.deleteIfExists(pidFile);
+      }
+    });
+
+    test("closing the connection kills running commands and refuses new ones", () -> {
+      java.nio.file.Path pidFile = java.nio.file.Files.createTempFile("opencu-child", ".pid");
+      ScriptedEngine engine = ScriptedEngine.create(new Scene());
+      Thread worker = new Thread(() -> {
+        try {
+          AndroidEngine.command(sleeper(pidFile));
+        } catch (Throwable ignored) {
+        }
+      });
+      worker.start();
+      ProcessHandle child = awaitChild(pidFile);
+      try {
+        try {
+          engine.close();
+        } catch (Throwable ignored) {
+        }
+        require(exits(child, 1500), "child survived the connection");
+        Exception refused = null;
+        try {
+          AndroidEngine.command("/bin/sh", "-c", "exit 0");
+        } catch (Exception e) {
+          refused = e;
+        }
+        require(refused instanceof Failure && ((Failure) refused).code.equals("ENGINE_STOPPING"),
+            "command started after close: " + refused);
+      } finally {
+        child.destroyForcibly();
+        worker.join(1000);
+        reopenCommands();
+        java.nio.file.Files.deleteIfExists(pidFile);
+      }
+    });
+
+    test("a key hold is released on the display and connection it started on", () -> {
+      Scene scene = new Scene();
+      scene.add("/0", "android.widget.TextView", "", "Agent app", 0, 100, 1080, 200);
+      ScriptedEngine engine = onAgentDisplay(scene);
+      UiAutomation agent = (UiAutomation) get(engine, "automation"), main = (UiAutomation) get(engine, "mainAutomation");
+      engine.read();
+      boolean[] switched = {false};
+      engine.checkHook = () -> {
+        if (!engine.events.isEmpty() && !switched[0]) {
+          // Shutdown restores the main route while the key is held.
+          switched[0] = true;
+          set(engine, "activeDisplay", 0);
+          set(engine, "automation", main);
+          throw Core.fail("ENGINE_STOPPING", "Stdin closed");
+        }
+      };
+      failure(() -> engine.call("press_key", args("key", "back", "duration", 0.3)));
+      require(engine.events.size() == 2, "events " + engine.events.size());
+      Event release = engine.events.get(1);
+      require(release.via == agent && release.display == 5,
+          "release went to display " + release.display + (release.via == main ? " via the main connection" : ""));
+    });
+
+    test("closing waits for an in-flight gesture before releasing the agent display", () -> {
+      Scene scene = new Scene();
+      scene.add("/0", "android.widget.TextView", "", "Agent app", 0, 100, 1080, 200);
+      ScriptedEngine engine = onAgentDisplay(scene);
+      engine.read();
+      Thread worker = new Thread(() -> {
+        try {
+          engine.call("press_key", args("key", "back", "duration", 0.5));
+        } catch (Throwable ignored) {
+        }
+      });
+      worker.start();
+      long limit = System.nanoTime() + 2_000_000_000L;
+      while (engine.events.isEmpty()) {
+        require(System.nanoTime() < limit, "key never pressed");
+        Thread.sleep(5);
+      }
+      try {
+        engine.close();
+      } catch (Throwable ignored) {
+      }
+      worker.join(2000);
+      reopenCommands();
+      List<String> order = new ArrayList<>();
+      for (String line : engine.log) if (line.startsWith("key") || line.equals("stopDesktop")) order.add(line.split(" code")[0]);
+      require(order.equals(List.of("key 0", "key 1", "stopDesktop")), "order " + order);
+    });
+
+    test("EOF during a blocked paste still restores the person's clipboard", () -> {
+      ClipService service = new ClipService();
+      service.clip = android.content.ClipData.newPlainText("person", "PERSON-CLIP");
+      Scene scene = new Scene();
+      FakeNode node = focusedEditor(scene, service, AccessibilityNodeInfo.ACTION_PASTE, AccessibilityNodeInfo.ACTION_SET_TEXT);
+      CountDownLatch entered = new CountDownLatch(1), release = new CountDownLatch(1);
+      node.effects.put(AccessibilityNodeInfo.ACTION_PASTE, () -> {
+        entered.countDown();
+        try {
+          release.await(10, TimeUnit.SECONDS);
+        } catch (InterruptedException ignored) {
+        }
+      });
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      set(engine, "clipboard", clipboard(service));
+      engine.read();
+      Thread worker = new Thread(() -> {
+        try {
+          engine.call("type_text", args("text", "agent text"));
+        } catch (Throwable ignored) {
+        }
+      });
+      worker.start();
+      require(entered.await(5, TimeUnit.SECONDS), "paste never started");
+      try {
+        try {
+          engine.close();
+        } catch (Throwable ignored) {
+        }
+        require("PERSON-CLIP".equals(service.text()), "clipboard after EOF: " + service.text());
+      } finally {
+        release.countDown();
+        worker.join(2000);
+        reopenCommands();
+      }
+      require("PERSON-CLIP".equals(service.text()), "clipboard after the paste returned: " + service.text());
+    });
+
+    test("an idle agent display stops on the connection's worker without any call", () -> {
+      Scene scene = new Scene();
+      scene.add("/0", "android.widget.TextView", "", "Agent app", 0, 100, 1080, 200);
+      ScriptedEngine engine = onAgentDisplay(scene);
+      set(engine, "desktopIdleMs", 300L);
+      ScheduledExecutorService worker = Executors.newSingleThreadScheduledExecutor();
+      try {
+        invoke(engine, "runOn", new Class<?>[] {ScheduledExecutorService.class}, worker);
+        worker.submit(() -> engine.call("get_app_state", args())).get();
+        Thread.sleep(900);
+        require(engine.log.contains("stopDesktop"), "display still running after the idle time");
+        Failure f = failure(() -> {
+          try {
+            worker.submit(() -> engine.call("get_app_state", args())).get();
+          } catch (ExecutionException e) {
+            throw (Exception) e.getCause();
+          }
+        });
+        require(f.code.equals("AGENT_DESKTOP_IDLE_STOPPED"), f.code);
+      } finally {
+        worker.shutdownNow();
+      }
+    });
+
+    test("status does not keep an expired agent display alive", () -> {
+      Scene scene = new Scene();
+      ScriptedEngine engine = onAgentDisplay(scene);
+      set(engine, "lastCallAt", android.os.SystemClock.uptimeMillis() - 300_001L);
+      Map<String, Object> status = engine.call("agent_desktop", obj("action", "status"));
+      require(engine.log.contains("stopDesktop"), "expired display kept by status");
+      require(text(status).contains("\"started\":false"), "status: " + text(status));
+      Failure f = failure(() -> engine.call("get_app_state", args()));
+      require(f.code.equals("AGENT_DESKTOP_IDLE_STOPPED"), f.code);
+    });
+
+    test("the idle stop never runs during an in-flight action", () -> {
+      Scene scene = new Scene();
+      scene.add("/0", "android.widget.TextView", "", "Agent app", 0, 100, 1080, 200);
+      ScriptedEngine engine = onAgentDisplay(scene);
+      set(engine, "desktopIdleMs", 200L);
+      engine.read();
+      ScheduledExecutorService worker = Executors.newSingleThreadScheduledExecutor();
+      try {
+        invoke(engine, "runOn", new Class<?>[] {ScheduledExecutorService.class}, worker);
+        worker.submit(() -> engine.call("get_app_state", args())).get();
+        worker.submit(() -> engine.call("press_key", args("key", "back", "duration", 0.6))).get();
+        Thread.sleep(700);
+        List<String> order = new ArrayList<>();
+        for (String line : engine.log) if (line.startsWith("key") || line.equals("stopDesktop")) order.add(line.split(" code")[0]);
+        require(order.equals(List.of("key 0", "key 1", "stopDesktop")), "order " + order);
+        require(engine.log.stream().anyMatch(line -> line.startsWith("key 1") && line.contains("flags 0 ")),
+            "key release was cancelled: " + engine.log);
+      } finally {
+        worker.shutdownNow();
+      }
     });
 
     if (!failures.isEmpty()) {
