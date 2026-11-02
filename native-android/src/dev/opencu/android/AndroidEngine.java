@@ -108,7 +108,9 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     Class<?> at = Class.forName("android.app.ActivityThread");
     Object activityThread = at.getMethod("systemMain").invoke(null);
     Context system = (Context) at.getMethod("getSystemContext").invoke(activityThread);
-    context = system;
+    // Every service and clipboard call below speaks as this context's package.
+    context = serviceContext(system, android.os.Process.myUid());
+    hidden.put("packageContext", context.getOpPackageName());
     clipboard = new ShellClipboard(context);
     hidden.put("ActivityThread.systemMain/getSystemContext", true);
     taskDisplay = ActivityManager.RunningTaskInfo.class.getField("displayId");
@@ -154,6 +156,26 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     monitor = connectedMonitor;
     monitorProblem = problem;
     person = monitor == null ? new Core.Person(SystemClock.uptimeMillis()) : monitor.person;
+  }
+
+  /**
+   * A context that names the package owning {@code uid} to system services. The system context
+   * names package "android", which services such as the display and clipboard reject from the
+   * shell uid.
+   */
+  static Context serviceContext(Context system, int uid) {
+    String[] packages = system.getPackageManager().getPackagesForUid(uid);
+    if (packages == null || packages.length != 1)
+      throw fail(
+          "PACKAGE_IDENTITY_UNAVAILABLE",
+          "Expected exactly one package for uid " + uid + ", found "
+              + (packages == null ? "none" : String.join(", ", packages)));
+    try {
+      return system.createPackageContext(packages[0], 0);
+    } catch (PackageManager.NameNotFoundException e) {
+      throw fail(
+          "PACKAGE_IDENTITY_UNAVAILABLE", "No context for package " + packages[0] + " of uid " + uid);
+    }
   }
 
   Map<String, Object> doctor() {

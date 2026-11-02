@@ -676,6 +676,70 @@ public final class EngineTests {
     invoke(engine, "startDesktop", new Class<?>[0]);
   }
 
+  /** A context that records every package identity and service lookup asked of it. */
+  static class FakeContext extends android.content.ContextWrapper {
+    String name;
+    android.content.pm.PackageManager packages;
+    List<String> asked;
+
+    FakeContext() {
+      super(null); // never run: instances are allocated without constructors
+    }
+
+    static FakeContext create(String name, android.content.pm.PackageManager packages, List<String> asked) {
+      FakeContext c = allocate(FakeContext.class);
+      c.name = name;
+      c.packages = packages;
+      c.asked = asked;
+      return c;
+    }
+
+    @Override
+    public String getOpPackageName() {
+      asked.add(name + " getOpPackageName");
+      return name;
+    }
+
+    @Override
+    public String getPackageName() {
+      asked.add(name + " getPackageName");
+      return name;
+    }
+
+    @Override
+    public android.content.pm.PackageManager getPackageManager() {
+      return packages;
+    }
+
+    @Override
+    public Object getSystemService(String service) {
+      asked.add(name + " getSystemService " + service);
+      return null;
+    }
+
+    @Override
+    public android.content.Context createPackageContext(String packageName, int flags) {
+      return create(packageName, packages, asked);
+    }
+  }
+
+  /** Packages by uid, as the platform's package manager reports them. */
+  static class UidPackages extends android.test.mock.MockPackageManager {
+    Map<Integer, String[]> owners;
+
+    static UidPackages of(int uid, String... packages) {
+      UidPackages pm = allocate(UidPackages.class);
+      pm.owners = new HashMap<>();
+      pm.owners.put(uid, packages.length == 0 ? null : packages);
+      return pm;
+    }
+
+    @Override
+    public String[] getPackagesForUid(int uid) {
+      return owners.get(uid);
+    }
+  }
+
   static Map<String, Object> args(Object... pairs) {
     Map<String, Object> a = obj("app", PKG);
     a.putAll(obj(pairs));
@@ -1551,6 +1615,42 @@ public final class EngineTests {
       require(unnamed.equals("DOCTOR_FAILED: java.lang.NullPointerException: null"), unnamed);
       String odd = (String) invoke(main, "diagnostic", types, "ENGINE_FAILED", Core.fail("bad code", "x"));
       require(odd.startsWith("ENGINE_FAILED: "), odd);
+    });
+
+    test("system services are called as the package that owns the engine's uid", () -> {
+      List<String> asked = Collections.synchronizedList(new ArrayList<>());
+      FakeContext system = FakeContext.create("android", UidPackages.of(2000, "example.shell"), asked);
+      android.app.ActivityThread.systemContext = system;
+      android.os.Build.VERSION.SDK_INT = 34;
+      try {
+        new AndroidEngine(notice -> {});
+      } catch (Throwable hostEndsHere) {
+        // The host has no platform past the engine's identity; what was asked so far is the point.
+      } finally {
+        android.os.Build.VERSION.SDK_INT = 0;
+        android.app.ActivityThread.systemContext = null;
+      }
+      require(asked.stream().noneMatch(entry -> entry.startsWith("android ")), "system identity reached the platform: " + asked);
+      require(asked.contains("example.shell getOpPackageName"), "uid's package never named: " + asked);
+    });
+
+    test("the engine refuses a uid that does not map to exactly one package", () -> {
+      Method derive = AndroidEngine.class.getDeclaredMethod("serviceContext", android.content.Context.class, int.class);
+      derive.setAccessible(true);
+      for (UidPackages packages : List.of(UidPackages.of(2000), UidPackages.of(2000, "example.one", "example.two"))) {
+        FakeContext system = FakeContext.create("android", packages, new ArrayList<>());
+        Failure f = failure(() -> {
+          try {
+            derive.invoke(null, system, 2000);
+          } catch (InvocationTargetException e) {
+            throw (Exception) e.getCause();
+          }
+        });
+        require(f.code.equals("PACKAGE_IDENTITY_UNAVAILABLE"), f.code);
+      }
+      FakeContext system = FakeContext.create("android", UidPackages.of(2000, "example.shell"), new ArrayList<>());
+      android.content.Context derived = (android.content.Context) derive.invoke(null, system, 2000);
+      require(derived.getOpPackageName().equals("example.shell"), "derived " + derived.getOpPackageName());
     });
 
     if (!failures.isEmpty()) {
