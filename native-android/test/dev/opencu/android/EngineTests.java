@@ -2876,6 +2876,7 @@ public final class EngineTests {
     });
 
     secondDeviceRound();
+    thirdDeviceRound();
 
     if (!failures.isEmpty()) {
       System.out.println("Android engine host checks failed: " + failures);
@@ -3150,13 +3151,14 @@ public final class EngineTests {
         ScriptedEngine engine = ScriptedEngine.create(alarms.scene);
         engine.read();
         String out = text(engine.call("scroll", args("element_index", 1, "direction", way, "pages", 3)));
-        int header = out.indexOf("Passed over while scrolling (9 distinct rows, top to bottom;");
+        // Round 3 (item B): the row the final state shows whole (08:00 down, 06:45 up) is left out.
+        int header = out.indexOf("Passed over while scrolling (8 distinct rows, top to bottom;");
         require(header >= 0, "header: " + out.substring(0, Math.min(out.length(), 400)));
         List<String> rows = new ArrayList<>();
         for (String line : out.substring(header).split("\n"))
           if (line.startsWith("- ")) rows.add(line.substring(2));
         List<String> expected = new ArrayList<>();
-        for (int i = down ? 0 : 3; i <= (down ? 8 : 11); i++) expected.add(alarms.time(i) + " | " + alarms.label(i));
+        for (int i = down ? 0 : 4; i <= (down ? 7 : 11); i++) expected.add(alarms.time(i) + " | " + alarms.label(i));
         require(rows.equals(expected), "rows " + rows + " expected " + expected);
       });
 
@@ -3664,6 +3666,171 @@ public final class EngineTests {
     void stopListingBackward() {
       node.actions.remove(BACKWARD);
       form.actions.remove("scroll_backward");
+    }
+  }
+
+  /** Checks for what the third device round (OPPO PGBM10, 2026-11-03) found. */
+  static void thirdDeviceRound() {
+    // Item A: ColorOS keeps no own size for a clipped row, so its parts showed as rows of their own.
+    test("passed-over rows leave out a ColorOS row the list's edge clipped once it shows whole", () -> {
+      ColorOsAlarms alarms = new ColorOsAlarms(0);
+      ScriptedEngine engine = alarms.engine();
+      engine.read();
+      String out = text(engine.call("scroll", args("element_index", 1, "direction", "down", "pages", 3)));
+      alarms.requireSummary(out, List.of(0, 1400, 2800));
+    });
+
+    test("a row the list's edge clipped on every page it showed on stays in the passed-over rows", () -> {
+      ColorOsAlarms alarms = new ColorOsAlarms(0);
+      alarms.step = 1710; // exactly one viewport: the row across the boundary is never shown whole
+      ScriptedEngine engine = alarms.engine();
+      engine.read();
+      String out = text(engine.call("scroll", args("element_index", 1, "direction", "down", "pages", 2)));
+      require(out.contains("\n- 06:45\n") || out.contains("\n- 06:45 |"), "a row clipped on both pages was lost: " + out.substring(0, Math.min(out.length(), 900)));
+    });
+
+    // Item B: scrolling up repeated the final page's rows above the state that shows them.
+    test("scrolling up leaves the final page's rows out of the passed-over rows, as scrolling down does", () -> {
+      ColorOsAlarms alarms = new ColorOsAlarms(2911);
+      ScriptedEngine engine = alarms.engine();
+      engine.read();
+      String out = text(engine.call("scroll", args("element_index", 1, "direction", "up", "pages", 8)));
+      alarms.requireSummary(out, List.of(2911, 1611, 311));
+    });
+
+  }
+
+  /**
+   * The Clock app's alarm list on the PGBM10 (ColorOS), as read on the device: a RecyclerView
+   * id=list from y=522 to 2232 below an expanded toolbar, from y=294 once the toolbar collapsed
+   * (whenever the list is scrolled at all). Rows are LinearLayout id=content_layout, 280 px tall
+   * at a 300 px pitch, holding the time, the repeat label, sometimes a name, and a Switch "关闭".
+   * A row the list's edge cuts has clipped bounds and no own size (ColorOS keeps none), and a
+   * child entirely outside the list is absent. The list lists only scroll-forward, which moves
+   * {@code step} px; an upward scroll is swiped and moves 1300 px, and at the top a swipe only
+   * pulls the rows down 200 px, which glide back over 1.2 s as a spring overscroll does and rest
+   * 1 px off.
+   */
+  static final class ColorOsAlarms {
+    static final String[][] ROWS = {
+      {"05:30", "响一次"}, {"06:00", "每天"}, {"06:30", "每天"}, {"06:45", "响一次"},
+      {"07:00", "每天"}, {"07:15", "法定工作日", "干饭了老铁"}, {"07:30", "响一次"}, {"08:00", "法定工作日"},
+      {"08:30", "每天"}, {"09:00", "响一次"}, {"09:30", "每天"}, {"10:00", "响一次"},
+      {"10:30", "每天"}, {"11:00", "响一次"}, {"12:00", "每天"}, {"13:00", "响一次"}
+    };
+    static final int BOTTOM = 2232, PITCH = 300, HEIGHT = 280, FIRST = 49;
+
+    final Scene scene = new Scene();
+    final Element list;
+    final FakeNode node;
+    int offset, step = 1400, lifts, residual;
+    long bounceUntil;
+
+    ColorOsAlarms(int offset) {
+      list = scene.add("/0", "androidx.recyclerview.widget.COUIRecyclerView", "list", "", 0, 522, 1080, BOTTOM);
+      list.scrollable = true;
+      list.actions.put("scroll_forward", FORWARD);
+      node = scene.node(list).with(FORWARD);
+      node.scrollable = true;
+      node.effects.put(FORWARD, () -> layout(Math.min(this.offset + step, max())));
+      layout(offset);
+    }
+
+    static int top(int offset) {
+      return offset > 0 ? 294 : 522;
+    }
+
+    int max() {
+      return FIRST + PITCH * ROWS.length - 20 - (BOTTOM - 294);
+    }
+
+    ScriptedEngine engine() {
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      engine.onObserve = n -> {
+        long ups = engine.events.stream().filter(e -> e.action == 1).count();
+        for (; lifts < ups; ) {
+          lifts++;
+          if (offset > 0) layout(Math.max(0, offset - 1300));
+          else bounceUntil = android.os.SystemClock.uptimeMillis() + 1200;
+        }
+        long left = bounceUntil - android.os.SystemClock.uptimeMillis();
+        if (left > 0) residual = 1;
+        // The pulled rows glide back over 1.2 s and rest a pixel off.
+        int pull = left > 0 ? Math.max(1, (int) (200 * left / 1200)) : residual;
+        if (pull != shown) layout(offset, pull);
+      };
+      return engine;
+    }
+
+    int shown;
+
+    void layout(int offset) {
+      layout(offset, 0);
+    }
+
+    /** Lays the rows out for {@code offset}, pulled down {@code pull} px past the top. */
+    void layout(int offset, int pull) {
+      this.offset = offset;
+      shown = pull;
+      int top = top(offset);
+      list.top = top;
+      while (scene.specs.size() > 1) {
+        scene.specs.remove(1);
+        scene.nodes.remove(1);
+      }
+      int child = 0;
+      for (int i = 0; i < ROWS.length; i++) {
+        int y = top + FIRST + PITCH * i - offset + pull;
+        if (y + HEIGHT <= top || y >= BOTTOM) continue;
+        String path = "/0/" + child++;
+        scene.add(path, "android.widget.LinearLayout", "content_layout", "", 48, Math.max(y, top), 1032, Math.min(y + HEIGHT, BOTTOM)).clickable = true;
+        String[] row = ROWS[i];
+        int[][] parts = {{90, y + 30, 380, y + 110}, {90, y + 130, 600, y + 180}, {90, y + 190, 600, y + 240}};
+        for (int k = 0; k < row.length; k++) {
+          int[] b = parts[k];
+          if (b[3] <= top || b[1] >= BOTTOM) continue;
+          scene.add(path + "/" + k, "android.widget.TextView", k == 0 ? "timeDisplay" : k == 1 ? "daysOfWeek_label" : "name",
+              row[k], b[0], Math.max(b[1], top), b[2], Math.min(b[3], BOTTOM));
+        }
+        int s0 = y + 110, s1 = y + 170;
+        if (s1 > top && s0 < BOTTOM) {
+          Element toggle = scene.add(path + "/3", "android.widget.Switch", "switch", "关闭", 870, Math.max(s0, top), 984, Math.min(s1, BOTTOM));
+          toggle.checkable = toggle.clickable = true;
+        }
+      }
+    }
+
+    /** The rows shown whole (every part inside the list) at {@code offset}, as their summary lines. */
+    static List<String> whole(int offset) {
+      List<String> out = new ArrayList<>();
+      int top = top(offset);
+      for (int i = 0; i < ROWS.length; i++) {
+        int y = top + FIRST + PITCH * i - offset;
+        if (y >= top && y + HEIGHT <= BOTTOM) out.add(String.join(" | ", ROWS[i]) + " | 关闭 [not checked]");
+      }
+      return out;
+    }
+
+    /**
+     * The summary lists, top to bottom, every row shown whole on the pages scrolled past at
+     * {@code pages} and not in the final state, nothing from the final state, and no part of a
+     * row that is listed whole.
+     */
+    void requireSummary(String out, List<Integer> pages) {
+      int header = out.indexOf("Passed over while scrolling (");
+      require(header >= 0, "no summary: " + out.substring(0, Math.min(out.length(), 600)));
+      List<String> rows = new ArrayList<>();
+      for (String line : out.substring(header).split("\n"))
+        if (line.startsWith("- ")) rows.add(line.substring(2));
+      List<String> last = whole(offset);
+      List<String> expected = new ArrayList<>();
+      for (String[] row : ROWS) {
+        String line = String.join(" | ", row) + " | 关闭 [not checked]";
+        boolean seen = false;
+        for (int page : pages) seen |= whole(page).contains(line);
+        if (seen && !last.contains(line)) expected.add(line);
+      }
+      require(rows.equals(expected), "rows " + rows + "\nexpected " + expected + "\nfinal " + last);
     }
   }
 }

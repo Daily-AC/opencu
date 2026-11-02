@@ -370,12 +370,25 @@ public final class Core {
   public static final class Passed {
     private final boolean backward, vertical;
     /** Rows in the order the pages met them. */
-    private final List<String> met = new ArrayList<>();
+    private final List<Met> met = new ArrayList<>();
     /** The row the last page cut at its leading edge, where the next page continues. */
     private Row pending;
     /** The whole rows of the last page. */
     private List<Row> previous = new ArrayList<>();
     private boolean first = true;
+
+    /** A row met on a page, and whether it touched the list's edge there (and may be cut). */
+    private static final class Met {
+      final String text;
+      final List<String> parts;
+      final boolean edge;
+
+      Met(String text, List<String> parts, boolean edge) {
+        this.text = text;
+        this.parts = parts;
+        this.edge = edge;
+      }
+    }
 
     public Passed(String direction) {
       backward = direction.equals("u") || direction.equals("l");
@@ -387,18 +400,53 @@ public final class Core {
       take(s, scope, true);
     }
 
-    /** Ends with the final page (the state shown below the list), or null for none. */
+    /**
+     * The rows passed over, top to bottom (left to right), given the final page (the state shown
+     * below the list) or null. Rows of the final page are left out, whichever way the pages went.
+     * A row that touched the list's edge may be cut (ColorOS reports a cut row with its clipped
+     * bounds only, and without the children outside the list): it is left out when every part of
+     * it is in another listed or final row, the row it is part of, and kept otherwise, so a row
+     * cut on every page it showed on is not lost.
+     */
     public List<String> finish(Screen s, Element scope) {
-      if (s != null) take(s, scope, false);
-      else if (pending != null) met.add(pending.text());
+      List<Row> last = new ArrayList<>();
+      if (s != null) {
+        take(s, scope, false);
+        last = rowList(s, scope);
+      } else if (pending != null) met.add(new Met(pending.text(), pending.parts, true));
       pending = null;
-      List<String> rows = new ArrayList<>(new LinkedHashSet<>(met));
+      Map<String, Met> unique = new LinkedHashMap<>();
+      for (Met m : met) unique.putIfAbsent(m.text, m);
+      Set<String> shown = new HashSet<>();
+      List<List<String>> all = new ArrayList<>();
+      for (Row r : last) {
+        shown.add(r.text());
+        all.add(r.parts);
+      }
+      for (Met m : unique.values()) all.add(m.parts);
+      List<String> rows = new ArrayList<>();
+      for (Met m : unique.values()) {
+        if (shown.contains(m.text)) continue;
+        boolean part = false;
+        if (m.edge)
+          for (List<String> other : all)
+            if (other.size() > m.parts.size() && other.containsAll(m.parts)) part = true;
+        if (!part) rows.add(m.text);
+      }
       if (backward) Collections.reverse(rows);
       return rows;
     }
 
     public String order() {
       return vertical ? "top to bottom" : "left to right";
+    }
+
+    /** Whether {@code r} touches {@code scope}'s edge across the scrolling axis. */
+    private boolean atEdge(Row r, Element scope) {
+      if (scope == null) return false;
+      return vertical
+          ? r.top <= scope.top + 2 || r.bottom >= scope.bottom - 2
+          : r.left <= scope.left + 2 || r.right >= scope.right - 2;
     }
 
     private void take(Screen s, Element scope, boolean record) {
@@ -414,15 +462,17 @@ public final class Core {
         else if (trailing && !leading && trail == null) trail = r;
         else whole.add(r);
       }
-      List<String> here = new ArrayList<>();
+      List<Met> here = new ArrayList<>();
       if (pending != null) {
         if (trail != null && joins(pending, trail)) {
-          here.add(join(pending, trail));
+          List<String> parts = join(pending, trail);
+          here.add(new Met(String.join(" | ", parts), parts, false));
           trail = null;
-        } else if (!within(pending, whole)) here.add(pending.text());
+        } else if (!within(pending, whole)) here.add(new Met(pending.text(), pending.parts, true));
       }
-      if (trail != null && !first && !within(trail, previous)) here.add(trail.text());
-      if (record) for (Row r : whole) here.add(r.text());
+      if (trail != null && !first && !within(trail, previous))
+        here.add(new Met(trail.text(), trail.parts, true));
+      if (record) for (Row r : whole) here.add(new Met(r.text(), r.parts, atEdge(r, scope)));
       met.addAll(here);
       pending = lead;
       previous = whole;
@@ -438,12 +488,12 @@ public final class Core {
           && Math.abs(full - shown) <= 6;
     }
 
-    /** The two parts of one row in reading order, without a part both show. */
-    private String join(Row earlier, Row later) {
+    /** The parts of one row's two pieces in reading order, without a part both show. */
+    private List<String> join(Row earlier, Row later) {
       Row first = backward ? later : earlier, second = backward ? earlier : later;
       List<String> parts = new ArrayList<>(first.parts);
       for (String p : second.parts) if (!parts.contains(p)) parts.add(p);
-      return String.join(" | ", parts);
+      return parts;
     }
 
     /** Whether a whole row of {@code rows} shows every part of the fragment {@code r}. */

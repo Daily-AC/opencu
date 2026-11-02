@@ -221,14 +221,16 @@ captured in their place.
   scrolling (N distinct rows, top to bottom; the final page is the state below):`
   (`left to right` for a horizontal list), in list order whichever way the pages
   went. Each row joins the text, descriptions and checked state inside one child
-  of the scrolled element; only whole rows are listed. A row that the scrolled
-  element's edge cuts (Android reports its bounds clipped, while its bounds in its
-  parent keep its own size) is a fragment: an accessibility page moves exactly one
-  viewport, so a row across the page boundary is cut on both pages, and its two
-  parts are joined into one row when their visible parts add up to its size. A
-  fragment of a row shown whole on the neighbouring page is dropped, as is the
-  part the first page shows of the row before it. A wheel lists the values it
-  passed, one per page. Rows are distinct, at most 200 rows of at most 200
+  of the scrolled element. Rows the final state shows are left out, whichever way
+  the pages went. A row that touches the scrolled element's top or bottom (left or
+  right) edge may be cut: ColorOS reports such a row with clipped bounds and
+  without the children outside the list (on the PGBM10, `06:45` alone where the
+  whole row is `06:45 | 响一次 | 关闭 [not checked]`). It is left out when all its
+  parts are in another listed row or a row of the final state, and kept otherwise,
+  so a row cut on every page it showed on is not lost. Where Android does keep a
+  cut row's own size (its bounds in its parent), the two parts of a row across a
+  page boundary are also joined into one. A wheel lists the values it passed, one
+  per page. Rows are distinct, at most 200 rows of at most 200
   characters, and password fields are left out. One call can therefore read a
   long list.
 - `press_key`: back, home, enter/Return, delete/backspace, tab, recents/app_switch,
