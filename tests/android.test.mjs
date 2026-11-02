@@ -44,3 +44,22 @@ test('Android engine source stays app-agnostic', () => {
     assert.doesNotMatch(source, /[\u3400-\u9fff]/, file);
   }
 });
+
+import os from 'node:os';
+import { rmSync, writeFileSync } from 'node:fs';
+const androidJar=path.join(process.env.ANDROID_HOME??process.env.ANDROID_SDK_ROOT??path.join(os.homedir(),'Library/Android/sdk'),'platforms/android-34/android.jar');
+const javaFiles=dir=>readdirSync(dir,{recursive:true}).filter(f=>String(f).endsWith('.java')).map(f=>path.join(dir,String(f)));
+
+test('Android engine host checks: decisions run against a scripted phone', () => {
+  const out=path.join(root,'.build/android/engine-tests');
+  rmSync(out,{recursive:true,force:true});mkdirSync(out,{recursive:true});
+  writeFileSync(path.join(out,'BuildInfo.java'),'package dev.opencu.android; public final class BuildInfo { public static final String VERSION = "host-test"; }\n');
+  const sources=[...javaFiles(path.join(root,'native-android/src')),...javaFiles(path.join(root,'native-android/test/host')),
+    path.join(root,'native-android/test/dev/opencu/android/EngineTests.java'),path.join(out,'BuildInfo.java')];
+  const compile=spawnSync(path.join(java,'bin/javac'),['--release','11','-encoding','UTF-8','-nowarn','-XDsuppressNotes','-cp',androidJar,'-d',out,...sources],{cwd:root,encoding:'utf8'});
+  assert.equal(compile.status,0,compile.error?.message??compile.stderr);
+  const run=spawnSync(path.join(java,'bin/java'),['-cp',`${out}${path.delimiter}${androidJar}`,'dev.opencu.android.EngineTests'],{cwd:root,encoding:'utf8',timeout:180000});
+  assert.equal(run.status,0,run.stdout+run.stderr);
+  assert.match(run.stdout,/Android engine host checks passed: \d+/);
+  console.log(run.stdout.trim());
+});

@@ -24,7 +24,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
 
-final class AndroidEngine implements Protocol.Backend, AutoCloseable {
+class AndroidEngine implements Protocol.Backend, AutoCloseable {
   private final HandlerThread thread;
   private UiAutomation automation;
   private UiAutomation mainAutomation;
@@ -48,9 +48,7 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
   private String notice = "";
   private String keyboardInputFailure = "";
   private boolean observationRequired;
-  private VirtualDisplay virtualDisplay;
-  private Surface virtualSurface;
-  private SurfaceTexture virtualTexture;
+  private OwnedDisplay ownedDisplay;
   private int activeDisplay = Display.DEFAULT_DISPLAY;
   private int desktopDisplay = -1;
   private int desktopFlags;
@@ -138,9 +136,8 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
     mainAutomation = automation;
     PersonMonitor connectedMonitor = null;
     String problem = "";
-    long lastActivity = lastUserActivityTime();
     try {
-      connectedMonitor = new PersonMonitor(output, lastActivity);
+      connectedMonitor = new PersonMonitor(output, this::lastUserActivityTime);
     } catch (Exception e) {
       problem = e.getMessage();
     }
@@ -213,7 +210,7 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
     target.setServiceInfo(info);
   }
 
-  private UiAutomation createDisplayAutomation(int displayId) throws Exception {
+  UiAutomation createDisplayAutomation(int displayId) throws Exception {
     Class<?> conn = Class.forName("android.app.UiAutomationConnection");
     Class<?> iconn = Class.forName("android.app.IUiAutomationConnection");
     Constructor<UiAutomation> constructor =
@@ -225,7 +222,7 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
     return target;
   }
 
-  private void setImePolicy(int displayId) {
+  void setImePolicy(int displayId) {
     try {
       Object manager =
           Class.forName("android.view.WindowManagerGlobal")
@@ -243,13 +240,6 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
   private void startDesktop() throws Exception {
     if (desktopDisplay >= 0) return;
     String mainBefore = foregroundOnDisplay(Display.DEFAULT_DISPLAY);
-    Point main = sizeFor(Display.DEFAULT_DISPLAY);
-    Display mainDisplay = displays.getDisplay(Display.DEFAULT_DISPLAY);
-    DisplayMetrics metrics = new DisplayMetrics();
-    mainDisplay.getRealMetrics(metrics);
-    virtualTexture = new SurfaceTexture(false);
-    virtualTexture.setDefaultBufferSize(main.x, main.y);
-    virtualSurface = new Surface(virtualTexture);
     int requested =
         FLAG_PUBLIC
             | FLAG_OWN_CONTENT_ONLY
@@ -263,9 +253,7 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
             | FLAG_OWN_FOCUS
             | FLAG_STEAL_TOP_FOCUS_DISABLED;
     try {
-      virtualDisplay =
-          displays.createVirtualDisplay(
-              "OpenCU agent", main.x, main.y, metrics.densityDpi, virtualSurface, requested);
+      ownedDisplay = createOwnedDisplay(requested);
       desktopTrusted = true;
       desktopFlags = requested;
     } catch (SecurityException denied) {
@@ -275,16 +263,13 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
               | FLAG_SUPPORTS_TOUCH
               | FLAG_ROTATES_WITH_CONTENT
               | FLAG_DESTROY_CONTENT_ON_REMOVAL;
-      virtualDisplay =
-          displays.createVirtualDisplay(
-              "OpenCU agent", main.x, main.y, metrics.densityDpi, virtualSurface, fallback);
+      ownedDisplay = createOwnedDisplay(fallback);
       desktopTrusted = false;
       desktopFlags = fallback;
     }
-    desktopDisplay = virtualDisplay.getDisplay().getDisplayId();
+    desktopDisplay = ownedDisplay.id;
     setImePolicy(desktopDisplay);
-    try { UiAutomation.class.getDeclaredMethod("disconnect").invoke(mainAutomation); }
-    catch (Exception ignored) { }
+    disconnectAutomation(mainAutomation);
     desktopAutomation = createDisplayAutomation(desktopDisplay);
     automation = desktopAutomation;
     activeDisplay = desktopDisplay;
@@ -296,7 +281,57 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
     hidden.put("virtualDisplayOwnFocus", (desktopFlags & FLAG_OWN_FOCUS) != 0);
   }
 
-  private void stopDesktop() {
+  /** A virtual display owned by this engine, with the display flags Android actually granted. */
+  static class OwnedDisplay {
+    final int id, displayFlags;
+    private final VirtualDisplay display;
+    private final Surface surface;
+    private final SurfaceTexture texture;
+
+    OwnedDisplay(VirtualDisplay display, Surface surface, SurfaceTexture texture, int id, int displayFlags) {
+      this.display = display;
+      this.surface = surface;
+      this.texture = texture;
+      this.id = id;
+      this.displayFlags = displayFlags;
+    }
+
+    void release() {
+      if (display != null) display.release();
+      if (surface != null) surface.release();
+      if (texture != null) texture.release();
+    }
+  }
+
+  /** Creates a display matching display 0's size and density with the requested flags. */
+  OwnedDisplay createOwnedDisplay(int requested) {
+    Point main = sizeFor(Display.DEFAULT_DISPLAY);
+    DisplayMetrics metrics = new DisplayMetrics();
+    displays.getDisplay(Display.DEFAULT_DISPLAY).getRealMetrics(metrics);
+    SurfaceTexture texture = new SurfaceTexture(false);
+    texture.setDefaultBufferSize(main.x, main.y);
+    Surface surface = new Surface(texture);
+    try {
+      VirtualDisplay display =
+          displays.createVirtualDisplay(
+              "OpenCU agent", main.x, main.y, metrics.densityDpi, surface, requested);
+      Display created = display.getDisplay();
+      return new OwnedDisplay(display, surface, texture, created.getDisplayId(), created.getFlags());
+    } catch (RuntimeException e) {
+      surface.release();
+      texture.release();
+      throw e;
+    }
+  }
+
+  void disconnectAutomation(UiAutomation target) {
+    try {
+      UiAutomation.class.getDeclaredMethod("disconnect").invoke(target);
+    } catch (Exception ignored) {
+    }
+  }
+
+  void stopDesktop() {
     if (desktopDisplay < 0) return;
     int oldDisplay = desktopDisplay;
     for (ActivityManager.RunningTaskInfo task : activityManager.getRunningTasks(50)) {
@@ -311,16 +346,9 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
         // Releasing the owned display remains the safe fallback; it cannot focus display 0.
       }
     }
-    if (virtualDisplay != null) virtualDisplay.release();
-    if (virtualSurface != null) virtualSurface.release();
-    if (virtualTexture != null) virtualTexture.release();
-    virtualDisplay = null;
-    virtualSurface = null;
-    virtualTexture = null;
-    if (desktopAutomation != null) {
-      try { UiAutomation.class.getDeclaredMethod("disconnect").invoke(desktopAutomation); }
-      catch (Exception ignored) { }
-    }
+    if (ownedDisplay != null) ownedDisplay.release();
+    ownedDisplay = null;
+    if (desktopAutomation != null) disconnectAutomation(desktopAutomation);
     desktopAutomation = null;
     try { mainAutomation = createDisplayAutomation(Display.DEFAULT_DISPLAY); }
     catch (Exception e) { throw fail("DISPLAY_UNAVAILABLE", "Could not restore main-display UiAutomation: " + e.getMessage()); }
@@ -356,6 +384,16 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
     return text;
   }
 
+  /** Runs a platform shell client for this engine; tests substitute the device. */
+  String shell(String... args) throws Exception {
+    return command(args);
+  }
+
+  boolean hasAction(AccessibilityNodeInfo n, int id) {
+    for (AccessibilityNodeInfo.AccessibilityAction a : n.getActionList()) if (a.getId() == id) return true;
+    return false;
+  }
+
   private Point size() {
     return sizeFor(activeDisplay);
   }
@@ -368,7 +406,7 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
     }
   }
 
-  private String[] foreground() {
+  String[] foreground() {
     for (ActivityManager.RunningTaskInfo task : activityManager.getRunningTasks(20))
       if (taskOnDisplay(task, activeDisplay) && task.topActivity != null)
         return new String[] {
@@ -378,14 +416,14 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
     throw fail("WINDOW_NOT_FOUND", "Cannot establish main-display foreground activity");
   }
 
-  private String foregroundOnDisplay(int displayId) {
+  String foregroundOnDisplay(int displayId) {
     for (ActivityManager.RunningTaskInfo task : activityManager.getRunningTasks(20))
       if (taskOnDisplay(task, displayId) && task.topActivity != null)
         return task.topActivity.getPackageName();
     return "";
   }
 
-  private String resolve(String name) {
+  String resolve(String name) {
     PackageManager pm = context.getPackageManager();
     // Package identifiers are the ordinary host path. Avoid loading every installed
     // application's label/resources just to resolve a package we already know.
@@ -441,7 +479,7 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
     return Protocol.textResult(Json.write(result.values()));
   }
 
-  private void check(long token, boolean changing) {
+  void check(long token, boolean changing) {
     if (closed) throw fail("ENGINE_STOPPING", "Stdin closed");
     if (desktopDisplay >= 0) person.checkDesktop();
     else person.check(token, SystemClock.uptimeMillis(), changing);
@@ -480,7 +518,7 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
     // am is a platform shell client; package/component comes from PackageManager, never
     // interpolated shell text.
     check(token, true);
-    command(
+    shell(
         "/system/bin/am",
         "start",
         "--display",
@@ -505,7 +543,7 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
     return b.toString();
   }
 
-  private Screen observe(String target) {
+  Screen observe(String target) {
     automation.clearCache();
     nodes.clear();
     Screen s = new Screen();
@@ -667,10 +705,7 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
     }
     {
       if (inputCall) settleAfterInput(token);
-      else {
-        try { automation.waitForIdle(30, 180); }
-        catch (TimeoutException ignored) { }
-      }
+      else waitIdle();
       if (inputCall) SystemClock.sleep(desktopDisplay >= 0 ? 700 : 450);
       long settleEnd = SystemClock.uptimeMillis() + (inputCall ? 700 : 300);
       String signature = s.fingerprint();
@@ -785,10 +820,6 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
     check(token, false);
   }
 
-  private void inject(InputEvent event) {
-    actionConfirmed(automation.injectInputEvent(event, true));
-  }
-
   private void touch(float x, float y, float tx, float ty, long duration, String pkg, long token) {
     checkTarget(token, pkg);
     long down = SystemClock.uptimeMillis();
@@ -813,19 +844,42 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
   }
 
   private void motion(long down, int action, float x, float y) {
+    sendMotion(automation, activeDisplay, down, action, x, y);
+  }
+
+  /** Injects one touch event through {@code via} onto {@code display}. */
+  void sendMotion(UiAutomation via, int display, long down, int action, float x, float y) {
     MotionEvent e = MotionEvent.obtain(down, SystemClock.uptimeMillis(), action, x, y, 0);
     e.setSource(InputDevice.SOURCE_TOUCHSCREEN);
-    setEventDisplay(e);
+    setEventDisplay(e, display);
     try {
-      inject(e);
+      actionConfirmed(via.injectInputEvent(e, true));
     } finally {
       e.recycle();
     }
   }
 
-  private void setEventDisplay(InputEvent event) {
+  /** Injects one key event through {@code via} onto {@code display}. */
+  void sendKey(UiAutomation via, int display, long down, long time, int action, int code, int flags) {
+    KeyEvent event =
+        new KeyEvent(
+            down,
+            time,
+            action,
+            code,
+            0,
+            0,
+            KeyCharacterMap.VIRTUAL_KEYBOARD,
+            0,
+            flags,
+            InputDevice.SOURCE_KEYBOARD);
+    setEventDisplay(event, display);
+    actionConfirmed(via.injectInputEvent(event, true));
+  }
+
+  private void setEventDisplay(InputEvent event, int display) {
     try {
-      InputEvent.class.getMethod("setDisplayId", int.class).invoke(event, activeDisplay);
+      InputEvent.class.getMethod("setDisplayId", int.class).invoke(event, display);
     } catch (Exception e) {
       throw fail("INPUT_UNAVAILABLE", "Android did not expose display-targeted input");
     }
@@ -912,9 +966,7 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
         if (!e.code.equals("INPUT_UNAVAILABLE")) throw e;
       }
     }
-    if (!node.isClickable()
-        && node.getActionList().stream()
-            .noneMatch(a -> a.getId() == AccessibilityNodeInfo.ACTION_CLICK))
+    if (!node.isClickable() && !hasAction(node, AccessibilityNodeInfo.ACTION_CLICK))
       throw fail("INPUT_UNAVAILABLE", "A touch cannot reach this element and it has no click action");
     accessibility(node, AccessibilityNodeInfo.ACTION_CLICK, null, pkg, token);
     notice = "Touch unavailable; used accessibility click fallback.";
@@ -924,10 +976,10 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
     checkTarget(token, pkg);
     try {
       if (activeDisplay == Display.DEFAULT_DISPLAY)
-        command(
+        shell(
             "/system/bin/input", "tap", Integer.toString(Math.round(x)), Integer.toString(Math.round(y)));
       else
-        command(
+        shell(
             "/system/bin/input",
             "-d",
             String.valueOf(activeDisplay),
@@ -1003,9 +1055,7 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
   }
 
   private void setText(AccessibilityNodeInfo n, String value, String pkg, long token) {
-    if (!n.isEditable()
-        || n.getActionList().stream()
-            .noneMatch(a -> a.getId() == AccessibilityNodeInfo.ACTION_SET_TEXT))
+    if (!n.isEditable() || !hasAction(n, AccessibilityNodeInfo.ACTION_SET_TEXT))
       throw fail("VALUE_NOT_SETTABLE", "Observed editor does not expose set_text");
     Bundle b = new Bundle();
     b.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value);
@@ -1047,40 +1097,20 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
     boolean pressed = false, completed = false;
     try {
       pressed = true;
-      KeyEvent downEvent =
-          new KeyEvent(
-              down,
-              down,
-              KeyEvent.ACTION_DOWN,
-              code,
-              0,
-              0,
-              KeyCharacterMap.VIRTUAL_KEYBOARD,
-              0,
-              0,
-              InputDevice.SOURCE_KEYBOARD);
-      setEventDisplay(downEvent);
-      inject(downEvent);
+      sendKey(automation, activeDisplay, down, down, KeyEvent.ACTION_DOWN, code, 0);
       pause((long) (seconds * 1000), token);
       checkTarget(token, pkg);
       completed = true;
     } finally {
-      if (pressed) {
-        KeyEvent upEvent =
-            new KeyEvent(
-                down,
-                SystemClock.uptimeMillis(),
-                KeyEvent.ACTION_UP,
-                code,
-                0,
-                0,
-                KeyCharacterMap.VIRTUAL_KEYBOARD,
-                0,
-                completed ? 0 : KeyEvent.FLAG_CANCELED,
-                InputDevice.SOURCE_KEYBOARD);
-        setEventDisplay(upEvent);
-        inject(upEvent);
-      }
+      if (pressed)
+        sendKey(
+            automation,
+            activeDisplay,
+            down,
+            SystemClock.uptimeMillis(),
+            KeyEvent.ACTION_UP,
+            code,
+            completed ? 0 : KeyEvent.FLAG_CANCELED);
     }
   }
 
@@ -1226,19 +1256,16 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
             }
             if (n != null) {
               if (!n.isScrollable()) throw fail("ACTION_UNSUPPORTED", "Element is not scrollable");
+              // AccessibilityAction.ACTION_SCROLL_* ids are these platform resource ids.
               int action =
                   d.equals("d")
-                      ? AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_DOWN.getId()
+                      ? android.R.id.accessibilityActionScrollDown
                       : d.equals("u")
-                          ? AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_UP.getId()
+                          ? android.R.id.accessibilityActionScrollUp
                           : d.equals("l")
-                              ? AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_LEFT.getId()
-                              : AccessibilityNodeInfo.AccessibilityAction.ACTION_SCROLL_RIGHT
-                                  .getId();
-              boolean supported = false;
-              for (AccessibilityNodeInfo.AccessibilityAction candidate : n.getActionList())
-                if (candidate.getId() == action) supported = true;
-              if (!supported)
+                              ? android.R.id.accessibilityActionScrollLeft
+                              : android.R.id.accessibilityActionScrollRight;
+              if (!hasAction(n, action))
                 action =
                     d.equals("d") || d.equals("r")
                         ? AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
@@ -1310,7 +1337,7 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
       case "perform_secondary_action":
         {
           Integer action = old.actions.get(args.get("action"));
-          if (action == null || n.getActionList().stream().noneMatch(a -> a.getId() == action))
+          if (action == null || !hasAction(n, action))
             throw fail("ACTION_UNSUPPORTED", "Action was not listed or is no longer available");
           accessibility(n, action, null, pkg, token);
           break;
@@ -1322,8 +1349,12 @@ final class AndroidEngine implements Protocol.Backend, AutoCloseable {
     // to avoid paying a second idle wait for every quickly settling step.
   }
 
-  private void settleAfterInput(long token) {
+  void settleAfterInput(long token) {
     check(token, false);
+    waitIdle();
+  }
+
+  void waitIdle() {
     try {
       automation.waitForIdle(30, 180);
     } catch (TimeoutException ignored) {

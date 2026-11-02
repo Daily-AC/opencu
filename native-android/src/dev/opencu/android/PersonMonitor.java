@@ -7,6 +7,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
+import java.util.function.LongSupplier;
 
 /** getevent reads kernel evdev, below InputManager injection; no suppression time windows. */
 final class PersonMonitor implements AutoCloseable {
@@ -16,8 +17,20 @@ final class PersonMonitor implements AutoCloseable {
   private volatile String problem = "Input monitor is starting";
   final List<String> devices = new ArrayList<>();
 
-  PersonMonitor(Consumer<Map<String, Object>> output, long initialActivity) throws Exception {
-    String capabilities = AndroidEngine.command("/system/bin/getevent", "-lp");
+  PersonMonitor(Consumer<Map<String, Object>> output, LongSupplier lastActivity) throws Exception {
+    this(
+        output,
+        lastActivity,
+        new String[] {"/system/bin/getevent", "-lp"},
+        new String[] {"/system/bin/getevent", "-lt"});
+  }
+
+  /** {@code probe} lists input devices; {@code stream} prints their events (getevent formats). */
+  PersonMonitor(
+      Consumer<Map<String, Object>> output, LongSupplier lastActivity, String[] probe, String[] stream)
+      throws Exception {
+    long initialActivity = lastActivity.getAsLong();
+    String capabilities = AndroidEngine.command(probe);
     if (!capabilities.contains("KEY_VOLUMEDOWN") || !capabilities.contains("ABS_MT_POSITION"))
       throw fail(
           "PERSON_MONITOR_UNAVAILABLE", "Cannot verify hardware touch and volume-down devices");
@@ -25,7 +38,7 @@ final class PersonMonitor implements AutoCloseable {
       if (line.startsWith("add device ")) devices.add(line.substring(line.indexOf("/dev/input/")));
     if (devices.isEmpty()) throw fail("PERSON_MONITOR_UNAVAILABLE", "No readable input devices");
     process =
-        new ProcessBuilder("/system/bin/getevent", "-lt")
+        new ProcessBuilder(stream)
             .redirectError(ProcessBuilder.Redirect.INHERIT)
             .start();
     person.lastActivity = initialActivity;
