@@ -948,20 +948,8 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
       if (!e.enabled) throw fail("ELEMENT_DISABLED", "Element is disabled");
       return e;
     }
-    // Diagnostics carry structure and geometry only, never node text.
-    String detail = "";
-    for (Element candidate : now.elements.values())
-      if (old.id.equals(candidate.id) && old.clazz.equals(candidate.clazz)) {
-        detail =
-            " old=" + old.path + " window " + old.window + " at " + old.left + "," + old.top
-                + " current=" + candidate.path + " window " + candidate.window + " at "
-                + candidate.left + "," + candidate.top;
-        break;
-      }
-    throw fail(
-        "STALE_ELEMENT",
-        "Observed element changed activity, window, class, text/id, path or bounds; nothing sent"
-            + detail);
+    // Diagnostics name what changed with structure and geometry only, never node text.
+    throw fail("STALE_ELEMENT", Core.staleReason(before, old, now));
   }
 
   private Screen readReady(String pkg, long token, boolean inputCall) {

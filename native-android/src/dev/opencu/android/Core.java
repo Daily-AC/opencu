@@ -169,16 +169,40 @@ public final class Core {
     /** Same display, window, tree path, package, class, resource id, text and description. */
     public boolean sameNode(Element e) {
       if (e == null) return false;
-      boolean textCompatible = text.equals(e.text)
-          || (editable && (text.equals(desc) || e.text.isEmpty() || e.text.equals(desc)));
       return display == e.display
           && window == e.window
           && path.equals(e.path)
           && pkg.equals(e.pkg)
           && clazz.equals(e.clazz)
           && id.equals(e.id)
-          && textCompatible
+          && sameText(e)
           && desc.equals(e.desc);
+    }
+
+    /** The same text; an editor's text may also change between its hint and empty. */
+    boolean sameText(Element e) {
+      return text.equals(e.text)
+          || (editable && (text.equals(desc) || e.text.isEmpty() || e.text.equals(desc)));
+    }
+
+    /** The identity components in which {@code e} differs from this element, by name. */
+    List<String> differences(Element e) {
+      List<String> changed = new ArrayList<>();
+      if (display != e.display) changed.add("display");
+      if (window != e.window) changed.add("window");
+      if (!pkg.equals(e.pkg)) changed.add("package");
+      if (!clazz.equals(e.clazz)) changed.add("class");
+      if (!id.equals(e.id)) changed.add("id");
+      if (!sameText(e)) changed.add("text");
+      if (!desc.equals(e.desc)) changed.add("description");
+      if (!path.equals(e.path)) changed.add("path");
+      if (!near(e, 0, 0)) changed.add("bounds");
+      return changed;
+    }
+
+    /** Structure and geometry only, never text: tree path, window and bounds. */
+    String where() {
+      return path + " window " + window + " bounds " + left + "," + top + "," + right + "," + bottom;
     }
 
     /** Bounds within 6 px of this element's bounds moved by (dx, dy). */
@@ -207,6 +231,39 @@ public final class Core {
       if (windowShifted(before, now, old.window, dx, dy)) return e;
     }
     return null;
+  }
+
+  /**
+   * Why {@code old} (from {@code before}) names no live element in {@code now}: the components in
+   * which its closest counterpart differs, by name, with tree paths and bounds but never node text.
+   * The counterpart is the element at the same path or with the same class and resource id that
+   * shares the most components with it.
+   */
+  public static String staleReason(Screen before, Element old, Screen now) {
+    List<String> changed = new ArrayList<>();
+    if (!before.activity.equals(now.activity)) changed.add("activity");
+    Element closest = null;
+    int best = -1;
+    for (Element e : now.elements.values()) {
+      if (!e.path.equals(old.path) && !(e.clazz.equals(old.clazz) && e.id.equals(old.id))) continue;
+      int score = 9 - old.differences(e).size() + (e.path.equals(old.path) ? 1 : 0);
+      if (score > best) {
+        best = score;
+        closest = e;
+      }
+    }
+    if (closest == null)
+      return "Observed element is gone"
+          + (changed.isEmpty() ? "" : " (changed: activity)")
+          + ": nothing remains at its path or with its class and id; nothing sent. old="
+          + old.where();
+    changed.addAll(old.differences(closest));
+    return "Observed element changed: "
+        + (changed.isEmpty() ? "it is no longer available" : String.join(", ", changed))
+        + "; nothing sent. old="
+        + old.where()
+        + " current="
+        + closest.where();
   }
 
   private static boolean windowShifted(Screen before, Screen now, int window, int dx, int dy) {

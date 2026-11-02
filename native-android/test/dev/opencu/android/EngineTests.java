@@ -1098,6 +1098,47 @@ public final class EngineTests {
       require(!f.getMessage().contains("SYNTHETIC"), "diagnostic disclosed text: " + f.getMessage());
     });
 
+    // A wheel that settled on another value after the state was read: same path and position.
+    test("a stale element names the text as what changed, without the text", () -> {
+      Scene scene = new Scene();
+      Element value = scene.add("/0/3/1", "android.widget.TextView", "minute", "SYNTHETIC-20", 96, 427, 984, 560);
+      value.clickable = true;
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      engine.read();
+      value.text = "SYNTHETIC-21";
+      Failure f = failure(() -> engine.call("click", args("element_index", 1)));
+      require(f.code.equals("STALE_ELEMENT"), f.code);
+      require(f.getMessage().contains("changed: text;"), "message: " + f.getMessage());
+      require(!f.getMessage().contains("SYNTHETIC"), "diagnostic disclosed text: " + f.getMessage());
+      require(engine.log.isEmpty(), "input sent: " + engine.log);
+    });
+
+    test("a stale element names a size change and shows both bounds", () -> {
+      Scene scene = new Scene();
+      Element key = scene.add("/0/5", "android.widget.Button", "equals", "=", 96, 427, 384, 660);
+      key.clickable = true;
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      engine.read();
+      key.right = 360; // still scaled by its press animation
+      key.bottom = 630;
+      Failure f = failure(() -> engine.call("click", args("element_index", 1)));
+      require(f.code.equals("STALE_ELEMENT"), f.code);
+      require(f.getMessage().contains("changed: bounds;"), "message: " + f.getMessage());
+      require(f.getMessage().contains("96,427,384,660") && f.getMessage().contains("96,427,360,630"),
+          "bounds not shown: " + f.getMessage());
+    });
+
+    test("a stale element after a new activity names the activity", () -> {
+      Scene scene = new Scene();
+      scene.add("/0", "android.widget.Button", "ok", "OK", 100, 200, 300, 260).clickable = true;
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      engine.read();
+      scene.activity = PKG + "/.Details";
+      Failure f = failure(() -> engine.call("click", args("element_index", 1)));
+      require(f.code.equals("STALE_ELEMENT"), f.code);
+      require(f.getMessage().contains("changed: activity;"), "message: " + f.getMessage());
+    });
+
     test("secondary action whose label changed under the same id is not performed", () -> {
       Scene scene = new Scene();
       Element row = scene.add("/0", "android.widget.LinearLayout", "row", "Message", 0, 100, 1080, 300);

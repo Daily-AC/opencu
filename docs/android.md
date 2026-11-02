@@ -174,8 +174,9 @@ bounds within 6 physical pixels. On an owned virtual display a window may shift 
 a whole (up to 400 pixels) while its decoration insets settle; that is accepted
 only when every other element of that window moved by the same amount. Touches go
 to the matched element's current centre. A changed/missing node returns
-`STALE_ELEMENT` without sending that input; the error names tree paths and
-geometry, never node text. A false accessibility action result returns `ACTION_UNCONFIRMED`; it is
+`STALE_ELEMENT` without sending that input; the error names the components that
+changed (for example `changed: text` or `changed: bounds`) and shows the old and
+current tree path, window and bounds, never node text. A false accessibility action result returns `ACTION_UNCONFIRMED`; it is
 an unknown outcome and is never replayed. A fresh explicit state read is required
 before continuing, as after any failure once input may have reached the phone.
 A state's indexes and screenshot grant become current only with a complete
