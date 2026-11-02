@@ -1611,7 +1611,11 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
   private void armIdleTimer() {
     if (serial == null || closed || desktopDisplay < 0) return;
     long delay = Math.max(0, desktopIdleMs - (SystemClock.uptimeMillis() - lastCallAt));
-    idleTimer = serial.schedule(this::idleCheck, delay, TimeUnit.MILLISECONDS);
+    try {
+      idleTimer = serial.schedule(this::idleCheck, delay, TimeUnit.MILLISECONDS);
+    } catch (java.util.concurrent.RejectedExecutionException shuttingDown) {
+      // The worker is gone; connection shutdown releases the display.
+    }
   }
 
   private void idleCheck() {
@@ -1928,7 +1932,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
       closed = true;
     }
     if (monitor != null) monitor.close();
-    stopCommands(400);
+    stopCommands(300);
     boolean quiet = false;
     try {
       quiet = callLock.tryLock(1000, TimeUnit.MILLISECONDS);
@@ -1937,13 +1941,22 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     }
     try {
       if (idleTimer != null) idleTimer.cancel(false);
-      restoreClipboard();
-      // Route changes wait for in-flight input; a gesture keeps its own target either way.
-      Thread cleanup = new Thread(this::releaseRoutes, "opencu-close");
+      // Clipboard and display calls can block on Binder, so they run on a bounded thread. Route
+      // changes wait for in-flight input; a gesture keeps its own target either way.
+      Thread cleanup =
+          new Thread(
+              () -> {
+                try {
+                  restoreClipboard();
+                } finally {
+                  releaseRoutes();
+                }
+              },
+              "opencu-close");
       cleanup.setDaemon(true);
       cleanup.start();
       try {
-        cleanup.join(250);
+        cleanup.join(400);
       } catch (InterruptedException e) {
         Thread.currentThread().interrupt();
       }

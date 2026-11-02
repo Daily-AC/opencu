@@ -519,10 +519,17 @@ public final class EngineTests {
   public static final class ClipService {
     volatile android.content.ClipData clip;
     volatile boolean denyReads;
+    volatile CountDownLatch blockReads;
     final List<String> calls = Collections.synchronizedList(new ArrayList<>());
 
     public android.content.ClipData getPrimaryClip(String pkg, String tag, int user, int device) {
       calls.add("read");
+      CountDownLatch block = blockReads;
+      if (block != null)
+        try {
+          block.await(10, TimeUnit.SECONDS);
+        } catch (InterruptedException ignored) {
+        }
       if (denyReads) throw new SecurityException("denied");
       return clip;
     }
@@ -1280,6 +1287,47 @@ public final class EngineTests {
         reopenCommands();
       }
       require("PERSON-CLIP".equals(service.text()), "clipboard after the paste returned: " + service.text());
+    });
+
+    test("EOF finishes in bounded time while a paste and the clipboard both block", () -> {
+      ClipService service = new ClipService();
+      service.clip = android.content.ClipData.newPlainText("person", "PERSON-CLIP");
+      Scene scene = new Scene();
+      FakeNode node = focusedEditor(scene, service, AccessibilityNodeInfo.ACTION_PASTE);
+      CountDownLatch entered = new CountDownLatch(1), release = new CountDownLatch(1);
+      node.effects.put(AccessibilityNodeInfo.ACTION_PASTE, () -> {
+        entered.countDown();
+        try {
+          release.await(10, TimeUnit.SECONDS);
+        } catch (InterruptedException ignored) {
+        }
+      });
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      set(engine, "clipboard", clipboard(service));
+      engine.read();
+      Thread worker = new Thread(() -> {
+        try {
+          engine.call("type_text", args("text", "agent text"));
+        } catch (Throwable ignored) {
+        }
+      });
+      worker.start();
+      require(entered.await(5, TimeUnit.SECONDS), "paste never started");
+      service.blockReads = new CountDownLatch(1);
+      long started = System.nanoTime();
+      try {
+        try {
+          engine.close();
+        } catch (Throwable ignored) {
+        }
+        long ms = (System.nanoTime() - started) / 1_000_000;
+        require(ms < 2000, "close took " + ms + " ms");
+      } finally {
+        service.blockReads.countDown();
+        release.countDown();
+        worker.join(3000);
+        reopenCommands();
+      }
     });
 
     test("an idle agent display stops on the connection's worker without any call", () -> {

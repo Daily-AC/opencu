@@ -100,5 +100,11 @@ final class PersonMonitor implements AutoCloseable {
     closed = true;
     alive = false;
     process.destroy();
+    try {
+      if (!process.waitFor(200, TimeUnit.MILLISECONDS)) process.destroyForcibly();
+    } catch (InterruptedException e) {
+      process.destroyForcibly();
+      Thread.currentThread().interrupt();
+    }
   }
 }
