@@ -112,12 +112,12 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     context = serviceContext(system, ownPackage);
     hidden.put("packageContext", ownPackage);
     hidden.put("ActivityThread.systemMain/getSystemContext", true);
-    taskDisplay = ActivityManager.RunningTaskInfo.class.getField("displayId");
-    hidden.put("TaskInfo.displayId", true);
     activityManager = (ActivityManager) context.getSystemService(Context.ACTIVITY_SERVICE);
     displays = (DisplayManager) context.getSystemService(Context.DISPLAY_SERVICE);
     power = (PowerManager) context.getSystemService(Context.POWER_SERVICE);
     keyguard = (KeyguardManager) context.getSystemService(Context.KEYGUARD_SERVICE);
+    taskDisplay = ActivityManager.RunningTaskInfo.class.getField("displayId");
+    hidden.put("TaskInfo.displayId", true);
     thread = new HandlerThread("opencu-uia");
     thread.start();
     try {

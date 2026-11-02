@@ -1503,11 +1503,16 @@ public final class EngineTests {
       try {
         new AndroidEngine(notice -> {});
       } catch (Throwable hostEndsHere) {
-        // The host has no platform past the engine's identity; what was asked so far is the point.
+        // The host has no platform past service acquisition; what was asked so far is the point.
       } finally {
         android.os.Build.VERSION.SDK_INT = 0;
         android.app.ActivityThread.systemContext = null;
       }
+      List<String> services = new ArrayList<>();
+      for (String entry : asked) if (entry.startsWith("getSystemService ")) services.add(entry);
+      require(services.size() == 4, "services obtained: " + asked);
+      for (String service : services)
+        require(service.endsWith(" as example.shell"), "service obtained as the wrong package: " + services);
       require(asked.stream().noneMatch(entry -> entry.endsWith(" android")), "system identity reached the platform: " + asked);
     });
 
