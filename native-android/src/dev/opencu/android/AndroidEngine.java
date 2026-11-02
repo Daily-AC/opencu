@@ -1434,9 +1434,15 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
           String d = ((String) args.get("direction")).substring(0, 1);
           double pages = ((Number) args.getOrDefault("pages", 1)).doubleValue();
           int requested = (int) Math.ceil(pages), moved = 0;
-          boolean listChanged = false;
+          boolean listChanged = false, atBatchLimit = false;
           Screen current = now;
           for (int page = 0; page < requested; page++) {
+            if (page > 0
+                && batchDeadline > 0
+                && SystemClock.uptimeMillis() + Core.SCROLL_PAGE_MS > batchDeadline) {
+              atBatchLimit = true;
+              break;
+            }
             if (page > 0) {
               current = observe(pkg);
               String changed = Core.stopReason(fence, current, pkg);
@@ -1491,7 +1497,9 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
             addNotice(
                 listChanged
                     ? "Scrolled " + moved + " of " + requested + " pages; the list changed, so scrolling stopped"
-                    : Core.scrollNotice(moved, requested));
+                    : atBatchLimit
+                        ? "Scrolled " + moved + " of " + requested + " pages; stopped at the batch time limit"
+                        : Core.scrollNotice(moved, requested));
           break;
         }
       case "press_key":
@@ -1633,6 +1641,8 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
   }
 
   private Map<String, Object> dispatch(String name, Map<String, Object> args) throws Exception {
+    long callStart = SystemClock.uptimeMillis();
+    batchDeadline = 0;
     if (name.equals("agent_desktop")) return desktopCall(args);
     if (routeLost != null) throw fail("DISPLAY_UNAVAILABLE", routeLost);
     if (name.equals("list_apps")) return apps();
@@ -1680,7 +1690,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
           live(base.elements.get(((Number) args.get("element_index")).intValue()), base, observe(pkg));
         activate(pkg, token);
       }
-      if (name.equals("run_actions")) return batch(args, pkg, base, cap, token);
+      if (name.equals("run_actions")) return batch(args, pkg, base, cap, token, callStart);
       perform(name, args, pkg, base, base, cap, token);
       check(token, false);
       Map<String, Object> r =
@@ -1778,15 +1788,21 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     return original;
   }
 
+  /** When the running batch must end (uptime ms), or 0 outside a batch. */
+  private long batchDeadline;
+
   /** The time a whole batch may take; the run_actions description states the same limit. */
   long batchLimitMs() {
     return Protocol.BATCH_LIMIT_MS;
   }
 
   private Map<String, Object> batch(
-      Map<String, Object> args, String pkg, Screen base, Capture cap, long token) {
+      Map<String, Object> args, String pkg, Screen base, Capture cap, long token, long callStart) {
     List<Object> actions = list(args.get("actions"));
-    long batchStart = SystemClock.uptimeMillis();
+    // The limit covers the whole call, including the reads before the batch.
+    long batchStart = callStart;
+    batchDeadline = callStart + batchLimitMs();
+    String limitReached = "it could run past";
     Screen last = base;
     int step = 0, completed = 0;
     long waited = 0, started = 0;
@@ -1829,6 +1845,17 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
         perform(method, a, activePackage, base, fence, step == 1 ? cap : null, token);
         if (step == 1) pause(300, token);
       }
+        // An until wait ends at the batch deadline at the latest.
+        boolean cut = false;
+        if (!until.isEmpty()) {
+          long remaining = Math.max(0, batchDeadline - SystemClock.uptimeMillis());
+          long timeout = ((Number) until.getOrDefault("timeoutMs", 8000)).longValue();
+          if (remaining < timeout) {
+            until = new LinkedHashMap<>(until);
+            until.put("timeoutMs", remaining);
+            cut = true;
+          }
+        }
         Core.Await wait = new Core.Await(fence, until, expected, SystemClock.uptimeMillis());
         while (true) {
           check(token, false);
@@ -1841,6 +1868,10 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
           }
           if (!decision.equals("continue")) {
             reason = decision;
+            if (cut && decision.equals("timeout")) {
+              reason = "time_limit";
+              limitReached = "its until wait reached";
+            }
             break;
           }
           pause(until.isEmpty() ? 10 : 40, token);
@@ -1889,10 +1920,11 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
                             ? "SYSTEM_DIALOG"
                             : reason.equals("popup") ? "POPUP" : "APP_SWITCHED",
                 reason.equals("time_limit")
-                    ? "Batch stopped before step " + step + ", which could run past the "
+                    ? "Batch stopped at step " + step + ": " + limitReached + " the "
                         + batchLimitMs() / 1000 + " s batch limit; remaining steps were not sent"
                     : "Batch stopped; remaining steps were not sent");
     }
+    batchDeadline = 0;
     Map<String, Object> r =
         result(last, Boolean.TRUE.equals(args.get("includeScreenshot")) && reason == null);
     try {

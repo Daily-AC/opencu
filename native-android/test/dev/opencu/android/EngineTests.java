@@ -1184,6 +1184,82 @@ public final class EngineTests {
           && "time_limit".equals(batch.get("reason")), "batch " + batch);
     });
 
+    test("a scroll step whose pages could outlast the batch limit is not started", () -> {
+      ListScene rows = new ListScene(DOWN);
+      rows.node.effects.put(DOWN, () -> rows.show(rows.offset + 2));
+      ScriptedEngine engine = ScriptedEngine.create(rows.scene);
+      engine.batchLimit = 15_000L;
+      engine.read();
+      Map<String, Object> result = engine.call("run_actions", args("actions", List.of(
+          obj("method", "scroll", "element_index", 1, "direction", "down", "pages", 20))));
+      Map<String, Object> batch = map(map(result.get("_meta")).get("opencu/batch"));
+      require(rows.node.performed.isEmpty(), "scrolled " + rows.node.performed.size() + " pages; batch " + batch);
+      require("time_limit".equals(batch.get("reason")), "batch " + batch);
+    });
+
+    test("a key hold that could outlast the batch limit is not started", () -> {
+      Scene scene = new Scene();
+      scene.add("/0", "android.widget.TextView", "", "Ready", 0, 100, 1080, 200);
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      engine.batchLimit = 20_000L;
+      engine.read();
+      // If the hold starts, end the call at once instead of holding for half a minute.
+      engine.checkHook = () -> {
+        if (!engine.events.isEmpty()) throw Core.fail("PERSON_ACTIVE", "test stop");
+      };
+      Map<String, Object> result = engine.call("run_actions", args("actions", List.of(
+          obj("method", "press_key", "key", "back", "duration", 30))));
+      Map<String, Object> batch = map(map(result.get("_meta")).get("opencu/batch"));
+      require(engine.events.isEmpty() && "time_limit".equals(batch.get("reason")),
+          "batch " + batch + " after " + engine.events.size() + " key events");
+    });
+
+    test("an until wait without timeoutMs counts its 8 s default", () -> {
+      Scene scene = new Scene();
+      scene.add("/0", "android.widget.TextView", "", "Ready", 0, 100, 1080, 200);
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      engine.batchLimit = 9_000L;
+      engine.read();
+      Map<String, Object> result = engine.call("run_actions", args("actions", List.of(
+          obj("method", "wait", "ms", 1, "until", obj("text", "Ready")))));
+      Map<String, Object> batch = map(map(result.get("_meta")).get("opencu/batch"));
+      require("time_limit".equals(batch.get("reason")) && Integer.valueOf(0).equals(batch.get("completed")), "batch " + batch);
+    });
+
+    test("multi-page scroll stops at the batch deadline", () -> {
+      ListScene rows = new ListScene(DOWN);
+      rows.node.effects.put(DOWN, () -> {
+        android.os.SystemClock.sleep(2_500); // a slow app: each page takes longer than estimated
+        rows.show(rows.offset + 2);
+      });
+      ScriptedEngine engine = ScriptedEngine.create(rows.scene);
+      engine.batchLimit = 5_500L;
+      engine.read();
+      Map<String, Object> result = engine.call("run_actions", args("actions", List.of(
+          obj("method", "scroll", "element_index", 1, "direction", "down", "pages", 3))));
+      require(rows.node.performed.size() == 2, "pages sent " + rows.node.performed.size());
+      require(text(result).contains("stopped at the batch time limit"), "notice: " + text(result).split("\n")[1]);
+    });
+
+    test("an until wait ends at the batch deadline", () -> {
+      ListScene rows = new ListScene(DOWN);
+      rows.node.effects.put(DOWN, () -> {
+        android.os.SystemClock.sleep(4_500);
+        rows.show(rows.offset + 2);
+      });
+      ScriptedEngine engine = ScriptedEngine.create(rows.scene);
+      engine.batchLimit = 7_000L;
+      engine.read();
+      long started = System.nanoTime();
+      Map<String, Object> result = engine.call("run_actions", args("actions", List.of(
+          obj("method", "scroll", "element_index", 1, "direction", "down",
+              "until", obj("text", "never", "timeoutMs", 3000)))));
+      long ms = (System.nanoTime() - started) / 1_000_000;
+      Map<String, Object> batch = map(map(result.get("_meta")).get("opencu/batch"));
+      require("time_limit".equals(batch.get("reason")), "batch " + batch + " after " + ms + " ms");
+      require(ms < 7_400, "call took " + ms + " ms");
+    });
+
     test("run_actions description states the batch time limit", () -> {
       String description = (String) Protocol.DEFINITIONS.get("run_actions").get("description");
       require(description.contains("100 s") && description.contains("time_limit"), description);

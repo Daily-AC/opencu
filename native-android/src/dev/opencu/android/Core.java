@@ -48,6 +48,9 @@ public final class Core {
     return subtree.length() > 0 ? subtree.toString() : window.toString();
   }
 
+  /** Time allowed for one scroll page: the action, then waiting for the list to move. */
+  public static final long SCROLL_PAGE_MS = 1_000;
+
   /**
    * The longest a run_actions step can take: its holds, waits, scroll pages and until timeout,
    * plus two seconds for reading and settling.
@@ -63,7 +66,8 @@ public final class Core {
     }
     if (method.equals("press_key")) ms += (long) (((Number) a.getOrDefault("duration", .05)).doubleValue() * 1000);
     if (method.equals("drag")) ms += 450;
-    if (method.equals("scroll")) ms += (long) Math.ceil(((Number) a.getOrDefault("pages", 1)).doubleValue()) * 1_000;
+    if (method.equals("scroll"))
+      ms += (long) Math.ceil(((Number) a.getOrDefault("pages", 1)).doubleValue()) * SCROLL_PAGE_MS;
     if (a.containsKey("until")) {
       Map<?, ?> until = (Map<?, ?>) a.get("until");
       ms += until.containsKey("timeoutMs") ? ((Number) until.get("timeoutMs")).longValue() : 8_000;

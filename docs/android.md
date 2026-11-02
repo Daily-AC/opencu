@@ -201,11 +201,13 @@ the new foreground for later non-indexed actions; it does not give old indexes
 new meanings or renew coordinates. New activities within the same app are not
 classified as dialogs solely for changing window id.
 
-A batch is limited to 100 seconds, inside a host's two-minute call limit. Before
-each step the engine adds the step's longest possible time (holds, `ms`, scroll
-pages, the `until` timeout and two seconds for reading) to the time used so far;
-if that would pass the limit, the step is not sent and the batch stops with reason
-`time_limit` and `BATCH_TIME_LIMIT`.
+A batch is limited to 100 seconds from the start of the call, inside a host's
+two-minute call limit. Before each step the engine adds the step's longest possible
+time (holds, `ms`, one second per scroll page, the `until` timeout and two seconds
+for reading) to the time used so far; if that would pass the limit, the step is not
+sent and the batch stops with reason `time_limit` and `BATCH_TIME_LIMIT`. A
+multi-page scroll also stops before a page that could pass the limit (with a
+notice), and an `until` wait ends at the limit at the latest, also as `time_limit`.
 
 `_meta["opencu/batch"]` reports `completed`, one-based `stoppedStep`, `reason` and
 `waitedMs` for the last step (including action time), followed by the final state.
