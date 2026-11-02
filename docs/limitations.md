@@ -177,14 +177,18 @@ The measurements behind this section are in
   failure refuses input. Android-injected events bypass evdev; kernel virtual
   input devices are conservatively treated as physical. Real interruption and
   the three-volume-down stop gesture await owner testing.
-- Screen-off or locked input is refused without wake/unlock. The first ten
-  seconds of a new connection conservatively forbid changing foreground.
+- Screen-off or locked input is refused without wake/unlock. A new connection may
+  change foreground once the power service's last user activity, read after the
+  input monitor is live, is ten seconds old; a contact already held at that moment
+  is known only through that time.
 - Unicode uses accessible editable fields; custom editors and opaque content
   may not expose enough information. There is no OCR or keyboard replacement.
   No scope/select_text, arbitrary keycodes, power/volume tool keys or rich paste.
 - Screenshots cover the full active display, including overlays, and use scaled
-  JPEG coordinates. The accepted virtual display uses local IME policy and
-  display-targeted input; external displays and other OEM builds are untested. Secure windows are not bypassed. Window polling can miss
+  JPEG coordinates. The agent display requires a trusted, own-focus display that
+  cannot take the top focus and a local IME policy, all read back; a phone that
+  cannot provide them gets `AGENT_DESKTOP_UNAVAILABLE`. External displays and
+  other OEM builds are untested. Secure windows are not bypassed. Window polling can miss
   transient overlays entirely between reads; OEM permission activities may be
   reported as `app_switched` rather than `system_dialog`.
 

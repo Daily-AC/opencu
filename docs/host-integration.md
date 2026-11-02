@@ -111,7 +111,9 @@ and starts it as Android shell uid 2000 with adb shell v2 and no PTY. Android
 An on-phone elevation host can execute
 `CLASSPATH=<jar> app_process / dev.opencu.android.Main mcp` as shell and relay MCP
 unchanged. Stdin EOF exits the engine; stdout contains only MCP JSON lines and
-stderr carries diagnostics. Keep one connection per agent session; never
+stderr carries diagnostics. A fatal error is one stderr line `CODE: detail`
+(for example `UNSUPPORTED_PLATFORM: …` or `ENGINE_START_FAILED: …`), at most 300
+characters after the code and without screen or clipboard content. Keep one connection per agent session; never
 reconnect to clear `USER_STOPPED`. The physical triple-volume-down stop is also
 sent as `notifications/message`, whose `params.data` contains the Linux-style
 `{event:"stop",error:{code:"USER_STOPPED",...}}` payload. Hosts must latch it even

@@ -35,8 +35,18 @@ signing key stay under ignored `.build/android/`.
 The launcher verifies the full SHA-256 and pushes the jar only when the matching
 `/data/local/tmp/opencu-android-<sha256-16>.jar` is absent or has different bytes.
 It uses adb shell v2 with `-T`, inherited MCP streams, and diagnostics on stderr.
-Without `--serial`, adb's normal device selection and `ANDROID_SERIAL` apply.
+Without `--serial`, the launcher asks adb for the one connected device
+(`ANDROID_SERIAL` still selects it) and passes that serial to every adb call of
+the launch, so the hash check, publication and launch reach the same phone.
 The launcher neither pairs nor restarts/disconnects the shared adb server.
+
+The cache lives in `/data/local/tmp`, which only shell and root can write. Both
+already hold the identity the engine runs as, so a file swapped there between
+verification and launch grants its writer nothing new, and the launcher does not
+try to pin the file object further. It does refuse to launch a cached jar that is
+not a regular file owned by shell with mode 0644 or stricter, printing
+`UNSAFE_ENGINE_JAR: …` on stderr; remove that file and launch again. An on-phone
+host that starts the jar itself relies on the same assumption.
 Calling `bin/opencu` without `android` is unchanged.
 
 For wanctl packaging, `npm run package:android` writes `dist/opencu-android.jar`
@@ -55,13 +65,22 @@ SDK, uid, pid, UiAutomation connection, display geometry, screen/lock status,
 resolved hidden APIs and physical-input monitoring. Root must first drop to shell;
 the engine deliberately refuses uid 0 and ordinary app identities.
 
+A fatal error prints exactly one stderr line `CODE: detail`, where the code is
+`UNSUPPORTED_PLATFORM`, `PERMISSION_DENIED`, `UIAUTOMATION_UNAVAILABLE` or
+`INVALID_ARGUMENT` when the cause is known, otherwise `ENGINE_START_FAILED`,
+`DOCTOR_FAILED` or `ENGINE_FAILED` by stage, and the detail is the exception
+class and message folded to one line of at most 300 characters. It never contains
+screen or clipboard content. `doctor` also returns that line as `error`.
+
 The Java server implements newline-delimited JSON-RPC 2.0 MCP: `initialize`,
 `notifications/initialized`, `tools/list` (opaque pagination cursor), `tools/call`
 and `ping`. Unknown methods use `-32601`; invalid params use `-32602`. Tool errors
 are `isError: true`, start `CODE: message` and retain the code in
 `_meta["opencu/error"]`. Request lines are size-bounded; JSON-RPC batch arrays are
-not supported. Stdin EOF cancels queued/in-flight work and exits the VM. There is
-no listener, installed engine APK, accessibility service, account or brand gate.
+not supported. Stdin EOF refuses further work, kills running platform clients
+(`input`, `am`), waits up to one second for an in-flight call to unwind, restores a
+clipboard still owed by an interrupted paste, releases the agent display and exits
+the VM. There is no listener, installed engine APK, accessibility service, account or brand gate.
 
 ## State and input
 
@@ -96,21 +115,34 @@ content is never bypassed. Screenshots can include covering windows.
   `duration` holds a touch for at least the platform long-press interval. Indexed
   clicks inject a touch at the visible center first, so Android views that only
   enter a mode on real touch behave like a person's tap. Accessibility click is
-  used only when the center is covered/off-screen or touch injection is unavailable,
-  and the returned state says so.
+  used only when touch is known unusable before anything is sent (the centre is
+  covered or off-screen, the input tool cannot start, or display-targeted
+  injection is missing), and the returned state says why. A touch that may have
+  been delivered (the input tool timed out, failed or was interrupted) returns
+  `ACTION_UNCONFIRMED` and is never repeated another way.
 - `drag`: `from_x,from_y,to_x,to_y` from the fresh image, on the active display
   (display 0 unless `agent_desktop` is started).
 - `scroll`: observed scrollable element or image point; up/down/left/right and
-  short aliases; `pages` defaults to 1, at most 20. Indexed scrolling uses whole
-  accessibility pages (fractional counts round up). At the end of a list it
-  returns the current state and a notice instead of `ACTION_UNCONFIRMED`.
+  short aliases; `pages` (default 1, at most 5) moves further in one call.
+  Indexed scrolling uses whole accessibility pages (fractional counts round up).
+  After each page the engine compares the list's content (the screen, for
+  coordinates): a page that did not move ends the call with a notice such as
+  `Scrolled 3 of 5 pages; reached the end`, or `Nothing moved; the list is at its
+  end or does not scroll this way` on the first page; a page whose content changed
+  counts even when the accessibility action returned false. Nothing is sent when
+  the list offers no scroll action in that direction. Only a failed read after
+  scrolling returns `ACTION_UNCONFIRMED`.
 - `press_key`: back, home, enter/Return, delete/backspace, tab, recents/app_switch,
   search. No volume, power, arbitrary keycodes or modifier chords.
-- `type_text`: paste through the focused editor first, preserving Unicode and
-  restoring the previous clipboard when it can be read. If paste is unavailable,
-  it falls back to accessibility set-text and says so in the result; the
-  postcondition still has to match or the call returns `TEXT_INPUT_FAILED`. It
-  never types through the person's keyboard. An app reaction can arrive after
+- `type_text`: types into the focused editable only. Without one it returns
+  `NO_FOCUSED_ELEMENT` and sends nothing; click the intended field first. It
+  pastes, preserving Unicode, when the editor lists paste and the clipboard can be
+  read and written, and restores the previous clipboard. When paste is known
+  unusable before anything is sent, it uses accessibility set-text and the result
+  says why (for example the editor does not offer paste, or the clipboard could not
+  be read). A paste that was sent but not confirmed returns `ACTION_UNCONFIRMED`
+  and is never followed by set-text. The postcondition still has to match or the
+  call returns `TEXT_INPUT_FAILED`. It never types through the person's keyboard. An app reaction can arrive after
   the text postcondition; use `waitForText` or an `until` condition to observe it.
   These waits search visible non-editor content, so the editor's own newly typed
   value does not satisfy a reaction wait by itself.
@@ -118,24 +150,36 @@ content is never bypassed. Screenshots can include covering windows.
   a checkbox. The editor must actually expose `ACTION_SET_TEXT`.
 - `paste`: `format: "text"` only, using the editor's accessibility paste action.
   Saves/restores the previous clipboard if readable and unchanged; refuses
-  unreadable clipboard access and reports failed restoration. This clipboard path has not been exercised on the owner's clipboard.
-- `perform_secondary_action`: only a name listed on that node, rechecked live.
+  unreadable clipboard access and reports failed restoration. A read that fails or
+  is refused counts as unreadable, never as empty. Android also answers a silently
+  denied read with an empty clipboard, which cannot be told apart from an empty
+  one. This clipboard path has not been exercised on the owner's clipboard.
+- `perform_secondary_action`: only a name listed on that node, rechecked live;
+  the live node must still carry the same name (including its label) under the
+  same action id, otherwise `STALE_ELEMENT`.
 - `activate_app`: explicit foreground activation under the same person rules. In
 agent-desktop mode it launches on the owned display; an app already in front on
 display 0 returns `APP_IN_USE_BY_PERSON` without input.
 
-Before indexed input, the engine re-observes and checks window, tree path,
-package, class, text, description, resource id and bounds (6 physical-pixel tolerance on display 0; up to 400 pixels while a
-virtual display is settling its system-decoration inset). A changed/missing node returns `STALE_ELEMENT` without sending that
-input. A false accessibility action result returns `ACTION_UNCONFIRMED`; it is
+Before indexed input, the engine settles, re-observes and checks activity,
+display, window, tree path, package, class, text, description, resource id and
+bounds within 6 physical pixels. On an owned virtual display a window may shift as
+a whole (up to 400 pixels) while its decoration insets settle; that is accepted
+only when every other element of that window moved by the same amount. Touches go
+to the matched element's current centre. A changed/missing node returns
+`STALE_ELEMENT` without sending that input; the error names tree paths and
+geometry, never node text. A false accessibility action result returns `ACTION_UNCONFIRMED`; it is
 an unknown outcome and is never replayed. A fresh explicit state read is required
-before continuing. A successful action still needs its actual result checked.
+before continuing, as after any failure once input may have reached the phone.
+A state's indexes and screenshot grant become current only with a complete
+response; a failed screenshot leaves the last returned state in force. A successful action still needs its actual result checked.
 
 ## Batches and local conditions
 
 `run_actions {app, actions, includeScreenshot?}` accepts 1–16 input actions and
 `{"method":"wait","ms":1..15000}`. Indexes always come from the state before the
-batch. Coordinates must be in its first action. Each action can carry:
+batch. Every step reads the screen afresh right before it sends input and
+compares it with the state left by the previous step. Coordinates must be in its first action. Each action can carry:
 
 ```json
 {"until":{"text":"Fixture result ready","gone":"Loading fixture data","stable":true,"timeoutMs":8000}}
@@ -168,8 +212,13 @@ including `PUBLIC`, `OWN_CONTENT_ONLY`, `SUPPORTS_TOUCH`, `ROTATES_WITH_CONTENT`
 `DESTROY_CONTENT_ON_REMOVAL`, `TRUSTED`, `OWN_DISPLAY_GROUP`, `ALWAYS_UNLOCKED`,
 `TOUCH_FEEDBACK_DISABLED`, `OWN_FOCUS` and `STEAL_TOP_FOCUS_DISABLED`. The
 engine reports these flags, the display id and `imePolicy:"local"` in status.
-The shell must have trusted-display permission; otherwise it retries with a
-smaller untrusted flag set and reports that fact.
+Start requires a trusted display that keeps its own focus and cannot take the top
+focus, as read back from the display's flags (`displayFlags` in status), and a
+local IME policy read back from the window manager. If any is missing, start
+releases everything and returns `AGENT_DESKTOP_UNAVAILABLE`; there is no weaker
+fallback. Start is all-or-nothing: on failure the display and agent connection
+are released and the main-display connection is restored; if that restoration
+fails, the connection returns `DISPLAY_UNAVAILABLE` until a new connection.
 
 The person keeps display 0. App starts use `--display <id>`, input events carry
 the active display id, screenshots and accessibility windows come from a
@@ -179,8 +228,9 @@ volume-down stop still latches `USER_STOPPED`. If the requested app is currently
 frontmost on display 0, the call returns `APP_IN_USE_BY_PERSON` before sending
 anything. Stop and EOF move owned tasks to the back and release the display.
 The engine restores the launcher when the person was on the launcher; no agent
-app is intentionally finished. A five-minute call-free period stops the display
-and the next app call returns `AGENT_DESKTOP_IDLE_STOPPED`. The verifier accepts
+app is intentionally finished. Five minutes after the last call ends, the
+connection's own worker stops the display (never during a call), and the next app
+call returns `AGENT_DESKTOP_IDLE_STOPPED`. `status` does not keep it alive. The verifier accepts
 a shorter `--idle-ms` for lifecycle tests.
 
 The owner fixture run passed the main-display checks three times on the agent
@@ -207,8 +257,11 @@ counted as physical; there is no claim of distinguishing arbitrary kernel-level
 injection from hardware. Hot-unplug requires a new, explicitly permitted session.
 
 A foreground change requires 10 seconds without physical input. Because evdev
-has no historical event stream, each connection starts with a conservative
-10-second foreground-change holdoff. Input may proceed sooner when the requested
+has no historical event stream, the engine starts the monitor, waits until every
+device is open, and only then seeds the last activity from the power service's
+last user activity time: a touch before that moment is in that time, and any later
+touch is seen by the monitor. A contact already held when monitoring begins is
+known only through that time until it next moves or lifts. Input may proceed sooner when the requested
 app is already in front and no physical key/contact is held. Physical input
 arriving during a call/batch aborts further input with `PERSON_ACTIVE`; ask the
 person before continuing. The engine requires a fresh observation afterwards.
@@ -236,7 +289,10 @@ mid-call interruption and lock transition remain owner acceptance tasks.
 
 ## Validation and limits
 
-`npm run test:android` runs production-core logic on a host JVM. Tests include a real normalized fixture tree from the PGBM10,
+`npm run test:android` runs production-core logic on a host JVM. It also runs the
+engine's own decision code (identity, input paths, clipboard, scrolling, batches,
+shutdown, idle stop, agent-display start) against a scripted phone, and the
+launcher against a local fake adb. Tests include a real normalized fixture tree from the PGBM10,
 the AOSP documentation's published two-finger evdev trace, and synthetic edge
 cases for stop-gesture timing and state transitions. The original source and
 Apache 2.0 notice for the trace are in `native-android/THIRD_PARTY_NOTICES.md`. `node scripts/verify-android.mjs --serial

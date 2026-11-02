@@ -97,3 +97,26 @@ display on stop. This differs from the initial implementation assumption that
 one connection could query all displays reliably; the all-displays overload
 returned no virtual-display windows on this device. The desktop uses local IME
 policy and display-targeted input, and reports the flags actually obtained.
+
+## Decisions from milestone 4
+
+- **Never repeat input whose outcome is unknown.** A second input method is used
+  only when the first is known unavailable before anything is sent. Once a shell
+  tap has started, or an accessibility paste has been sent, a timeout, error or
+  false result is `ACTION_UNCONFIRMED` and needs a fresh read.
+- **The agent display is isolated or absent.** It must read back as trusted, with
+  its own focus and unable to take the top focus, and its IME policy must read
+  back as local. Otherwise start releases everything and returns
+  `AGENT_DESKTOP_UNAVAILABLE`; the earlier untrusted fallback is removed. Start is
+  a transaction that restores the main-display connection on failure.
+- **The launch cache is trusted as far as shell is.** `/data/local/tmp` is
+  writable only by shell and root, and both already hold the identity the engine
+  runs as, so swapping the cached jar between its hash check and `app_process`
+  grants nothing new. The launcher therefore does not pin the file object; it
+  refuses a cached jar that is not a regular file owned by shell with mode 0644 or
+  stricter, and sends every adb call of one launch to one device serial. On-phone
+  hosts that start the jar themselves rely on the same assumption.
+- **No blanket start-up holdoff.** A fixed ten-second holdoff at connection start
+  made every new session's first app launch fail. Instead the engine starts the
+  input monitor, waits until it is live, and then seeds the last physical
+  activity from the power service, so no touch falls between the two sources.
