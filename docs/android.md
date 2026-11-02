@@ -123,7 +123,7 @@ content is never bypassed. Screenshots can include covering windows.
 - `drag`: `from_x,from_y,to_x,to_y` from the fresh image, on the active display
   (display 0 unless `agent_desktop` is started).
 - `scroll`: observed scrollable element or image point; up/down/left/right and
-  short aliases; `pages` (default 1, at most 5) moves further in one call.
+  short aliases; `pages` (default 1, at most 20) moves further in one call.
   Indexed scrolling uses whole accessibility pages (fractional counts round up).
   After each page the engine compares the list's content (the screen, for
   coordinates): a page that did not move ends the call with a notice such as

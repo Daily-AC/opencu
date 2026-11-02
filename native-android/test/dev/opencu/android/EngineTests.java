@@ -1090,12 +1090,12 @@ public final class EngineTests {
       require(text(result).startsWith("Nothing moved"), "notice: " + text(result).split("\n")[0]);
     });
 
-    test("scroll description explains pages up to 5", () -> {
+    test("scroll description explains pages up to 20", () -> {
       String description = (String) Protocol.DEFINITIONS.get("scroll").get("description");
-      require(description.contains("pages (up to 5"), description);
+      require(description.contains("pages (up to 20"), description);
       require(description.contains("stops early at the end"), description);
-      Protocol.validate("scroll", args("element_index", 1, "direction", "down", "pages", 5));
-      Failure f = failure(() -> Protocol.validate("scroll", args("element_index", 1, "direction", "down", "pages", 6)));
+      Protocol.validate("scroll", args("element_index", 1, "direction", "down", "pages", 20));
+      Failure f = failure(() -> Protocol.validate("scroll", args("element_index", 1, "direction", "down", "pages", 21)));
       require(f.code.equals("INVALID_ARGUMENT"), f.code);
     });
 
