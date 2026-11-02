@@ -2842,10 +2842,24 @@ public final class EngineTests {
       require("example.shell".equals(derive.invoke(null, system, 2000)), "derived package");
     });
 
+    secondDeviceRound();
+
     if (!failures.isEmpty()) {
       System.out.println("Android engine host checks failed: " + failures);
       System.exit(1);
     }
     System.out.println("Android engine host checks passed: " + passed);
+  }
+
+  /** Checks for what the second device round (OPPO PGBM10, 2026-11-02) found. */
+  static void secondDeviceRound() {
+    test("the agent display takes the main display's portrait size even while it is turned", () -> {
+      Class<?>[] types = {int.class, int.class, int.class};
+      // Display 0 turned by a landscape game: logical 2400x1080 at rotation 1 (90 degrees).
+      require(Arrays.equals((int[]) callStatic("naturalSize", types, 2400, 1080, 1), new int[] {1080, 2400}), "rotation 90");
+      require(Arrays.equals((int[]) callStatic("naturalSize", types, 2400, 1080, 3), new int[] {1080, 2400}), "rotation 270");
+      require(Arrays.equals((int[]) callStatic("naturalSize", types, 1080, 2400, 0), new int[] {1080, 2400}), "rotation 0");
+      require(Arrays.equals((int[]) callStatic("naturalSize", types, 1080, 2400, 2), new int[] {1080, 2400}), "rotation 180");
+    });
   }
 }

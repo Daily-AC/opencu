@@ -288,8 +288,9 @@ may have executed. Never retry the stopped sequence automatically.
 
 ## Agent desktop
 
-`agent_desktop start` creates a virtual display matching display 0's physical
-size and density. On the accepted PGBM10 it obtained flags value `97737`,
+`agent_desktop start` creates a virtual display with display 0's size in its
+natural orientation (portrait on a phone, even while display 0 is turned by a
+landscape app) and display 0's density. On the accepted PGBM10 it obtained flags value `97737`,
 including `PUBLIC`, `OWN_CONTENT_ONLY`, `SUPPORTS_TOUCH`, `ROTATES_WITH_CONTENT`,
 `DESTROY_CONTENT_ON_REMOVAL`, `TRUSTED`, `OWN_DISPLAY_GROUP`, `ALWAYS_UNLOCKED`,
 `TOUCH_FEEDBACK_DISABLED`, `OWN_FOCUS` and `STEAL_TOP_FOCUS_DISABLED`. The

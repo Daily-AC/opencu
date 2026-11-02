@@ -28,7 +28,7 @@ public final class Protocol {
           + " reconnect or retry without explicit permission. Reads remain available after Stop."
           + " Locked or screen-off phones refuse input without waking or unlocking. Keep one"
           + " connection per agent session and never operate the same app concurrently. agent_desktop start creates an owned virtual display with"
-          + " the main display's size and density; while it is started all app tools target that"
+          + " the main display's portrait size and density; while it is started all app tools target that"
           + " display and the person's main display is never activated. An app already in front on"
           + " the main display returns APP_IN_USE_BY_PERSON. agent_desktop status reports the flags"
           + " obtained, size, apps and idle time; stop it when finished. The display stops after"

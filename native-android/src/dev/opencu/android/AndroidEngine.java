@@ -517,21 +517,37 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     return bitmap;
   }
 
-  /** Creates a display matching display 0's size and density with the requested flags. */
+  /**
+   * A display's size in its natural orientation (portrait on a phone): {@code width} x {@code
+   * height} is its current size, which a rotation of 90 or 270 degrees swaps.
+   */
+  static int[] naturalSize(int width, int height, int rotation) {
+    boolean turned = rotation == Surface.ROTATION_90 || rotation == Surface.ROTATION_270;
+    return turned ? new int[] {height, width} : new int[] {width, height};
+  }
+
+  /**
+   * Creates a display with display 0's size in its natural orientation, whatever way display 0 is
+   * turned now, and its density, with the requested flags.
+   */
   OwnedDisplay createOwnedDisplay(int requested) {
-    Point main = sizeFor(Display.DEFAULT_DISPLAY);
+    Display mainDisplay = displays.getDisplay(Display.DEFAULT_DISPLAY);
+    if (mainDisplay == null) throw fail("DISPLAY_UNAVAILABLE", "Display 0 unavailable");
+    Point current = new Point();
+    mainDisplay.getRealSize(current);
+    int[] size = naturalSize(current.x, current.y, mainDisplay.getRotation());
     DisplayMetrics metrics = new DisplayMetrics();
-    displays.getDisplay(Display.DEFAULT_DISPLAY).getRealMetrics(metrics);
+    mainDisplay.getRealMetrics(metrics);
     HandlerThread frameThread = new HandlerThread("opencu-frames");
     frameThread.start();
     ImageReader reader = null;
     VirtualDisplay display = null;
     try {
       // Three images: the kept frame plus the two acquireLatestImage needs to skip to the newest.
-      reader = ImageReader.newInstance(main.x, main.y, PixelFormat.RGBA_8888, 3);
+      reader = ImageReader.newInstance(size[0], size[1], PixelFormat.RGBA_8888, 3);
       display =
           displays.createVirtualDisplay(
-              "OpenCU agent", main.x, main.y, metrics.densityDpi, reader.getSurface(), requested);
+              "OpenCU agent", size[0], size[1], metrics.densityDpi, reader.getSurface(), requested);
       Display created = display.getDisplay();
       return new OwnedDisplay(
           display, reader, frameThread, created.getDisplayId(), created.getFlags());
