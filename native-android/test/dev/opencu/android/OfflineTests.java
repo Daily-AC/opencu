@@ -491,6 +491,10 @@ public final class OfflineTests {
     Map<String, Object> blind = Core.activity("type_text", Json.obj("text", "hunter2"), null, "", 0, 0);
     check(!blind.containsKey("text") && blind.get("chars").equals(7),
         "typing into a field the engine has not identified shows only its length");
+    check(Core.taskOwner("com.example.food", "com.example.permissions").equals("com.example.food")
+            && Core.taskOwner(null, "com.example.food").equals("com.example.food")
+            && Core.taskOwner("", "com.example.food").equals("com.example.food"),
+        "an activity started into an app's task counts as that app");
     Element pay = new Element();
     pay.desc = "去结算";
     Map<String, Object> tap = Core.activity("click", Json.obj("element_index", 4, "click_count", 2), pay, "", 0, 0);

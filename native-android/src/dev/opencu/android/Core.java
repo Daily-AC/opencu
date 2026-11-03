@@ -1073,6 +1073,16 @@ public final class Core {
   }
 
   /**
+   * The app a task belongs to: the package of its root activity. An activity another package
+   * starts into that task (the system's permission request, a share sheet, a picker) is a step in
+   * that app's flow, so the app stays the foreground while it shows; the state still names the
+   * activity itself.
+   */
+  public static String taskOwner(String rootPackage, String topPackage) {
+    return rootPackage == null || rootPackage.isEmpty() ? topPackage : rootPackage;
+  }
+
+  /**
    * What a call or batch step is doing, for the companion app to show the person: the tool and the
    * few arguments a person needs to follow it, with the target element's visible label. Typed or
    * set text is shown only for a known editable field that is not a password (cut to 40

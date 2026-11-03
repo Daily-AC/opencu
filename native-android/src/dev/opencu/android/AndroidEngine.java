@@ -762,21 +762,25 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     }
   }
 
+  /** The front task's app ({@link Core#taskOwner}) and its top activity. */
   String[] foreground() {
     for (ActivityManager.RunningTaskInfo task : activityManager.getRunningTasks(20))
       if (taskOnDisplay(task, activeDisplay) && task.topActivity != null)
-        return new String[] {
-          task.topActivity.getPackageName(), task.topActivity.flattenToShortString()
-        };
+        return new String[] {owner(task), task.topActivity.flattenToShortString()};
     if (activeDisplay != Display.DEFAULT_DISPLAY) return new String[] {"", ""};
     throw fail("WINDOW_NOT_FOUND", "Cannot establish main-display foreground activity");
   }
 
   String foregroundOnDisplay(int displayId) {
     for (ActivityManager.RunningTaskInfo task : activityManager.getRunningTasks(20))
-      if (taskOnDisplay(task, displayId) && task.topActivity != null)
-        return task.topActivity.getPackageName();
+      if (taskOnDisplay(task, displayId) && task.topActivity != null) return owner(task);
     return "";
+  }
+
+  private static String owner(ActivityManager.RunningTaskInfo task) {
+    return Core.taskOwner(
+        task.baseActivity == null ? null : task.baseActivity.getPackageName(),
+        task.topActivity.getPackageName());
   }
 
   String resolve(String name) {

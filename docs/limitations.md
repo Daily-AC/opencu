@@ -212,8 +212,9 @@ The measurements behind this section are in
   cannot take the top focus and a local IME policy, all read back; a phone that
   cannot provide them gets `AGENT_DESKTOP_UNAVAILABLE`. External displays and
   other OEM builds are untested. Secure windows are not bypassed. Window polling can miss
-  transient overlays entirely between reads; OEM permission activities may be
-  reported as `app_switched` rather than `system_dialog`.
+  transient overlays entirely between reads. A permission request or picker that
+  runs in the app's task counts as that app; OEM dialogs in a task of their own
+  may be reported as `app_switched` rather than `system_dialog`.
 
 - The optional companion app (status island, live preview, Stop) was checked on
   the PGBM10 only. Its overlay permission must be turned on in Settings where an OEM

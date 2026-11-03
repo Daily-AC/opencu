@@ -98,6 +98,13 @@ the optional [companion app](#companion-app) only shows status and a preview and
 ## State and input
 
 `app` is a launchable package name or an exact, case-insensitive launcher label.
+The foreground app is the app whose task is in front: an activity another package
+starts into that task, such as the system's permission request, a share sheet or a
+picker, counts as that app. Address it by the app's name; the state line's
+`activity=` names the activity itself (for example
+`activity=com.android.permissioncontroller/.permission.ui.GrantPermissionsActivity`),
+and its window is listed with its own package. A batch that brings one up stops with
+`popup`.
 Ambiguous labels return `AMBIGUOUS_APP`. `get_app_state` starts or brings forward
 the app under the person rules. `list_apps` gives label, package, running and
 foreground status. Every input tool returns an updated full state; there is no
@@ -610,11 +617,13 @@ Binder calls. The fixture suite covers Unicode set_value, `type_text` with ASCII
 and Chinese text, indexed clicks and
 scrolls, back, popup/stale guards, local waits, injected-volume exclusion and idle EOF. Polling cannot detect a window
 that appears and disappears entirely between observations. System UI windows use
-platform window types; OEM dialogs presented as activities can be reported as
-`app_switched` instead of `system_dialog`.
+platform window types. A permission request runs in the requesting app's task and is
+read and answered through that app (checked on the PGBM10 on 2026-11-04 with the
+fixture's Ask permission button, on the agent display: deny by index, and a batch
+stopping with `popup` before its next step); OEM dialogs presented as activities in
+their own task can still be reported as `app_switched` instead of `system_dialog`.
 
-Remaining milestone 2 risks are OEM task reuse for single-task apps, permission
-activities, display lock transitions, coordinate gestures, and restoration when a task moves itself after display release. Virtual-display
+Remaining milestone 2 risks are OEM task reuse for single-task apps, display lock transitions, coordinate gestures, and restoration when a task moves itself after display release. Virtual-display
 windows, screenshots, display-targeted input, IME locality, APP_IN_USE_BY_PERSON,
 stop, EOF and configurable idle were accepted only with the fixture on this
 PGBM10.
