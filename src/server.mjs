@@ -17,10 +17,10 @@ const server = new McpServer(
 );
 const runtime = new AgentDesktopRuntime({ root });
 
-const app = z.string().min(1).describe('App name or full app path; macOS bundle ID; Windows process name, window title fragment, or Start-menu shortcut name; Linux desktop entry name, executable name or window title fragment');
+const app = z.string().min(1).describe('App name or full app path; macOS bundle ID; macOS and Windows pid:<pid>; Windows process name, window title fragment, or Start-menu shortcut name; Linux desktop entry name, executable name or window title fragment');
 const element_index = z.number().int().describe('Element index from the latest returned app state');
 const duration = z.number().finite().min(0).max(30).optional().describe('Seconds to hold before releasing, from 0 to 30. Windows press_key defaults to 0.05 seconds when omitted; explicit 0 remains allowed.');
-const scope = z.number().int().min(1).optional().describe('Windows only for now: element index from the latest returned state. Read only its retained subtree, renumbered from [1], including after actions. If it disappears, return the whole window with a notice. macOS and Linux return INVALID_ARGUMENT.');
+const scope = z.number().int().min(1).optional().describe('macOS and Windows: element index from the latest returned state. Read only its retained subtree, renumbered from [1], including after actions. If it disappears, return the whole window with a notice. Linux returns INVALID_ARGUMENT.');
 const stateOptions = {
   scope,
   disableDiff: z.boolean().optional(),

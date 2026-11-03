@@ -109,6 +109,19 @@ The measurements behind this section are in
   (`TEXT_SELECTION_UNSUPPORTED`); click at the text position instead.
 - A state read occasionally fails once with no accessible window and succeeds on
   the next try.
+- A background-launched macOS app can have normal-layer WindowServer windows but
+  no `AXWindows` yet. The no-window state and `NO_ACCESSIBLE_WINDOW` error explain
+  this and suggest a harmless shortcut such as `super+n` or one activation;
+  neither happens automatically.
+- macOS `scope` reads a retained subtree; if its root disappears or leaves the
+  observed window/menu bar, it falls back to the whole window with a notice.
+  Anonymous web containers with children and only `AXPress` or passive actions
+  fold only when a probe finds another non-static-text element that remains
+  listed. Text-only pressable cards keep their handle; wrappers above them can
+  fold. The probe checks at most 200 descendants per candidate and keeps the
+  wrapper on incomplete reads or budget exhaustion. Extra wrappers may remain,
+  and a retained link, button or article may still have a different action from
+  its wrapper. Native UI does not run the probe; its filtering is unchanged.
 
 ## Safety and privacy
 
