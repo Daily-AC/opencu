@@ -7,6 +7,7 @@ final class Engine {
     private let observer = MacObserver()
     private let input = InputController()
     private var snapshot: WindowSnapshot?
+    private var scopes = ScopeSelection<MacScopeRoot>()
     private let focusGuard = FocusGuard()
     private let agentDisplay = AgentDisplay()
     private var desktopOwner: AgentDesktopController?
@@ -140,9 +141,6 @@ final class Engine {
             presence.beginCall(query: query)
         }
         try requireAllowed(method, screenshot: screenshot)
-        if args["scope"] != nil {
-            throw OpenCUError("INVALID_ARGUMENT", "scope is Windows-only for now.")
-        }
         activeSensitive = ownsDesktop || method == "agent_desktop_start" || PresenceState.requiresPermissionToContinue(method, screenshot: screenshot)
         let task = Task { try await self.perform(method, args) }
         activeTask = task
@@ -181,7 +179,8 @@ final class Engine {
             if let current = snapshot {
                 snapshot = WindowSnapshot(app: current.app, window: current.window, bounds: current.bounds,
                     windowID: current.windowID, elements: current.elements, elementPaths: current.elementPaths,
-                    elementTraits: current.elementTraits, screenshotWidth: nil, screenshotHeight: nil)
+                    elementTraits: current.elementTraits, screenshotWidth: nil, screenshotHeight: nil,
+                    windowIsOpaque: current.windowIsOpaque)
             }
             try await Task.sleep(nanoseconds: ms * 1_000_000)
             return ["ok": true]
@@ -220,6 +219,24 @@ final class Engine {
             try await Task.sleep(nanoseconds: 250_000_000)
         }
         if method == "get_app_state" || method == "activate_app" {
+            let scope: ScopeSelection<MacScopeRoot>.Selection?
+            if args["scope"] != nil {
+                let index = try finiteNumber(args, "scope")
+                guard index >= 1, index < Double(Int.max), index.rounded(.towardZero) == index else {
+                    throw OpenCUError("INVALID_ARGUMENT", "scope must be a positive integer.")
+                }
+                var elements: [Int: MacScopeRoot] = [:]
+                if let current = snapshot, current.app.pid == app.pid, current.app.id == app.id,
+                   current.app.application.launchDate == app.application.launchDate,
+                   let element = current.elements[Int(index)], let path = current.elementPaths[Int(index)] {
+                    elements[Int(index)] = MacScopeRoot(identity: AXIdentity(element), path: path, windowIsOpaque: current.isOpaque)
+                }
+                scope = scopes.select(index: Int(index), request: args["scopeRequest"] as? String,
+                    app: "\(app.pid):\(String(describing: app.application.launchDate)):\(query)", elements: elements)
+            } else {
+                scopes.clearRequest()
+                scope = nil
+            }
             // A failed read must not leave a previous window usable for input.
             snapshot = nil
             observer.willObserveWindow = { [weak self] window in
@@ -232,7 +249,7 @@ final class Engine {
             } : nil
             defer { observer.requireWindowAllowed = nil }
             let observedGeneration = ownsDesktop ? desktop.state.generation : nil
-            let state = try await observer.observe(app, includeScreenshot: admitted && (args["includeScreenshot"] as? Bool ?? false), reduced: ownsDesktop && !admitted)
+            let state = try await observer.observe(app, includeScreenshot: admitted && (args["includeScreenshot"] as? Bool ?? false), reduced: ownsDesktop && !admitted, scope: scope)
             if let observedGeneration { try desktop.state.requireGeneration(observedGeneration) }
             presence.observed(state.snapshot)
             var result = state.json
@@ -255,7 +272,7 @@ final class Engine {
         snapshot = WindowSnapshot(app: current.app, window: current.window, bounds: current.bounds,
                                   windowID: current.windowID, elements: current.elements, elementPaths: current.elementPaths,
                                   elementTraits: current.elementTraits,
-                                  screenshotWidth: nil, screenshotHeight: nil)
+                                  screenshotWidth: nil, screenshotHeight: nil, windowIsOpaque: current.windowIsOpaque)
         presence.badge(method: method, args: args, snapshot: current)
         focusGuard.protect(target: app.pid)
         let effect = try await input.perform(method: method, args: args, snapshot: current)

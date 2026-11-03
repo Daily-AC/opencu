@@ -18,6 +18,27 @@ def main() -> int:
     # Compile the real production logic, excluding the CLI entry point and GUI
     # observer. The test runner never posts events or accesses the clipboard.
     with tempfile.TemporaryDirectory(prefix="opencu-native-tests-") as directory:
+        tree_filter = Path(directory) / "tree-filter-tests"
+        subprocess.run([
+            "xcrun", "swiftc", "-parse-as-library",
+            str(sources / "TreeFilter.swift"),
+            str(root / "tests/tree-filter.swift"), "-o", str(tree_filter),
+        ], cwd=root, check=True)
+        subprocess.run([str(tree_filter)], cwd=root, check=True, timeout=30)
+        app_target = Path(directory) / "app-target-tests"
+        subprocess.run([
+            "xcrun", "swiftc", "-parse-as-library",
+            str(sources / "AppTarget.swift"),
+            str(root / "tests/app-target.swift"), "-o", str(app_target),
+        ], cwd=root, check=True)
+        subprocess.run([str(app_target)], cwd=root, check=True, timeout=30)
+        scope_selection = Path(directory) / "scope-selection-tests"
+        subprocess.run([
+            "xcrun", "swiftc", "-parse-as-library",
+            str(sources / "ScopeSelection.swift"),
+            str(root / "tests/scope-selection.swift"), "-o", str(scope_selection),
+        ], cwd=root, check=True)
+        subprocess.run([str(scope_selection)], cwd=root, check=True, timeout=30)
         transport = Path(directory) / "worker-transport-tests"
         subprocess.run([
             "xcrun", "swiftc", "-parse-as-library",

@@ -22,6 +22,39 @@ a handful of real tasks. Read [Limitations](limitations.md) before relying on it
 - **Reads menus without opening them**, and reads web content in Chrome-family
   browsers and Electron apps.
 
+## Reading a subtree or a specific app instance
+
+Pass `scope` with an element number from the latest state to read only that
+element's subtree, numbered again from `[1]`. Input tools and `run_actions` accept
+the same option for their final state. Actions use the latest returned numbers;
+scope keeps the original element object across polling and retries. If that object
+disappears or leaves the observed window/menu bar, the result shows the whole
+window with a notice. Omit `scope` to read the whole window again. Screenshots and
+their coordinates still cover the window, not the subtree.
+
+Within web areas, anonymous containers with children and only `AXPress` or passive
+actions fold only when their subtree has another non-static-text element that
+will remain listed. A pressable card containing only text keeps its indexed click
+handle; wrappers above that card can fold. Ordinary anonymous layout is not a
+replacement handle. Each candidate checks at most 200 descendants; an incomplete
+probe keeps the container. Probe attributes and child lists are cached for the
+main walk. Native interfaces do not run this probe and keep their existing
+filtering. A retained link, button or article is not proof that its action equals
+the wrapper's own click handler: a wrapper with a distinct action can still lose
+its indexed target. A destination beyond the probe budget can leave extra
+wrappers listed. Screenshots and coordinate input remain available.
+
+Use `app: "pid:123"` to select one running instance when names, bundle IDs or paths
+are ambiguous. `list_apps` retains its existing fields and adds `pidTargets`, a
+list such as `["pid:123", "pid:456"]`, for running instances grouped by app path.
+PID targets never launch an app; a process that has exited returns
+`APP_NOT_RUNNING`. OpenCU's own process remains an invalid target.
+
+Some background-launched apps have WindowServer windows before they publish
+`AXWindows`. The no-window state and `NO_ACCESSIBLE_WINDOW` input error identify
+this condition and suggest a shortcut such as `super+n` or one activation. OpenCU
+does not perform either step automatically.
+
 ## Requirements
 
 - Apple silicon Mac with macOS 14 or later. Developed on macOS 26.6 and also run

@@ -235,7 +235,7 @@ export class OpenCURuntime {
         throw Object.assign(new Error(this.#agentDesktop ? 'The agent desktop changed. Read fresh app state before input; no operation was retried.' : 'The engine timed out and must restart. Read fresh app state before input; no operation was retried.'), { code: 'OBSERVATION_REQUIRED' });
       }
       if (args.scope !== undefined) {
-        if (this.#platform !== 'win32') throw Object.assign(new Error('scope is Windows-only for now.'), { code: 'INVALID_ARGUMENT' });
+        if (this.#platform !== 'win32' && this.#platform !== 'darwin') throw Object.assign(new Error('scope is not supported on Linux yet.'), { code: 'INVALID_ARGUMENT' });
         if (!Number.isSafeInteger(args.scope) || args.scope < 1) throw Object.assign(new Error('scope must be a positive integer.'), { code: 'INVALID_ARGUMENT' });
       }
       this.#coordinates.before(method, args);

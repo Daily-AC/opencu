@@ -24,6 +24,18 @@ struct TargetApp {
     var json: [String: Any] { ["id": id, "displayName": name, "pid": Int(pid), "isActive": isFrontmost] }
 }
 
+/// A background-launched window may exist before the app publishes AXWindows.
+/// This is a diagnostic only: do not activate the app or send a shortcut here.
+func unexposedWindowHint(_ pid: pid_t) -> String? {
+    guard axWindows(AXUIElementCreateApplication(pid)).isEmpty,
+          let windows = CGWindowListCopyWindowInfo(.optionAll, kCGNullWindowID) as? [[String: Any]],
+          windows.contains(where: {
+              ($0[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == pid
+                  && ($0[kCGWindowLayer as String] as? NSNumber)?.intValue == 0
+          }) else { return nil }
+    return "AXWindows is empty, but WindowServer lists normal-layer windows for this app. To make a window accessible, press a harmless key such as super+n in the app, or activate it once."
+}
+
 struct WindowSnapshot {
     let app: TargetApp
     let window: AXUIElement?
@@ -34,9 +46,12 @@ struct WindowSnapshot {
     let elementTraits: [Int: ObservedElementTraits]
     let screenshotWidth: Int?
     let screenshotHeight: Int?
+    // Scoping must not turn an opaque window's title-bar subtree into permission
+    // for background pointer/keyboard input.
+    var windowIsOpaque: Bool? = nil
 
     var isOpaque: Bool {
-        observedWindowIsOpaque(window: window.map(AXIdentity.init),
+        windowIsOpaque ?? observedWindowIsOpaque(window: window.map(AXIdentity.init),
                                elements: elements.mapValues(AXIdentity.init),
                                paths: elementPaths.mapValues { $0.map(AXIdentity.init) },
                                traits: elementTraits)
@@ -47,11 +62,21 @@ struct Observation {
     let text: String
     let screenshot: [String: Any]?
     let snapshot: WindowSnapshot
+    var scopeRoot: String? = nil
     var json: [String: Any] {
         var value: [String: Any] = ["text": text, "app": snapshot.app.json]
         if let screenshot { value["screenshot"] = screenshot }
+        if let scopeRoot { value["scopeRoot"] = scopeRoot }
         return value
     }
+}
+
+struct MacScopeRoot: Hashable {
+    let identity: AXIdentity
+    let path: [AXUIElement]
+    let windowIsOpaque: Bool
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.identity == rhs.identity }
+    func hash(into hasher: inout Hasher) { hasher.combine(identity) }
 }
 
 /// Menu state or an unconfirmed AX action. An unknown outcome requires a new read.

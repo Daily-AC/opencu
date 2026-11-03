@@ -358,15 +358,15 @@ test('waitForText ignores all headers and summaries but matches numbered element
   assert.ok(!(await f.call('get_app_state', { app: 'Fixture', waitForText: 'ElementOnly', waitTimeoutMs: 0 })).isError);
 });
 
-test('scope is rejected before input on macOS', async t => {
-  const f = await fixture(t, [], 'darwin');
+test('scope is rejected before input on Linux', async t => {
+  const f = await fixture(t, [], 'linux');
   for (const [method, args] of [
     ['get_app_state', {}], ['click', { element_index: 2 }],
     ['run_actions', { actions: [{ method: 'type_text', text: 'never' }] }],
   ]) {
     const result = await f.call(method, { app: 'Fixture', scope: 1, ...args });
     assert.equal(result._meta['opencu/error'], 'INVALID_ARGUMENT');
-    assert.match(result.content[0].text, /Windows-only/);
+    assert.match(result.content[0].text, /scope is not supported on Linux yet/);
   }
   assert.deepEqual(await f.calls(), []);
 });
@@ -568,4 +568,91 @@ test('failure of an extra requested pattern observation remains unknown with the
   assert.match(result.content[0].text, /was dispatched/);
   assert.equal(result.content[1].text, state.text);
   assert.deepEqual((await f.calls()).map(x => x.method), ['click', 'get_app_state']);
+});
+
+
+// macOS protocol tests use a fake engine; native AX acceptance is separate.
+test('macOS: scope reaches final reads and stays anchored across polling and retry', async t => {
+  const scoped = { ...state, scopeRoot: 'live:root-9', text: '[1] Pane title="Panel"\n  [2] Text title="Ready"' };
+  const f = await fixture(t, [
+    { result: { ok: true } }, { result: scoped },
+    { error: { code: 'SCREENSHOT_FAILED', message: 'fixture transient' } },
+    { result: { ...scoped, text: '[1] Pane title="Panel"' } }, { result: scoped },
+    { result: { ok: true } }, { result: scoped },
+  ], 'darwin');
+  await f.call('click', { app: 'Fixture', element_index: 2, scope: 9 });
+  const result = await f.call('get_app_state', { app: 'Fixture', scope: 1, waitForText: 'Ready' });
+  assert.ok(!result.isError);
+  await f.call('run_actions', { app: 'Fixture', scope: 1, actions: [{ method: 'type_text', text: 'x' }] });
+  const calls = await f.calls();
+  assert.equal(calls[0].params.scope, undefined, 'scope only controls the final read');
+  assert.equal(calls[1].params.scope, 9);
+  assert.equal(calls[6].params.scope, 1);
+  assert.equal(calls[2].params.scopeRequest, calls[3].params.scopeRequest);
+  assert.equal(calls[3].params.scopeRequest, calls[4].params.scopeRequest);
+  assert.notEqual(calls[1].params.scopeRequest, calls[2].params.scopeRequest);
+});
+
+test('macOS: diff never crosses full, scoped, different root or gone-root states', async t => {
+  const results = [undefined, 'live:a', 'live:b', 'live:b', 'gone:b', undefined].map(scopeRoot => ({ result: { ...state, scopeRoot } }));
+  const f = await fixture(t, results, 'darwin');
+  for (let i = 0; i < results.length; i++) {
+    const result = await f.call('get_app_state', { app: 'Fixture', ...(i > 0 && i < 5 ? { scope: 1 } : {}) });
+    assert.equal(result.content[0].text.includes('No accessibility changes'), i === 3);
+  }
+});
+
+test('macOS: a gone scope is a successful action final read with full fallback state', async t => {
+  const fallback = { ...state, scopeRoot: 'gone:a', text: state.text + '\nScope element is gone; showing the whole window.' };
+  const f = await fixture(t, [{ result: { ok: true } }, { result: fallback }], 'darwin');
+  const result = await f.call('click', { app: 'Fixture', element_index: 2, scope: 1 });
+  assert.ok(!result.isError);
+  assert.equal(result.content[0].text, fallback.text);
+  assert.equal((await f.calls()).length, 2);
+});
+
+
+test('macOS: gone-scope fallback cannot satisfy waitForText with text outside the retained subtree', async t => {
+  const fallback = { ...state, scopeRoot: 'gone:a', text: state.text + '\nScope element is gone; showing the whole window.\n[3] Text title="Outside ready"' };
+  const f = await fixture(t, [{ result: fallback }], 'darwin');
+  const result = await f.call('get_app_state', { app: 'Fixture', scope: 1, waitForText: 'Outside ready', waitTimeoutMs: 0 });
+  assert.equal(result._meta['opencu/error'], 'WAIT_TIMEOUT');
+  assert.ok(result.content.some(c => c.text?.includes('Scope element is gone')));
+});
+
+test('macOS: every input tool and batch retains scope for its final read', async t => {
+  // Synthetic PNG header: the transport guard only needs fixture dimensions.
+  const png = Buffer.alloc(24);
+  png.set([137, 80, 78, 71, 13, 10, 26, 10]);
+  png.writeUInt32BE(100, 16); png.writeUInt32BE(100, 20);
+  const imageState = { ...state, screenshot: { data: png.toString('base64'), mimeType: 'image/png' } };
+  const scoped = { ...state, scopeRoot: 'live:root-9' };
+  const actions = [
+    { method: 'click', element_index: 2 },
+    { method: 'drag', from_x: 1, from_y: 1, to_x: 2, to_y: 2 },
+    { method: 'press_key', key: 'Return' },
+    { method: 'type_text', text: 'fixture' },
+    { method: 'paste', text: 'fixture', format: 'text' },
+    { method: 'scroll', element_index: 2, direction: 'down' },
+    { method: 'set_value', element_index: 2, value: 'fixture' },
+    { method: 'select_text', element_index: 2, text: 'fixture' },
+    { method: 'perform_secondary_action', element_index: 2, action: 'AXPress' },
+  ];
+  for (const action of actions) {
+    for (const batch of [false, true]) {
+      const f = await fixture(t, [{ result: imageState }, { result: { ok: true } }, { result: scoped }], 'darwin');
+      await f.call('get_app_state', { app: 'pid:123', includeScreenshot: true });
+      const { method, ...args } = action;
+      const result = await f.call(batch ? 'run_actions' : method,
+        { app: 'pid:123', scope: 9, ...(batch ? { actions: [action] } : args) });
+      assert.ok(!result.isError, `${method}, batch=${batch}: ${JSON.stringify(result)}`);
+      const calls = await f.calls();
+      assert.deepEqual(calls.map(c => c.method), ['get_app_state', method, 'get_app_state']);
+      assert.equal(calls[1].params.scope, undefined);
+      assert.equal(calls[1].params.element_index, action.element_index);
+      assert.equal(calls[2].params.app, 'pid:123');
+      assert.equal(calls[2].params.scope, 9);
+      assert.match(calls[2].params.scopeRequest, /^\d+$/);
+    }
+  }
 });

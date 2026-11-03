@@ -115,7 +115,8 @@ final class InputController {
 
     private func requireTextWindow(_ snapshot: WindowSnapshot) throws {
         guard snapshot.window != nil else {
-            throw OpenCUError("NO_ACCESSIBLE_WINDOW", "Typing and paste require a window; use a menu command or press_key shortcut to open one")
+            throw OpenCUError("NO_ACCESSIBLE_WINDOW", unexposedWindowHint(snapshot.app.pid)
+                ?? "Typing and paste require a window; use a menu command or press_key shortcut to open one")
         }
     }
 

@@ -85,6 +85,7 @@ final class MacObserver {
             var pids = record["pids"] as? [Int] ?? []
             pids.append(Int(target.pid))
             record["pids"] = pids.sorted()
+            record["pidTargets"] = pids.sorted().map { "pid:\($0)" }
             if pids.count == 1 { record["pid"] = Int(target.pid) }
             else { record.removeValue(forKey: "pid") }
             records[key] = record
@@ -99,7 +100,19 @@ final class MacObserver {
 
     func resolveApp(_ identifier: String, launch: Bool = true) async throws -> TargetApp {
         let query = identifier.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { throw OpenCUError("INVALID_ARGUMENT", "app must be a nonempty name, bundle identifier, or application path.") }
+        guard !query.isEmpty else { throw OpenCUError("INVALID_ARGUMENT", "app must be a nonempty name, bundle identifier, application path, or pid:<pid>.") }
+        if query.hasPrefix("pid:") {
+            guard let pid = AppTarget.processID(query) else {
+                throw OpenCUError("INVALID_ARGUMENT", "app pid:<pid> must contain a positive decimal process ID.")
+            }
+            guard let application = NSRunningApplication(processIdentifier: pid), !application.isTerminated else {
+                throw OpenCUError("APP_NOT_RUNNING", "No running application has process ID \(pid).")
+            }
+            guard pid != getpid(), application.bundleIdentifier != "dev.opencu.engine" else {
+                throw OpenCUError("INVALID_TARGET", "OpenCU's own interface is reserved for the person and cannot be targeted.")
+            }
+            return TargetApp(application: application)
+        }
         let running = workspace.runningApplications.filter { !$0.isTerminated }
         if query.contains("/") {
             let url = canonicalURL(URL(fileURLWithPath: (query as NSString).expandingTildeInPath))
@@ -150,25 +163,29 @@ final class MacObserver {
         }
     }
 
-    func observe(_ app: TargetApp, includeScreenshot: Bool, reduced: Bool = false) async throws -> Observation {
+    func observe(_ app: TargetApp, includeScreenshot: Bool, reduced: Bool = false,
+                 scope: ScopeSelection<MacScopeRoot>.Selection? = nil) async throws -> Observation {
         try requireAccessibility()
         guard !app.application.isTerminated else { throw OpenCUError("APP_NOT_RUNNING", "\(app.name) is no longer running. Resolve the application again.") }
         let application = AXUIElementCreateApplication(app.pid)
         AXUIElementSetMessagingTimeout(application, 1)
         try await requestWebAccessibility(application, app)
         guard let window = try await observedWindow(application) else {
+            let scopePath = liveScopePath(scope?.root, window: nil, application: application)
             let tree = accessibilityTree(window: nil, bounds: .zero, application: application, focused: nil,
-                                         expanded: expandedMenusPID == app.pid ? expandedMenus : [])
+                                         expanded: expandedMenusPID == app.pid ? expandedMenus : [], scopePath: scopePath)
             guard axSelectedWindow(application) == nil, axWindows(application).isEmpty else {
                 throw OpenCUError("WINDOW_CHANGED", "A window appeared while observing the application; read its state again")
             }
-            let note = "No accessible window is open. Use the menu bar or press_key shortcuts (for example Cmd+N or Cmd+O) to open one. Screenshots, coordinate input, typing and paste require a window."
-            return Observation(text: (["App: \(quoted(app.name)) (\(app.id), pid \(app.pid), \(app.isFrontmost ? "foreground" : "background"))", note] + tree.lines).joined(separator: "\n"),
+            let note = unexposedWindowHint(app.pid) ?? "No accessible window is open. Use the menu bar or press_key shortcuts (for example Cmd+N or Cmd+O) to open one. Screenshots, coordinate input, typing and paste require a window."
+            let scopeNote = scope != nil && scopePath == nil ? ["Scope element is gone; showing the whole window."] : []
+            return Observation(text: (["App: \(quoted(app.name)) (\(app.id), pid \(app.pid), \(app.isFrontmost ? "foreground" : "background"))", note] + scopeNote + tree.lines).joined(separator: "\n"),
                                screenshot: nil,
                                snapshot: WindowSnapshot(app: app, window: nil, bounds: .zero, windowID: nil,
                                                         elements: tree.elements, elementPaths: tree.paths,
                                                         elementTraits: tree.traits,
-                                                        screenshotWidth: nil, screenshotHeight: nil))
+                                                        screenshotWidth: nil, screenshotHeight: nil),
+                               scopeRoot: scope.map { "\(scopePath == nil ? "gone" : "live"):\($0.identity)" })
         }
         let measuredBounds = axRect(window).flatMap { usableBounds($0) ? $0 : nil }
         let bounds = try AgentDesktopAdmissionPolicy.readBounds(measuredBounds, reduced: reduced)
@@ -180,11 +197,13 @@ final class MacObserver {
                                           screenshotWidth: nil, screenshotHeight: nil))
         let windowTitle = axString(window, kAXTitleAttribute) ?? ""
         let focused = elementAttribute(application, kAXFocusedUIElementAttribute)
+        let scopePath = liveScopePath(scope?.root, window: window, application: application)
         let tree = accessibilityTree(window: window, bounds: reduced && measuredBounds == nil ? .infinite : bounds, application: application, focused: focused,
-                                     expanded: expandedMenusPID == app.pid ? expandedMenus : [])
+                                     expanded: expandedMenusPID == app.pid ? expandedMenus : [], scopePath: scopePath)
         var lines = ["App: \(quoted(app.name)) (\(app.id), pid \(app.pid), \(app.isFrontmost ? "foreground" : "background"))",
                      "Window: \(quoted(windowTitle))",
                      "Window bounds: x=\(bounds.minX), y=\(bounds.minY), width=\(bounds.width), height=\(bounds.height) points."]
+        if scope != nil && scopePath == nil { lines.append("Scope element is gone; showing the whole window.") }
         lines.append(contentsOf: tree.lines)
         let presentation = windowID.flatMap(windowPresentation)
         // Visibility is not a capture capability test: Blender can retain a
@@ -194,7 +213,7 @@ final class MacObserver {
             lines.append("This window is not on screen (hidden by Stage Manager or the app, or on another Space). \(limits). Keyboard input may not arrive; reading and exposed AX actions remain available. Use activate_app for steps that need more.")
         } else if let presentation, abs(presentation.size.width - bounds.width) > 1 || abs(presentation.size.height - bounds.height) > 1 {
             lines.append("Stage Manager shows this window only as a \(presentation.size.width) x \(presentation.size.height) point thumbnail. \(limits). Keyboard delivery depends on the app; reading and exposed AX actions remain available. Use activate_app for steps that need more.")
-        } else if !tree.webContent, let url = app.application.bundleURL, isChromium(url) {
+        } else if scopePath == nil, !tree.webContent, let url = app.application.bundleURL, isChromium(url) {
             lines.append("Web content unavailable: Chromium does not render pages in a fully covered window, so only browser controls are exposed. Use activate_app or keep the window visible, then read the state again.")
         }
 
@@ -221,11 +240,44 @@ final class MacObserver {
         }
         let snapshot = WindowSnapshot(app: app, window: window, bounds: bounds, windowID: windowID,
                                       elements: tree.elements, elementPaths: tree.paths, elementTraits: tree.traits,
-                                      screenshotWidth: width, screenshotHeight: height)
+                                      screenshotWidth: width, screenshotHeight: height,
+                                      windowIsOpaque: scopePath == nil ? nil : scope?.root?.windowIsOpaque)
         if !app.isFrontmost, snapshot.isOpaque {
             lines.append("Background pointer and keyboard input is unsupported for this custom-drawn window (BACKGROUND_INPUT_UNSUPPORTED). Only title-bar decorations are accessible, so the engine cannot verify where input lands. Use activate_app explicitly, then read the state before input. Exposed AX actions remain available.")
         }
-        return Observation(text: lines.joined(separator: "\n"), screenshot: screenshot, snapshot: snapshot)
+        return Observation(text: lines.joined(separator: "\n"), screenshot: screenshot, snapshot: snapshot,
+                           scopeRoot: scope.map { "\(scopePath == nil ? "gone" : "live"):\($0.identity)" })
+    }
+
+    /// Validate the retained object and its live attachment. Keep the full path
+    /// for input validation, even though the listing starts at the scope root.
+    private func liveScopePath(_ root: MacScopeRoot?, window: AXUIElement?, application: AXUIElement) -> [AXUIElement]? {
+        guard let root else { return nil }
+        let element = root.identity.element
+        AXUIElementSetMessagingTimeout(element, 0.5)
+        var role: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &role) == .success,
+              role != nil else { return nil }
+        let roots = [window, elementAttribute(application, kAXMenuBarAttribute)].compactMap { $0 }
+        if root.path.last.map({ CFEqual($0, element) }) == true,
+           attachedPath(root.path, to: roots, equal: { CFEqual($0, $1) }, children: axChildren) {
+            return root.path
+        }
+        // An app may reparent the same object. Follow that object, never a new
+        // traversal index; only the currently observed window/menu bar qualifies.
+        var path = [element]
+        var seen: Set<AXIdentity> = [root.identity]
+        let deadline = Date().addingTimeInterval(2)
+        while let current = path.last, path.count <= maximumNesting + 1, Date() < deadline {
+            if roots.contains(where: { CFEqual($0, current) }) {
+                let forward = Array(path.reversed())
+                return attachedPath(forward, to: roots, equal: { CFEqual($0, $1) }, children: axChildren) ? forward : nil
+            }
+            guard let parent = elementAttribute(current, kAXParentAttribute), seen.insert(AXIdentity(parent)).inserted else { break }
+            AXUIElementSetMessagingTimeout(parent, 0.5)
+            path.append(parent)
+        }
+        return nil
     }
 
     private func resolveURL(_ url: URL, running: [NSRunningApplication], launch: Bool) async throws -> TargetApp {
@@ -249,13 +301,13 @@ final class MacObserver {
 
     private func uniqueRunningApp(_ applications: [NSRunningApplication], query: String) throws -> TargetApp {
         guard applications.count == 1 else {
-            throw OpenCUError("AMBIGUOUS_APP", "Multiple running applications match \(quoted(query)). Use a full application path or close the extra instances. Matching process IDs: \(applications.map { String($0.processIdentifier) }.joined(separator: ", ")).")
+            throw OpenCUError("AMBIGUOUS_APP", "Multiple running applications match \(quoted(query)). Use a full application path or close the extra instances. Matching process IDs: \(applications.map { String($0.processIdentifier) }.joined(separator: ", ")), or pass pid:<pid>.")
         }
         return TargetApp(application: applications[0])
     }
 
     private func ambiguousApplication(_ query: String, urls: [URL]) -> OpenCUError {
-        OpenCUError("AMBIGUOUS_APP", "Multiple applications match \(quoted(query)). Specify a full path: \(urls.map(\.path).sorted().joined(separator: "; ")).")
+        OpenCUError("AMBIGUOUS_APP", "Multiple applications match \(quoted(query)). Specify a full path: \(urls.map(\.path).sorted().joined(separator: "; ")), or pass pid:<pid>.")
     }
 
     private func installedApplications() -> [URL] {
@@ -310,8 +362,8 @@ final class MacObserver {
                                  kAXIdentifierAttribute, "AXPlaceholderValue", kAXEnabledAttribute, kAXSelectedAttribute,
                                  kAXExpandedAttribute, kAXPositionAttribute, kAXSizeAttribute,
                                  kAXRoleDescriptionAttribute] as CFArray
-        static let containers: Set<String> = [kAXGroupRole, kAXUnknownRole, kAXSplitGroupRole, "AXLayoutArea", "AXLayoutItem"]
-        static let passiveActions: Set<String> = ["AXShowMenu", "AXScrollToVisible"]
+        static let containers = TreeFilter.containers
+        static let passiveActions = TreeFilter.passiveActions
         static let editable: Set<String> = [kAXTextFieldRole, kAXTextAreaRole, kAXComboBoxRole]
 
         let role: String
@@ -322,6 +374,7 @@ final class MacObserver {
         let enabled, selected, expanded: Bool?
         let frame: CGRect?
         let actions: [String]
+        let attributesAvailable: Bool
 
         /// One IPC round trip for the attributes, one for the actions.
         init(_ element: AXUIElement) {
@@ -329,10 +382,11 @@ final class MacObserver {
             var values = [AnyObject?](repeating: nil, count: CFArrayGetCount(Self.attributes))
             if AXUIElementCopyMultipleAttributeValues(element, Self.attributes, AXCopyMultipleAttributeOptions(rawValue: 0), &raw) == .success,
                let array = raw as? [AnyObject], array.count == values.count {
+                attributesAvailable = true
                 values = array.map { value in
                     CFGetTypeID(value) == AXValueGetTypeID() && AXValueGetType(value as! AXValue) == .axError ? nil : value
                 }
-            }
+            } else { attributesAvailable = false }
             let text = { (index: Int) in (values[index] as? String).flatMap { $0.isEmpty ? nil : $0 } }
             role = values[0] as? String ?? "AXUnknown"
             title = text(1); description = text(2); identifier = text(4); placeholder = text(5)
@@ -369,10 +423,18 @@ final class MacObserver {
             return kind != nil || title != nil || description != nil || identifier != nil || placeholder != nil
                 || valueText != nil || actions.contains { !Self.passiveActions.contains($0) }
         }
+
+        var anonymousContainer: Bool {
+            TreeFilter.anonymousContainer(role: role, hasTitle: title != nil,
+                hasDescription: description != nil, hasIdentifier: identifier != nil,
+                hasPlaceholder: placeholder != nil,
+                hasValue: value.map { ($0 as? String)?.isEmpty != true } ?? false,
+                hasKind: kind != nil, actions: actions)
+        }
     }
 
     private func accessibilityTree(window: AXUIElement?, bounds: CGRect, application: AXUIElement, focused: AXUIElement?,
-                                   expanded: Set<AXIdentity>) -> (lines: [String], elements: [Int: AXUIElement], paths: [Int: [AXUIElement]], traits: [Int: ObservedElementTraits], webContent: Bool) {
+                                   expanded: Set<AXIdentity>, scopePath: [AXUIElement]? = nil) -> (lines: [String], elements: [Int: AXUIElement], paths: [Int: [AXUIElement]], traits: [Int: ObservedElementTraits], webContent: Bool) {
         var lines: [String] = []
         var elements: [Int: AXUIElement] = [:]
         var paths: [Int: [AXUIElement]] = [:]
@@ -380,37 +442,95 @@ final class MacObserver {
         var indexes: [AXIdentity: Int] = [:]
         var webContent = false
         var inspected = Set<AXIdentity>()
-        // Element, printed depth, nesting depth, menu bar membership, and the
-        // nearest printed ancestor's label.
-        var pending: [(AXUIElement, Int, Int, Bool, String?, [AXUIElement])] = []
-        if let menuBar = elementAttribute(application, kAXMenuBarAttribute) { pending.append((menuBar, 0, 0, true, nil, [menuBar])) }
-        if let window { pending.append((window, 0, 0, false, nil, [window])) }
+        // Element, printed depth, nesting depth, menu bar membership, nearest
+        // printed ancestor's label, full attachment path and web area membership.
+        var pending: [(AXUIElement, Int, Int, Bool, String?, [AXUIElement], Bool)] = []
+        if let scopePath, let root = scopePath.last {
+            let inMenuBar = scopePath.first.map { axString($0, kAXRoleAttribute) == kAXMenuBarRole } ?? false
+            webContent = scopePath.dropLast().contains { axString($0, kAXRoleAttribute) == "AXWebArea" }
+            pending.append((root, 0, 0, inMenuBar, nil, scopePath, webContent))
+        } else {
+            if let menuBar = elementAttribute(application, kAXMenuBarAttribute) { pending.append((menuBar, 0, 0, true, nil, [menuBar], false)) }
+            if let window { pending.append((window, 0, 0, false, nil, [window], false)) }
+        }
         let focusedIdentity = focused.map(AXIdentity.init)
         let deadline = Date().addingTimeInterval(4)
+        // One observation-local cache serves lookahead and the printed walk.
+        // Child arrays are prefixes: a later, larger walk reads only the suffix.
+        var nodeCache: [AXIdentity: AXNode] = [:]
+        var childCounts: [AXIdentity: Int] = [:] // -1 records a failed count read.
+        var childCache: [AXIdentity: [AXUIElement]] = [:]
+        var closedChildLists = Set<AXIdentity>()
+        func readNode(_ element: AXUIElement) -> AXNode? {
+            let id = AXIdentity(element)
+            if let cached = nodeCache[id] { return cached }
+            guard nodeCache.count < maximumInspected, Date() < deadline else { return nil }
+            AXUIElementSetMessagingTimeout(element, 0.5)
+            let node = AXNode(element)
+            nodeCache[id] = node
+            return node
+        }
+        func readChildCount(_ element: AXUIElement) -> Int {
+            let id = AXIdentity(element)
+            if let cached = childCounts[id] { return cached }
+            var count: CFIndex = 0
+            if AXUIElementGetAttributeValueCount(element, kAXChildrenAttribute as CFString, &count) != .success { count = -1 }
+            childCounts[id] = count
+            return count
+        }
+        func readChildren(_ element: AXUIElement, _ count: Int) -> [AXUIElement] {
+            let id = AXIdentity(element)
+            var cached = childCache[id] ?? []
+            if cached.count < count, !closedChildLists.contains(id) {
+                var values: CFArray?
+                let missing = count - cached.count
+                if AXUIElementCopyAttributeValues(element, kAXChildrenAttribute as CFString, cached.count, missing, &values) == .success,
+                   let suffix = values as? [AXUIElement] {
+                    cached.append(contentsOf: suffix)
+                    if suffix.count < missing { closedChildLists.insert(id) }
+                } else { closedChildLists.insert(id) }
+                childCache[id] = cached
+            }
+            return Array(cached.prefix(count))
+        }
+        func filterNode(_ id: AXIdentity) -> TreeFilter.Node? {
+            guard Date() < deadline, let node = readNode(id.element), node.attributesAvailable else { return nil }
+            let count = readChildCount(id.element)
+            return TreeFilter.Node(role: node.role, informative: node.informative,
+                anonymousContainer: node.anonymousContainer, childCount: count < 0 ? nil : count)
+        }
         var characters = 0
         var outside = 0
         var nestingLimited = false
         var childListLimited = false
         var stopReason: String?
-        while let (element, depth, nesting, inMenuBar, label, path) = pending.popLast() {
+        while let (element, depth, nesting, inMenuBar, label, path, inWebArea) = pending.popLast() {
             let identity = AXIdentity(element)
             guard inspected.insert(identity).inserted else { continue }
             if elements.count >= maximumElements { stopReason = "\(maximumElements) element limit"; break }
             if inspected.count > maximumInspected { stopReason = "\(maximumInspected) inspected element limit"; break }
             if Date() >= deadline { stopReason = "4 second traversal limit"; break }
-            AXUIElementSetMessagingTimeout(element, 0.5)
-            let node = AXNode(element)
+            guard let node = readNode(element) else {
+                stopReason = Date() >= deadline ? "4 second traversal limit" : "\(maximumInspected) inspected element limit"
+                break
+            }
+            let isScopeRoot = scopePath != nil && nesting == 0
             // Content scrolled outside the window is skipped with its subtree.
             // Menu bar items lie outside every window and are always listed.
-            if !inMenuBar, let frame = node.frame, frame.width > 0, frame.height > 0, !frame.intersects(bounds) {
+            if !inMenuBar, !isScopeRoot, let frame = node.frame, frame.width > 0, frame.height > 0, !frame.intersects(bounds) {
                 outside += 1
                 continue
             }
+            // Do not probe native UI, labelled controls, leaves or the explicit
+            // scope root. The old informative rule still owns ordinary layout.
+            let collapse = !isScopeRoot && inWebArea && node.anonymousContainer
+                && TreeFilter.collapseWebContainer(root: identity, inWebArea: inWebArea,
+                    node: filterNode, children: { id, limit in readChildren(id.element, limit).map(AXIdentity.init) })
             var childDepth = depth
             var childLabel = label
             // A link or button's own text child repeats its label.
             let repeatsLabel = node.role == kAXStaticTextRole && label != nil && node.valueText == label
-            if (node.informative && !repeatsLabel) || identity == focusedIdentity {
+            if isScopeRoot || !collapse && ((node.informative && !repeatsLabel) || identity == focusedIdentity) {
                 let index = elements.count + 1
                 let line = String(repeating: "  ", count: depth) + "[\(index)] " + describe(element, node, focused: focusedIdentity)
                 if characters + line.count > maximumTextCharacters { stopReason = "\(maximumTextCharacters) character limit"; break }
@@ -429,19 +549,17 @@ final class MacObserver {
                node.selected != true, node.expanded != true, !expanded.contains(identity) {
                 continue // Read submenu contents after the caller opens them.
             }
-            var childCount: CFIndex = 0
-            guard AXUIElementGetAttributeValueCount(element, kAXChildrenAttribute as CFString, &childCount) == .success,
-                  childCount > 0 else { continue }
+            let childCount = readChildCount(element)
+            guard childCount > 0 else { continue }
             if node.role == "AXWebArea" { webContent = true }
             if nesting >= maximumNesting {
                 nestingLimited = true
             } else {
                 let count = min(childCount, max(0, maximumInspected - inspected.count - pending.count))
                 childListLimited = childListLimited || count < childCount
-                var values: CFArray?
-                if count > 0, AXUIElementCopyAttributeValues(element, kAXChildrenAttribute as CFString, 0, count, &values) == .success,
-                   let children = values as? [AXUIElement] {
-                    pending.append(contentsOf: children.reversed().map { ($0, childDepth, nesting + 1, inMenuBar, childLabel, path + [$0]) })
+                if count > 0 {
+                    let children = readChildren(element, count)
+                    pending.append(contentsOf: children.reversed().map { ($0, childDepth, nesting + 1, inMenuBar, childLabel, path + [$0], inWebArea || node.role == "AXWebArea") })
                 }
             }
         }
