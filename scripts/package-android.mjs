@@ -19,4 +19,7 @@ const manifest = {
   sha256: createHash('sha256').update(bytes).digest('hex'),
 };
 await import('node:fs/promises').then(fs => fs.writeFile(path.join(output, 'opencu-android.json'), JSON.stringify(manifest) + '\n'));
-console.log(`Wrote dist/opencu-android.jar and dist/opencu-android.json (${bytes.length} bytes)`);
+// The optional companion app ships beside the engine; its certificate is pinned in this jar.
+const companion = path.join(root, '.build/android/opencu-companion.apk');
+await copyFile(companion, path.join(output, 'opencu-companion.apk'));
+console.log(`Wrote dist/opencu-android.jar, dist/opencu-android.json (${bytes.length} bytes) and dist/opencu-companion.apk`);

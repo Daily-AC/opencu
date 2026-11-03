@@ -1,0 +1,10 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="dev.opencu.companion">
+  <!-- Draws the status island and the preview window above other apps. -->
+  <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
+  <!-- Shows the name and icon of the app the agent is using. -->
+  <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"/>
+  <application android:label="OpenCU" android:icon="@mipmap/ic_launcher" android:allowBackup="false" android:hardwareAccelerated="true" android:supportsRtl="true">
+    <!-- Only the engine (Android shell) may call it; the provider checks the caller's uid. -->
+    <provider android:name=".EngineProvider" android:authorities="dev.opencu.companion.engine" android:exported="true"/>
+  </application>
+</manifest>

@@ -215,6 +215,13 @@ The measurements behind this section are in
   transient overlays entirely between reads; OEM permission activities may be
   reported as `app_switched` rather than `system_dialog`.
 
+- The optional companion app (status island, live preview, Stop) was checked on
+  the PGBM10 only. Its overlay permission must be turned on in Settings where an OEM
+  (ColorOS) refuses `appops` from shell. Main-display screenshots include the
+  island. The preview uses a hidden Android 14 mirror-display call. An OEM may
+  freeze or end the app's process; the engine attaches again on its next call.
+  Views that refuse obscured touches ignore taps right under the island.
+
 See [Android behavior and validation](android.md). Fixture acceptance
 does not establish reliable general app coverage.
 

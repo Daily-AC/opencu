@@ -459,6 +459,15 @@ public final class Protocol {
   }
 
   public static Map<String, Object> stopNotice() {
+    return stopNotice(
+        "Three physical volume-down presses. Do not reconnect without explicit permission.");
+  }
+
+  /** The person pressed Stop in the OpenCU companion app on the phone. */
+  public static final String COMPANION_STOP =
+      "The person pressed Stop in the OpenCU app. Do not reconnect without explicit permission.";
+
+  public static Map<String, Object> stopNotice(String message) {
     return obj(
         "jsonrpc",
         "2.0",
@@ -479,8 +488,7 @@ public final class Protocol {
                     "code",
                     "USER_STOPPED",
                     "message",
-                    "Three physical volume-down presses. Do not reconnect without explicit"
-                        + " permission."))));
+                    message))));
   }
 
   private final Backend backend;

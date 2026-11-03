@@ -60,7 +60,9 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
   private boolean sent;
   private OwnedDisplay ownedDisplay;
   private volatile int activeDisplay = Display.DEFAULT_DISPLAY;
-  private int desktopDisplay = -1;
+  private volatile int desktopDisplay = -1;
+  /** The optional companion app on the phone; null in host tests. */
+  private Companion companion;
   private int desktopFlags;
   private long desktopStartedAt;
   private long lastCallAt;
@@ -156,13 +158,60 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     PersonMonitor connectedMonitor = null;
     String problem = "";
     try {
-      connectedMonitor = new PersonMonitor(output, this::lastUserActivityTime);
+      connectedMonitor =
+          new PersonMonitor(
+              notice -> {
+                output.accept(notice);
+                if (companion != null) companion.stopped();
+              },
+              this::lastUserActivityTime);
     } catch (Exception e) {
       problem = e.getMessage();
     }
     monitor = connectedMonitor;
     monitorProblem = problem;
     person = monitor == null ? new Core.Person(SystemClock.uptimeMillis()) : monitor.person;
+    companion =
+        new Companion(
+            context,
+            new Companion.Host() {
+              @Override
+              public int agentDisplay() {
+                return desktopDisplay;
+              }
+
+              @Override
+              public boolean stopped() {
+                return person.isStopped();
+              }
+
+              @Override
+              public void personStop() {
+                if (person.stopByPerson()) output.accept(Protocol.stopNotice(Protocol.COMPANION_STOP));
+                companion.stopped();
+              }
+            },
+            BuildInfo.COMPANION_CERT);
+  }
+
+  /** Looks for the companion app and attaches it in the background, for an MCP connection. */
+  void startCompanion() {
+    if (companion != null) companion.start();
+  }
+
+  /**
+   * Shows what the engine is doing in the companion app, when it is attached. Indexes refer to
+   * {@code base}; typing goes to the field focused in {@code now}, the newest read.
+   */
+  private void show(
+      String tool, Map<String, Object> args, Screen base, Screen now, String app, int step, int steps) {
+    if (companion == null) return;
+    Element target = null;
+    if (base != null && args.get("element_index") instanceof Number)
+      target = base.elements.get(((Number) args.get("element_index")).intValue());
+    else if (now != null && (tool.equals("type_text") || tool.equals("paste")))
+      for (Element e : now.elements.values()) if (e.focused && e.editable) target = e;
+    companion.acting(Core.activity(tool, args, target, app, step, steps));
   }
 
   /**
@@ -220,7 +269,15 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
             "source",
             "getevent -lt (kernel evdev)",
             "lastUserActivityTime",
-            lastUserActivityTime()));
+            lastUserActivityTime()),
+        "companion",
+        companionState());
+  }
+
+  private String companionState() {
+    if (companion == null) return "unavailable";
+    companion.verify();
+    return companion.state();
   }
 
   private long lastUserActivityTime() {
@@ -364,6 +421,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     lastCallAt = desktopStartedAt;
     hidden.put("virtualDisplayFlags", desktopFlags);
     hidden.put("virtualDisplayDisplayFlags", owned.displayFlags);
+    if (companion != null) companion.desktopChanged();
   }
 
   /** Why this connection can no longer read or act: its main connection could not be restored. */
@@ -601,6 +659,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
         // Releasing the owned display remains the safe fallback; it cannot focus display 0.
       }
     }
+    if (companion != null) companion.releasePreview();
     if (ownedDisplay != null) ownedDisplay.release();
     ownedDisplay = null;
     if (desktopAutomation != null) disconnectAutomation(desktopAutomation);
@@ -611,6 +670,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     latest = null;
     coordinates = null;
     observationRequired = false;
+    if (companion != null) companion.desktopChanged();
     restoreMainRoute();
     if (routeLost != null) throw fail("DISPLAY_UNAVAILABLE", routeLost);
   }
@@ -937,6 +997,9 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
       w.top = windowBounds.top;
       w.right = windowBounds.right;
       w.bottom = windowBounds.bottom;
+      // The companion's island is not app state. While the engine works on this display it
+      // takes no touches, so input passes through it to the app below.
+      if (companion != null && companion.owns(w.pkg)) continue;
       if (w.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD) s.keyboard = true;
       s.windows.add(w);
       // Persistent status/navigation bars contain notification icon labels and volatile
@@ -2645,6 +2708,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
       } finally {
         if (!statusCall) lastCallAt = SystemClock.uptimeMillis();
         armIdleTimer();
+        if (companion != null) companion.waiting();
       }
     } finally {
       callLock.unlock();
@@ -2686,9 +2750,15 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     long callStart = SystemClock.uptimeMillis();
     batchDeadline = 0;
     batchChanged = null;
-    if (name.equals("agent_desktop")) return desktopCall(args);
+    if (name.equals("agent_desktop")) {
+      show(name, args, null, null, null, 0, 0);
+      return desktopCall(args);
+    }
     if (routeLost != null) throw fail("DISPLAY_UNAVAILABLE", routeLost);
-    if (name.equals("list_apps")) return apps();
+    if (name.equals("list_apps")) {
+      show(name, args, null, null, null, 0, 0);
+      return apps();
+    }
     Capture cap = coordinates;
     coordinates = null;
     notice = "";
@@ -2698,6 +2768,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     long token = person.token();
     if (!name.equals("get_app_state")) check(token, false);
     String pkg = resolve((String) args.get("app"));
+    if (!name.equals("run_actions")) show(name, args, latest, latest, pkg, 0, 0);
     boolean screenshot = Boolean.TRUE.equals(args.get("includeScreenshot"));
     if (name.equals("get_app_state") || name.equals("activate_app")) {
       boolean inputCall = name.equals("activate_app") || !foreground()[0].equals(pkg);
@@ -2903,6 +2974,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
         }
         started = SystemClock.uptimeMillis();
         waited = 0;
+        show(method, a, base, fence, activePackage, step, actions.size());
         if (method.equals("wait")) {
           long end = SystemClock.uptimeMillis() + ((Number) a.get("ms")).longValue();
           do {
@@ -3068,6 +3140,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
       closed = true;
     }
     if (monitor != null) monitor.close();
+    if (companion != null) companion.close();
     stopCommands(300);
     boolean quiet = false;
     try {

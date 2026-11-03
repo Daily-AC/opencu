@@ -57,6 +57,7 @@ public final class Main {
         System.exit(0);
       }
       stage = "ENGINE_FAILED";
+      engine.startCompanion();
       Protocol protocol = new Protocol(engine, BuildInfo.VERSION);
       // One serialized worker runs every call and the engine's idle timer.
       ScheduledThreadPoolExecutor worker =

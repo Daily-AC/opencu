@@ -1030,6 +1030,17 @@ public final class Core {
       return sequence;
     }
 
+    public synchronized boolean isStopped() {
+      return stopped;
+    }
+
+    /** Latches a stop the person gave outside the input devices; true if it is new. */
+    public synchronized boolean stopByPerson() {
+      if (stopped) return false;
+      stopped = true;
+      return true;
+    }
+
     /**
      * Seeds the last physical activity from the platform once monitoring is live. It replaces the
      * conservative start value, but never hides a touch the monitor has already seen.
@@ -1059,5 +1070,45 @@ public final class Core {
             "The person stopped this connection. Do not reconnect or retry without explicit"
                 + " permission.");
     }
+  }
+
+  /**
+   * What a call or batch step is doing, for the companion app to show the person: the tool and the
+   * few arguments a person needs to follow it, with the target element's visible label. Typed or
+   * set text is shown only for a known editable field that is not a password (cut to 40
+   * characters); otherwise only its length. The app words it in the person's language.
+   */
+  public static Map<String, Object> activity(
+      String tool, Map<String, Object> args, Element target, String app, int step, int steps) {
+    Map<String, Object> a = new LinkedHashMap<>();
+    a.put("tool", tool);
+    if (app != null && !app.isEmpty()) a.put("app", app);
+    if (target != null && !target.password) {
+      String label = !target.text.isEmpty() ? target.text : target.desc;
+      if (!label.isEmpty()) a.put("target", cut(label, 40));
+    }
+    for (String key : new String[] {"direction", "key", "action", "click_count"})
+      if (args.get(key) instanceof String || args.get(key) instanceof Number)
+        a.put(key, args.get(key));
+    if (args.get("duration") instanceof Number && ((Number) args.get("duration")).doubleValue() > 0)
+      a.put("hold", true);
+    Object text = tool.equals("set_value") ? args.get("value") : args.get("text");
+    boolean typing = tool.equals("type_text") || tool.equals("paste") || tool.equals("set_value");
+    if (text instanceof String && typing)
+      if (target != null && !target.password && (target.editable || tool.equals("set_value")))
+        a.put("text", cut((String) text, 40));
+      else a.put("chars", ((String) text).length());
+    if (steps > 0) {
+      a.put("step", step);
+      a.put("steps", steps);
+    }
+    return a;
+  }
+
+  static String cut(String s, int max) {
+    s = s.replaceAll("[\\p{Cntrl}\\s]+", " ").trim();
+    return s.codePointCount(0, s.length()) <= max
+        ? s
+        : s.substring(0, s.offsetByCodePoints(0, max - 1)) + "\u2026";
   }
 }
