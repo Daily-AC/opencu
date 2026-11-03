@@ -7,7 +7,7 @@ it in the person's desktop session, keeps one connection per agent session and
 relays MCP messages without interpreting the tools. OpenCU can then add or change
 tools without a host release.
 
-Status: defined for Windows from v0.3.0 and Linux from v0.6.0. On macOS, local agents start
+Status: defined for Windows from v0.3.0, Linux from v0.6.0, and Android milestones 1–2. On macOS, local agents start
 `bin/opencu` directly; a macOS install manifest is not defined yet.
 
 ## Discovery
@@ -99,6 +99,43 @@ Apps the agent or the desktop starts outside OpenCU expose accessibility trees
 from the start only if the session environment has `GNOME_ACCESSIBILITY=1`.
 
 See the [Linux engine contract](linux-engine-contract.md) for behavior and limits.
+
+## Android (milestones 1–2)
+
+Build with `npm run build:android`. From a computer, launch
+`bin/opencu android [--serial SERIAL]` as the stdio MCP server; `doctor` prints
+one diagnostic JSON object. The launcher caches the content-addressed dex jar
+and starts it as Android shell uid 2000 with adb shell v2 and no PTY. Android
+14/API 34+ is required. There is no Android install manifest yet.
+
+An on-phone elevation host can execute
+`CLASSPATH=<jar> app_process / dev.opencu.android.Main mcp` as shell and relay MCP
+unchanged. Stdin EOF exits the engine; stdout contains only MCP JSON lines and
+stderr carries diagnostics. A fatal error is one stderr line `CODE: detail`
+(for example `UNSUPPORTED_PLATFORM: …` or `ENGINE_START_FAILED: …`), at most 300
+characters after the code and without screen or clipboard content. When the phone
+or its adb transport is gone, `bin/opencu android` ends with
+`DEVICE_UNAVAILABLE: adb cannot reach the phone SERIAL (reason); …` as its last
+stderr line instead: `the engine was not started and nothing was sent` before
+launch, or, when the connection ended while the engine ran, that a call in progress
+may or may not have reached the phone. Relay that line as the call's error (not as
+`ENGINE_START_FAILED`), and treat a call that was in progress as an unknown outcome. Keep one connection per agent session; never
+reconnect to clear `USER_STOPPED`. The physical triple-volume-down stop is also
+sent as `notifications/message`, whose `params.data` contains the Linux-style
+`{event:"stop",error:{code:"USER_STOPPED",...}}` payload. Hosts must latch it even
+while no tool is returning. Images are JPEG. Relay Android's tool list,
+instructions, errors, batch metadata and all content without translation. When
+an image is included, its preceding text header states the JPEG dimensions and
+source display size; coordinate arguments use the image dimensions.
+
+Milestone 1 uses the main display. Milestone 2 also relays
+`agent_desktop({action:"start"|"stop"|"status"})`; while started, all app tools
+use its owned display, display-targeted screenshots/input and local IME policy.
+Display-0 app ownership returns `APP_IN_USE_BY_PERSON`, stop/EOF release the
+owned display, and idle expiry returns `AGENT_DESKTOP_IDLE_STOPPED`. Both modes
+require an unlocked/screen-on phone and follow the Android person rules. wanctl
+Android integration remains **planned**, not implemented in this repository. See [Android](android.md) for build prerequisites, conditions and
+fixture evidence and remaining manual checks.
 
 ## Session lifetime
 

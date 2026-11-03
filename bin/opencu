@@ -8,6 +8,11 @@ while [ -L "$entry" ]; do
     case "$entry" in /*) ;; *) entry="$parent/$entry" ;; esac
 done
 root=$(CDPATH= cd -P -- "$(dirname -- "$entry")/.." && pwd)
+if [ "${1:-}" = android ]; then
+    shift
+    exec node "$root/native-android/launcher.mjs" "$@"
+fi
+
 app="$root/.build/OpenCU.app"
 engine="$app/Contents/MacOS/opencu-engine"
 build="python3 \"$root/scripts/build-engine.py\""

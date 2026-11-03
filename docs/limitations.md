@@ -161,6 +161,54 @@ The measurements behind this section are in
   when the connection ends unless a clipboard manager keeps it.
 - `scope` is not supported yet.
 
+## Android (milestones 1 and 2)
+
+- Android 14/API 34 main-display and virtual-display modes are implemented. The
+  fixture checks passed three consecutive rounds in each mode on the OPPO PGBM10;
+  task reuse, permission activities and display lock transitions remain OEM risks.
+- Requires Android shell uid 2000 and API 34+. Unicode indexed editing, clicks,
+  list scrolling, back, batch guards and idle EOF are covered by the fixture
+  suite. Settings on the acceptance ColorOS build requires a real touch to enter
+  search mode; the engine uses touch-first clicks. `type_text` and `paste` set the
+  focused editor's text through accessibility and never use the clipboard or the
+  keyboard, so a field that acts only on typed keys may not react. Editors that
+  ignore accessibility set-text do not receive type_text. Coordinate
+  gestures and custom accessibility
+  actions have not been verified on the owner's apps. Timings are in the evidence;
+  no general app performance claim follows from these samples.
+- The connection uses hidden UiAutomation construction/connection and system
+  context/task-display APIs. These are checked at startup, reported by doctor,
+  and can break on an OEM build or future Android version.
+- Physical monitoring needs readable `/dev/input/event*` through `getevent`;
+  failure refuses input. Android-injected events bypass evdev; kernel virtual
+  input devices are conservatively treated as physical. Real interruption and
+  the three-volume-down stop gesture await owner testing.
+- Screen-off or locked input is refused without wake/unlock. A new connection may
+  change foreground once the power service's last user activity, read after the
+  input monitor is live, is ten seconds old; a contact already held at that moment
+  is known only through that time.
+- Wheel pickers (time/date pickers) cannot be set directly: Android has no
+  standard action for their value, so they are scrolled one value per page.
+  `set_value` sets editable fields and range elements such as sliders. The scroll
+  fallbacks (an enclosing element's action, a touch swipe), wheel paging and the
+  stable final-state wait were added for ColorOS Clock and Calculator behaviour
+  and have host checks only so far.
+- Unicode uses accessible editable fields; custom editors and opaque content
+  may not expose enough information. There is no OCR or keyboard replacement.
+  No scope/select_text, arbitrary keycodes, power/volume tool keys or rich paste.
+- Screenshots cover the full active display, including overlays, and use scaled
+  JPEG coordinates. Agent-display screenshots come from that display's own
+  frames, because Android 14's UiAutomation screenshot always shows display 0;
+  this path is not yet verified on a device. The agent display requires a trusted, own-focus display that
+  cannot take the top focus and a local IME policy, all read back; a phone that
+  cannot provide them gets `AGENT_DESKTOP_UNAVAILABLE`. External displays and
+  other OEM builds are untested. Secure windows are not bypassed. Window polling can miss
+  transient overlays entirely between reads; OEM permission activities may be
+  reported as `app_switched` rather than `system_dialog`.
+
+See [Android behavior and validation](android.md). Fixture acceptance
+does not establish reliable general app coverage.
+
 ## Virtual display compatibility
 
 The macOS virtual display is exposed through the consented `agent_desktop` product

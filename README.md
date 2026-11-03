@@ -14,13 +14,13 @@ https://github.com/user-attachments/assets/5da04b21-47fe-44c4-9d3d-e2b3a2e9a9c6
 
 <p align="center">
   OpenCU is an MCP server that lets Claude Code, Codex or any other MCP client read<br>
-  and operate the apps on macOS, Windows and Linux. It runs locally, needs no account<br>
+  and operate the apps on macOS, Windows, Linux and Android. It runs locally, needs no account<br>
   or model key, and the person at the keyboard can stop it at any time.
 </p>
 
 <p align="center">
   <a href="https://github.com/Daily-AC/opencu/releases/latest"><img src="https://img.shields.io/github/v/release/Daily-AC/opencu?label=release&color=111111" alt="Latest release"></a>
-  <img src="https://img.shields.io/badge/macOS%20%C2%B7%20Windows%20%C2%B7%20Linux-111111" alt="macOS, Windows, Linux">
+  <img src="https://img.shields.io/badge/macOS%20%C2%B7%20Windows%20%C2%B7%20Linux%20%C2%B7%20Android-111111" alt="macOS, Windows, Linux, Android">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-111111" alt="MIT license"></a>
 </p>
 
@@ -75,8 +75,16 @@ npm install -g @z10/opencu
 opencu setup    # grant Accessibility and Screen Recording once
 ```
 
+**Android** · preview, Android 14 or later, driven from a computer over adb (USB or wireless debugging)
+
+```sh
+git clone https://github.com/Daily-AC/opencu.git && cd opencu
+npm ci --ignore-scripts && npm run build:android   # JDK 21 and Android SDK platform 34
+./bin/opencu android doctor
+```
+
 Run `opencu doctor` to check an installation. Platform guides:
-[macOS](docs/macos.md) · [Windows](docs/windows.md) · [Linux](docs/linux.md).
+[macOS](docs/macos.md) · [Windows](docs/windows.md) · [Linux](docs/linux.md) · [Android](docs/android.md).
 
 ## Connect your agent
 
@@ -87,6 +95,7 @@ OpenCU is a stdio MCP server. The command to register is:
 | macOS | `opencu` |
 | Windows | `%LOCALAPPDATA%\OpenCU\bin\opencu.cmd` |
 | Linux | `~/.local/share/opencu/bin/opencu` |
+| Android | `/path/to/opencu/bin/opencu android` (one phone on adb, or set `ANDROID_SERIAL`) |
 
 ```sh
 # Claude Code
@@ -173,12 +182,12 @@ windows, or its global pointer setting
 
 ## Platforms
 
-| | macOS | Windows | Linux |
-|---|---|---|---|
-| Install | npm, Apple silicon | Prebuilt x64, unsigned | Prebuilt x64 |
-| Input | Background, to the target app only | Foreground, after 10 s without your input | Foreground, after 10 s without your input |
-| Agent desktop | Virtual display with a watch-only preview | Separate session in a window | Not available |
-| Screen locked | Refused; the agent desktop pauses | Refused; the agent desktop keeps indexed clicks and values | Refused |
+| | macOS | Windows | Linux | Android |
+|---|---|---|---|---|
+| Install | npm, Apple silicon | Prebuilt x64, unsigned | Prebuilt x64 | Build from source, runs over adb |
+| Input | Background, to the target app only | Foreground, after 10 s without your input | Foreground, after 10 s without your input | Foreground, after 10 s without your touch |
+| Agent desktop | Virtual display with a watch-only preview | Separate session in a window | Not available | Virtual display, no preview |
+| Screen locked | Refused; the agent desktop pauses | Refused; the agent desktop keeps indexed clicks and values | Refused | Refused |
 
 ## Stopping it
 
@@ -187,6 +196,8 @@ windows, or its global pointer setting
 - **Windows and Linux:** a physical Escape stops input for the rest of the
   connection, and your own input during an action stops that action. The Windows
   agent desktop also has a Stop button.
+- **Android:** press volume-down three times within 1.5 seconds. Touching the main
+  screen during an action there stops that action.
 - A person's stop is final for the connection. Agents must never reconnect around it.
 
 OpenCU is a person-facing brake, not a sandbox: the agent's apps share your account
@@ -201,6 +212,8 @@ and files, and any local process that can run `opencu` uses its permissions.
 - **Windows:** the package is unsigned, so SmartScreen or Defender may warn.
   Outside the agent desktop, input uses the foreground.
 - **Linux:** X11 only; Wayland is refused. Input uses the foreground.
+- **Android:** a preview, tested on one phone (OPPO PGBM10, Android 14). It runs
+  from a computer over adb; there is no prebuilt package or phone app.
 - Custom-drawn apps such as Blender, and windows in the Stage Manager strip, need
   the foreground.
 
@@ -208,7 +221,7 @@ The full list, with measurements, is in [Limitations](docs/limitations.md).
 
 ## Documentation
 
-- Platform guides: [macOS](docs/macos.md), [Windows](docs/windows.md), [Linux](docs/linux.md)
+- Platform guides: [macOS](docs/macos.md), [Windows](docs/windows.md), [Linux](docs/linux.md), [Android](docs/android.md)
 - [Tools](docs/tools.md) and the [engine contract](docs/independent-engine-contract.md),
   with the [Windows](docs/windows-engine-contract.md) and
   [Linux](docs/linux-engine-contract.md) contracts
