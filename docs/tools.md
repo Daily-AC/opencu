@@ -15,7 +15,8 @@ the front when a step needs it.
 On Windows, zero-size elements are omitted unless focused, while their children
 remain traversable. Pass `scope: <element index>` on a read, input tool or batch
 to return only that retained subtree, numbered from `[1]`; a missing root falls
-back to the whole window with a notice. `scope` is Windows-only for now.
+back to the whole window with a notice. `scope` works on Windows and macOS; Linux
+and Android refuse it.
 `waitForText` searches numbered element lines, excluding headers and summaries.
 Both platforms accept `{"method":"wait","ms":1500}` inside `run_actions`
 (1–15000 ms, no input). Coordinates must precede every other action, including
