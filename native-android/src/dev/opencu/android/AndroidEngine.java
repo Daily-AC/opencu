@@ -1201,8 +1201,9 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
       SystemClock.sleep(30);
       s = observe(pkg);
     }
-    // The host of an attached display waits for it to settle before it reads.
-    if (attachedMode && !inputCall) return s;
+    // The host of an attached display waits for it to settle before it reads or acts, and a click
+    // still revalidates its element on the tree that receives the input.
+    if (attachedMode) return s;
     {
       if (inputCall) settleAfterInput(token);
       else waitIdle();
