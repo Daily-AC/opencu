@@ -183,7 +183,7 @@ windows, or its global pointer setting
 
 | | macOS | Windows | Linux | Android |
 |---|---|---|---|---|
-| Install | npm, Apple silicon | Prebuilt x64, unsigned | Prebuilt x64 | Build from source, runs over adb |
+| Install | npm, Apple silicon | Prebuilt x64, unsigned | Prebuilt x64 | npm on Apple silicon Macs, otherwise build from source; runs over adb |
 | Input | Background, to the target app only | Foreground, after 10 s without your input | Foreground, after 10 s without your input | Foreground, after 10 s without your touch |
 | Agent desktop | Virtual display with a watch-only preview | Separate session in a window | Not available | Virtual display; watch-only preview with the optional phone app |
 | Screen locked | Refused; the agent desktop pauses | Refused; the agent desktop keeps indexed clicks and values | Refused | Refused |
@@ -213,7 +213,8 @@ and files, and any local process that can run `opencu` uses its permissions.
   Outside the agent desktop, input uses the foreground.
 - **Linux:** X11 only; Wayland is refused. Input uses the foreground.
 - **Android:** a preview, tested on one phone (OPPO PGBM10, Android 14). It runs
-  from a computer over adb; there is no prebuilt package. The phone app is optional
+  from a computer over adb; the npm package installs only on Apple silicon Macs, and
+  other computers build from source. The phone app is optional
   and only shows status, a preview and Stop.
 - Custom-drawn apps such as Blender, and windows in the Stage Manager strip, need
   the foreground.
