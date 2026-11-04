@@ -52,9 +52,9 @@ not a regular file owned by shell with mode 0644 or stricter, printing
 host that starts the jar itself relies on the same assumption.
 Calling `bin/opencu` without `android` is unchanged.
 
-For wanctl packaging, `npm run package:android` writes `dist/opencu-android.jar`
-and the content manifest `dist/opencu-android.json` with name, version, file,
-size and lowercase SHA-256.
+For release packaging, `npm run package:android` writes `dist/opencu-android.jar`,
+the content manifest `dist/opencu-android.json` with name, version, file, size and
+lowercase SHA-256, and `dist/opencu-companion.apk`.
 
 An on-phone host can run this directly as shell:
 

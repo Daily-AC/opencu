@@ -1,8 +1,8 @@
 {
   "name": "opencu",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "type": "module",
-  "description": "Independent local computer-use engine and MCP server for macOS, Windows and Linux",
+  "description": "Independent local computer-use engine and MCP server for macOS, Windows, Linux and Android",
   "scripts": {
     "start": "node src/server.mjs",
     "build": "python3 scripts/build-engine.py",

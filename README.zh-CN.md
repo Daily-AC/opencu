@@ -73,7 +73,7 @@ npm ci --ignore-scripts && npm run build:android   # 需要 JDK 21 和 Android S
 ```
 
 装好后运行 `opencu doctor` 检查。各平台说明：
-[macOS](docs/macos.md) · [Windows](docs/windows.md) · [Linux](docs/linux.md) · [Android](docs/android.md)（英文）。
+[macOS](docs/macos.md) · [Windows](docs/windows.md) · [Linux](docs/linux.md) · [Android](docs/android.md)（英文）。把自己的宿主接到安卓：[Android integration](docs/android-integration.md)（英文）。
 
 ## 接入你的 agent
 

@@ -81,7 +81,7 @@ npm ci --ignore-scripts && npm run build:android   # JDK 21 and Android SDK plat
 ```
 
 Run `opencu doctor` to check an installation. Platform guides:
-[macOS](docs/macos.md) · [Windows](docs/windows.md) · [Linux](docs/linux.md) · [Android](docs/android.md).
+[macOS](docs/macos.md) · [Windows](docs/windows.md) · [Linux](docs/linux.md) · [Android](docs/android.md). Connecting your own host to Android: [Android integration](docs/android-integration.md).
 
 ## Connect your agent
 
