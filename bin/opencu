@@ -24,10 +24,12 @@ fi
 case "${1:-mcp}" in
     -h|--help|help)
         printf '%s\n' 'Usage: opencu [mcp|engine|doctor|setup]' \
+            '       opencu android [--serial SERIAL] [doctor]' \
             '  mcp     Run the MCP server on stdin/stdout (default).' \
             '  engine  Run the native JSON-lines stdio engine directly (experimental APIs included).' \
             '  doctor  Report engine and macOS permission status.' \
-            '  setup   Open the standard macOS permission setup flow (Linux needs none).'
+            '  setup   Open the standard macOS permission setup flow (Linux needs none).' \
+            '  android Run the MCP server for a phone on adb; doctor reports on the phone.'
         exit 0
         ;;
 esac
