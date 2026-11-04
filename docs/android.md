@@ -15,6 +15,10 @@ Requires Android 14 (API 34) or newer, shell uid 2000, and USB/wireless debuggin
 Newer Android versions are untested. The conservative minimum matches the only
 connected device and avoids claiming compatibility with older hidden APIs.
 
+On an Apple silicon Mac, `npm install -g @z10/opencu` brings the jar and the
+companion app; only Node 22+ and adb are needed. Run `opencu android doctor`.
+The npm package installs on no other computer yet, so elsewhere build from source:
+
 Build on a computer with JDK 21, Node 22+, Android platform `android-34`,
 build-tools `36.1.0`, and platform-tools:
 
@@ -52,9 +56,9 @@ not a regular file owned by shell with mode 0644 or stricter, printing
 host that starts the jar itself relies on the same assumption.
 Calling `bin/opencu` without `android` is unchanged.
 
-For wanctl packaging, `npm run package:android` writes `dist/opencu-android.jar`
-and the content manifest `dist/opencu-android.json` with name, version, file,
-size and lowercase SHA-256.
+For release packaging, `npm run package:android` writes `dist/opencu-android.jar`,
+the content manifest `dist/opencu-android.json` with name, version, file, size and
+lowercase SHA-256, and `dist/opencu-companion.apk`.
 
 An on-phone host can run this directly as shell:
 
@@ -92,11 +96,19 @@ are `isError: true`, start `CODE: message` and retain the code in
 `_meta["opencu/error"]`. Request lines are size-bounded; JSON-RPC batch arrays are
 not supported. Stdin EOF refuses further work, kills running platform clients
 (`input`, `am`), waits up to one second for an in-flight call to unwind, releases
-the agent display and exits the VM. There is no listener, installed engine APK, accessibility service, account or brand gate.
+the agent display and exits the VM. There is no listener, installed engine APK, accessibility service, account or brand gate;
+the optional [companion app](#companion-app) only shows status and a preview and offers Stop.
 
 ## State and input
 
 `app` is a launchable package name or an exact, case-insensitive launcher label.
+The foreground app is the app whose task is in front: an activity another package
+starts into that task, such as the system's permission request, a share sheet or a
+picker, counts as that app. Address it by the app's name; the state line's
+`activity=` names the activity itself (for example
+`activity=com.android.permissioncontroller/.permission.ui.GrantPermissionsActivity`),
+and its window is listed with its own package. A batch that brings one up stops with
+`popup`.
 Ambiguous labels return `AMBIGUOUS_APP`. `get_app_state` starts or brings forward
 the app under the person rules. `list_apps` gives label, package, running and
 foreground status. Every input tool returns an updated full state; there is no
@@ -447,8 +459,70 @@ The notification probe used `cmd notification post` as `com.android.shell` and
 successfully created a visible shell notification, but shell `cmd notification`
 has no cancel/action subcommand, and a temporary app_process cancel probe was
 killed by the device. The notification therefore cannot safely ship with a Stop
-action; the volume gesture is the only shipped person stop. The probe notification
-was snoozed for one day and is recorded as an unverified OEM limitation.
+action. The probe notification was snoozed for one day and is recorded as an
+unverified OEM limitation. The [companion app](#companion-app) provides the visible
+status, a live preview and a Stop button instead.
+
+## Companion app
+
+`npm run build:android` also builds `.build/android/opencu-companion.apk`
+(`dev.opencu.companion`, [ADR 0006](adr/0006-android-companion-app.md)). It is
+optional: without it nothing changes. With it, the phone shows what the agent does:
+
+- A black status island under the status bar: the app the agent uses, the current
+  step (such as `Tap "Pay"`, `Step 3 of 9` in a batch) and a ring while a call runs.
+  Typed or set text appears only when the engine has identified the field and it is
+  not a password; otherwise the island shows only the number of characters. It
+  appears with the connection and leaves when the connection ends.
+- On the agent display, the island takes taps. A tap opens a card with **Watch**
+  and **Stop**; the card stays open until you tap it or outside it. **Watch** opens a
+  floating, watch-only live view of the agent display that you can drag (it settles
+  at the nearer side); a tap on it shows Close and Stop. The card also folds by itself
+  after a stop and when the agent moves to the main display.
+- On the main display the island only shows status: it is drawn at 0.8 opacity and
+  touches pass through it to the app below, so a tap aimed at the app never lands on
+  it. Touching the screen pauses the agent there anyway.
+- **Stop** latches the same `USER_STOPPED` as three volume-down presses and sends the
+  same `USER_STOPPED` notification; its message names the app. The island shows
+  Stopped only once the engine confirms; otherwise it asks for the volume gesture.
+  After any stop, by the app or the volume buttons, the island keeps showing Stopped
+  until the connection ends.
+- Like any app drawn over others, the island makes touches below it look obscured to
+  the app there: a view that refuses obscured touches (`filterTouchesWhenObscured`)
+  ignores taps right under the island, the person's and the engine's alike.
+
+Install it once and allow it to draw over other apps (from npm, the APK is at
+`"$(npm root -g)/@z10/opencu/.build/android/opencu-companion.apk"`):
+
+```sh
+adb install -r .build/android/opencu-companion.apk
+adb shell appops set dev.opencu.companion SYSTEM_ALERT_WINDOW allow
+```
+
+ColorOS refuses that `appops` command from shell; turn on Settings → Apps →
+Special app access → Display over other apps → OpenCU instead. Words follow the
+phone's language (Chinese or English).
+
+How the engine reaches it: once per connection the engine checks that the app is
+installed and signed with the certificate this build pins, then calls the app's
+provider (`dev.opencu.companion.engine`) as shell with a Binder. The provider
+refuses every caller but uid 2000; the engine's Binder refuses every caller but the
+verified app and offers only Stop and attaching or detaching a preview surface while
+the agent display runs. Status goes to the app one way. The build signs the app with
+a per-machine key at `~/.local/share/opencu/android-companion.keystore` and bakes its
+certificate's SHA-256 into the jar, so a jar attaches only the app built with it;
+`doctor` reports `companion` as `not installed`, `installed`, or why it is not used.
+The engine leaves the app's windows out of the state it reports. The preview is an
+auto-mirror virtual display of the agent display (hidden
+`DisplayManager.createVirtualDisplay(name, w, h, displayIdToMirror, surface)`) and
+takes no input. If Android ends the app's process, the engine attaches again on its
+next call, at most every five seconds.
+
+Checked on the PGBM10 on 2026-11-03: the island and card on the main and agent
+displays, Watch with live frames while a batch ran on the agent display, dragging
+the preview, Stop from the card (the host received `USER_STOPPED`), a tap passing
+through the main-display island to the app below, the app's windows absent from
+the reported state, and attaching again after the app was reinstalled mid-connection.
 
 ## The person wins
 
@@ -548,11 +622,13 @@ Binder calls. The fixture suite covers Unicode set_value, `type_text` with ASCII
 and Chinese text, indexed clicks and
 scrolls, back, popup/stale guards, local waits, injected-volume exclusion and idle EOF. Polling cannot detect a window
 that appears and disappears entirely between observations. System UI windows use
-platform window types; OEM dialogs presented as activities can be reported as
-`app_switched` instead of `system_dialog`.
+platform window types. A permission request runs in the requesting app's task and is
+read and answered through that app (checked on the PGBM10 on 2026-11-04 with the
+fixture's Ask permission button, on the agent display: deny by index, and a batch
+stopping with `popup` before its next step); OEM dialogs presented as activities in
+their own task can still be reported as `app_switched` instead of `system_dialog`.
 
-Remaining milestone 2 risks are OEM task reuse for single-task apps, permission
-activities, display lock transitions, coordinate gestures, and restoration when a task moves itself after display release. Virtual-display
+Remaining milestone 2 risks are OEM task reuse for single-task apps, display lock transitions, coordinate gestures, and restoration when a task moves itself after display release. Virtual-display
 windows, screenshots, display-targeted input, IME locality, APP_IN_USE_BY_PERSON,
 stop, EOF and configurable idle were accepted only with the fixture on this
 PGBM10.

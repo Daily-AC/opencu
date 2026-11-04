@@ -216,8 +216,16 @@ The measurements behind this section are in
   cannot take the top focus and a local IME policy, all read back; a phone that
   cannot provide them gets `AGENT_DESKTOP_UNAVAILABLE`. External displays and
   other OEM builds are untested. Secure windows are not bypassed. Window polling can miss
-  transient overlays entirely between reads; OEM permission activities may be
-  reported as `app_switched` rather than `system_dialog`.
+  transient overlays entirely between reads. A permission request or picker that
+  runs in the app's task counts as that app; OEM dialogs in a task of their own
+  may be reported as `app_switched` rather than `system_dialog`.
+
+- The optional companion app (status island, live preview, Stop) was checked on
+  the PGBM10 only. Its overlay permission must be turned on in Settings where an OEM
+  (ColorOS) refuses `appops` from shell. Main-display screenshots include the
+  island. The preview uses a hidden Android 14 mirror-display call. An OEM may
+  freeze or end the app's process; the engine attaches again on its next call.
+  Views that refuse obscured touches ignore taps right under the island.
 
 See [Android behavior and validation](android.md). Fixture acceptance
 does not establish reliable general app coverage.

@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Stage and pack the macOS npm package from a release-signed build; never publishes.
 
-Build first with the release identity (OPENCU_RELEASE_P12 and OPENCU_RELEASE_P12_PASSWORD set), then:
+The package also drives Android phones over adb, so it carries the Android engine and companion app.
+Build first with the release identity (OPENCU_RELEASE_P12 and OPENCU_RELEASE_P12_PASSWORD set) and run
+npm run build:android, then:
   python3 scripts/package-npm.py            -> dist/npm/z10-opencu-<version>.tgz
 npm installs carry no quarantine attribute, so the self-signed app runs; grants survive upgrades only
 while every release is signed with the same certificate (RELEASE_LEAF).
@@ -31,13 +33,26 @@ def main():
     if manifest["version"] != root["version"]:
         raise SystemExit(f"Engine {manifest['version']} does not match package.json {root['version']}; rebuild.")
 
+    android = ROOT / ".build/android"
+    android_files = [android / "opencu-android.jar", android / "opencu-companion.apk"]
+    if not all(path.is_file() for path in android_files):
+        raise SystemExit("The Android engine or companion app is missing. Run npm run build:android.")
+    # The build bakes package.json's version into the jar's classes.
+    if root["version"].encode() not in subprocess.run(["unzip", "-p", str(android_files[0]), "classes.dex"],
+                                                      check=True, capture_output=True).stdout:
+        raise SystemExit(f"The Android engine does not carry version {root['version']}; rebuild.")
+
     if STAGE.exists():
         shutil.rmtree(STAGE)
-    (STAGE / ".build").mkdir(parents=True)
+    (STAGE / ".build/android").mkdir(parents=True)
     shutil.copytree(ROOT / "bin", STAGE / "bin", ignore=shutil.ignore_patterns("*.cmd"))
     shutil.copytree(ROOT / "src", STAGE / "src")
     shutil.copytree(app, STAGE / ".build/OpenCU.app", symlinks=True)
     shutil.copy2(ROOT / ".build/engine-manifest.json", STAGE / ".build/engine-manifest.json")
+    (STAGE / "native-android").mkdir()
+    shutil.copy2(ROOT / "native-android/launcher.mjs", STAGE / "native-android/launcher.mjs")
+    for path in android_files:
+        shutil.copy2(path, STAGE / ".build/android" / path.name)
     for name in ["LICENSE", "README.md"]:
         shutil.copy2(ROOT / name, STAGE / name)
     package = {
@@ -46,12 +61,13 @@ def main():
         "bin": {"opencu": "bin/opencu"},
         "dependencies": root["dependencies"], "engines": root["engines"],
         "os": ["darwin"], "cpu": ["arm64"],
-        "files": ["bin/opencu", "src/", ".build/OpenCU.app/", ".build/engine-manifest.json"],
+        "files": ["bin/opencu", "src/", ".build/OpenCU.app/", ".build/engine-manifest.json", "native-android/launcher.mjs",
+                  ".build/android/opencu-android.jar", ".build/android/opencu-companion.apk"],
         "mcpName": "io.github.Daily-AC/opencu",
         "repository": {"type": "git", "url": "git+https://github.com/Daily-AC/opencu.git"},
         "homepage": "https://github.com/Daily-AC/opencu#readme",
         "bugs": {"url": "https://github.com/Daily-AC/opencu/issues"},
-        "keywords": ["mcp", "mcp-server", "computer-use", "macos", "accessibility", "ai-agents", "desktop-automation"],
+        "keywords": ["mcp", "mcp-server", "computer-use", "macos", "android", "accessibility", "ai-agents", "desktop-automation"],
     }
     (STAGE / "package.json").write_text(json.dumps(package, indent=2) + "\n")
     OUT.mkdir(parents=True, exist_ok=True)

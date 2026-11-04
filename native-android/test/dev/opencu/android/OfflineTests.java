@@ -459,6 +459,47 @@ public final class OfflineTests {
     check(
         Protocol.stopNotice().get("method").equals("notifications/message"),
         "stop uses MCP notification framing");
+    check(
+        String.valueOf(Protocol.stopNotice(Protocol.COMPANION_STOP)).contains("USER_STOPPED")
+            && String.valueOf(Protocol.stopNotice(Protocol.COMPANION_STOP)).contains("OpenCU app"),
+        "a stop from the companion app is the same USER_STOPPED notice");
+    Person stopper = new Person(0);
+    check(stopper.stopByPerson() && !stopper.stopByPerson(), "the app's stop latches once");
+    try {
+      stopper.checkDesktop();
+      throw new AssertionError("input allowed after the app's stop");
+    } catch (Failure expected) {
+      check(expected.code.equals("USER_STOPPED"), "the app's stop refuses later input");
+    }
+    Element field = new Element();
+    field.text = "旧的地址";
+    field.editable = true;
+    Map<String, Object> typed =
+        Core.activity("type_text", Json.obj("text", "北京市顺义区某某路 1 号 2 单元 301 室，请放门口不用敲门谢谢，麻烦了，辛苦师傅"), field, "com.example.food", 2, 5);
+    check(
+        typed.get("tool").equals("type_text")
+            && typed.get("app").equals("com.example.food")
+            && ((String) typed.get("text")).codePointCount(0, ((String) typed.get("text")).length()) == 40
+            && ((String) typed.get("text")).endsWith("\u2026")
+            && typed.get("step").equals(2)
+            && typed.get("steps").equals(5),
+        "activity carries the tool, app, step and typed text cut to 40 characters");
+    field.password = true;
+    Map<String, Object> secret = Core.activity("type_text", Json.obj("text", "hunter2"), field, "", 0, 0);
+    check(!secret.containsKey("text") && secret.get("chars").equals(7) && !secret.containsKey("target"),
+        "a password field shows only its length, never its text or label");
+    Map<String, Object> blind = Core.activity("type_text", Json.obj("text", "hunter2"), null, "", 0, 0);
+    check(!blind.containsKey("text") && blind.get("chars").equals(7),
+        "typing into a field the engine has not identified shows only its length");
+    check(Core.taskOwner("com.example.food", "com.example.permissions").equals("com.example.food")
+            && Core.taskOwner(null, "com.example.food").equals("com.example.food")
+            && Core.taskOwner("", "com.example.food").equals("com.example.food"),
+        "an activity started into an app's task counts as that app");
+    Element pay = new Element();
+    pay.desc = "去结算";
+    Map<String, Object> tap = Core.activity("click", Json.obj("element_index", 4, "click_count", 2), pay, "", 0, 0);
+    check(tap.get("target").equals("去结算") && tap.get("click_count").equals(2) && !tap.containsKey("step"),
+        "a click names its element by text or description");
     for (String bad : List.of("01", "1.", "{\"x\":1,\"x\":2}", "true junk", "[1,]")) {
       try {
         Json.read(bad);

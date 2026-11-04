@@ -134,7 +134,7 @@ use its owned display, display-targeted screenshots/input and local IME policy.
 Display-0 app ownership returns `APP_IN_USE_BY_PERSON`, stop/EOF release the
 owned display, and idle expiry returns `AGENT_DESKTOP_IDLE_STOPPED`. Both modes
 require an unlocked/screen-on phone and follow the Android person rules. wanctl
-Android integration remains **planned**, not implemented in this repository. See [Android](android.md) for build prerequisites, conditions and
+relays Android through its `act` command from v0.29.0. See [Android integration](android-integration.md) for a short guide to connecting a host and [Android](android.md) for build prerequisites, conditions,
 fixture evidence and remaining manual checks.
 
 ## Session lifetime

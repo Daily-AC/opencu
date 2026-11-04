@@ -139,6 +139,10 @@ public final class MainActivity extends Activity {
               .setOnDismissListener(d -> Truth.put(this, "dialogOpen", false))
               .show();
         });
+    button(
+        "Ask permission",
+        R.id.permission,
+        () -> requestPermissions(new String[] {"android.permission.POST_NOTIFICATIONS"}, 7));
     button("Open list", R.id.list, this::rows);
     button(
         "Second activity",
@@ -155,6 +159,17 @@ public final class MainActivity extends Activity {
                 },
                 600));
     layout.requestFocus();
+  }
+
+  @Override
+  public void onRequestPermissionsResult(int code, String[] permissions, int[] results) {
+    if (code == 7)
+      Truth.put(
+          this,
+          "permission",
+          results.length == 1 && results[0] == android.content.pm.PackageManager.PERMISSION_GRANTED
+              ? "granted"
+              : "denied");
   }
 
   private void rows() {

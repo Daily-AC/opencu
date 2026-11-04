@@ -55,7 +55,7 @@ const javaFiles=dir=>readdirSync(dir,{recursive:true}).filter(f=>String(f).endsW
 test('Android engine host checks: decisions run against a scripted phone', () => {
   const out=path.join(root,'.build/android/engine-tests');
   rmSync(out,{recursive:true,force:true});mkdirSync(out,{recursive:true});
-  writeFileSync(path.join(out,'BuildInfo.java'),'package dev.opencu.android; public final class BuildInfo { public static final String VERSION = "host-test"; }\n');
+  writeFileSync(path.join(out,'BuildInfo.java'),'package dev.opencu.android; public final class BuildInfo { public static final String VERSION = "host-test"; public static final String COMPANION_CERT = ""; }\n');
   const sources=[...javaFiles(path.join(root,'native-android/src')),...javaFiles(path.join(root,'native-android/test/host')),
     path.join(root,'native-android/test/dev/opencu/android/EngineTests.java'),path.join(out,'BuildInfo.java')];
   const compile=spawnSync(path.join(java,'bin/javac'),['--release','11','-encoding','UTF-8','-nowarn','-XDsuppressNotes','-cp',hostClasspath,'-d',out,...sources],{cwd:root,encoding:'utf8'});
