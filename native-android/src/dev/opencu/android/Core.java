@@ -698,6 +698,29 @@ public final class Core {
       return text.replaceAll("0+$", "");
     }
 
+    /** Host-facing element record. Password nodes never expose content or content length. */
+    public Map<String, Object> structured() {
+      Map<String, Object> out = Json.obj(
+          "index", index,
+          "class", clazz,
+          "resourceId", id,
+          "bounds", Arrays.asList(left, top, right, bottom),
+          "clickable", clickable,
+          "editable", editable,
+          "scrollable", scrollable,
+          "focused", focused,
+          "checked", checked,
+          "selected", selected,
+          "enabled", enabled,
+          "password", password,
+          "actions", new ArrayList<>(actions.keySet()));
+      if (!password) {
+        out.put("text", text);
+        if (!desc.isEmpty()) out.put("contentDescription", desc);
+      }
+      return out;
+    }
+
     /** Same node and same place: display, window, tree path, identity text and bounds within 6 px. */
     public boolean same(Element e) {
       return sameNode(e) && near(e, 0, 0);
@@ -903,6 +926,18 @@ public final class Core {
 
     public String fingerprint() {
       return foreground + "\n" + activity + "\n" + lines();
+    }
+
+    /** Structured records in the same order and with the same indexes as the text lines. */
+    public List<Map<String, Object>> structuredElements() {
+      List<Map<String, Object>> out = new ArrayList<>();
+      for (Element e : elements.values()) out.add(e.structured());
+      return out;
+    }
+
+    public Map<String, Object> structuredScreen() {
+      return Json.obj("package", foreground, "displayId", displayId, "width", width,
+          "height", height, "rotation", rotation);
     }
   }
 

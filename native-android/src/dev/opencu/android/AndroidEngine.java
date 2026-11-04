@@ -45,6 +45,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
   private final PersonMonitor monitor;
   private final Core.Person person;
   private final String monitorProblem;
+  private final boolean structuredElements;
   private final Field taskDisplay;
   private final Map<String, Object> hidden = obj();
   private volatile boolean closed;
@@ -109,6 +110,11 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
   }
 
   AndroidEngine(Consumer<Map<String, Object>> output) throws Exception {
+    this(output, false);
+  }
+
+  AndroidEngine(Consumer<Map<String, Object>> output, boolean structuredElements) throws Exception {
+    this.structuredElements = structuredElements;
     if (Build.VERSION.SDK_INT < 34)
       throw fail("UNSUPPORTED_PLATFORM", "Android 14 (API 34) or later is required");
     if (android.os.Process.myUid() != 2000)
@@ -1208,6 +1214,12 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     if (settled != null) {
       if (!r.containsKey("_meta")) r.put("_meta", obj());
       map(r.get("_meta")).put("opencu/settle", settled);
+    }
+    if (structuredElements) {
+      if (!r.containsKey("_meta")) r.put("_meta", obj());
+      Map<String, Object> meta = map(r.get("_meta"));
+      meta.put("opencu/elements", s.structuredElements());
+      meta.put("opencu/screen", s.structuredScreen());
     }
     latest = s;
     observationRequired = false;
@@ -2785,7 +2797,12 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
           if (SystemClock.uptimeMillis() - start >= limit) {
             Map<String, Object> r = checkedResult(s, screenshot, inputCall, token);
             r.put("isError", true);
-            r.put("_meta", obj("opencu/error", "WAIT_TIMEOUT"));
+            if (structuredElements) {
+              if (!r.containsKey("_meta")) r.put("_meta", obj());
+              map(r.get("_meta")).put("opencu/error", "WAIT_TIMEOUT");
+            } else {
+              r.put("_meta", obj("opencu/error", "WAIT_TIMEOUT"));
+            }
             map(list(r.get("content")).get(0))
                 .put("text", "WAIT_TIMEOUT: Expected text did not appear\n" + s.text());
             return r;

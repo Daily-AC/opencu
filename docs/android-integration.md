@@ -49,6 +49,27 @@ CLASSPATH=/data/local/tmp/opencu-android-<sha256-16>.jar \
   app_process / dev.opencu.android.Main mcp
 ```
 
+When a phone host needs machine-readable nodes, add the opt-in `--elements`
+argument:
+
+```sh
+CLASSPATH=/data/local/tmp/opencu-android-<sha256-16>.jar \
+  app_process / dev.opencu.android.Main mcp --elements
+```
+
+This leaves every text line byte-for-byte unchanged. `initialize` and
+`tools/list` are also unchanged. In this mode, results that contain an
+element state add `_meta["opencu/elements"]`, in the same order and with the
+same `index` values as the text lines, and `_meta["opencu/screen"]`:
+`package`, `displayId`, `width`, `height`, and `rotation`. Each element record
+contains `index`, `class`, `resourceId`, `text` (when non-password), optional
+`contentDescription`, `bounds` as `[left, top, right, bottom]`, booleans for
+`clickable`, `editable`, `scrollable`, `focused`, `checked`, `selected`,
+`enabled`, and `password`, plus an `actions` array of accessibility action
+names. Password records omit text, values, and content lengths entirely.
+Use the record's `index` with the input tools; it is the same number printed
+in the corresponding line.
+
 An ordinary app's identity is refused, and so is root that has not dropped to
 `shell`. The wanctl app works this way.
 

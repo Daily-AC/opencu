@@ -45,9 +45,13 @@ public final class Main {
     String stage = "ENGINE_START_FAILED";
     try {
       String mode = args.length == 0 ? "mcp" : args[0];
-      if (args.length > 1 || (!mode.equals("mcp") && !mode.equals("doctor")))
-        throw new IllegalArgumentException("Usage: dev.opencu.android.Main [mcp|doctor]");
-      engine = new AndroidEngine(Main::emit);
+      boolean elements = mode.equals("mcp") && args.length == 2 && args[1].equals("--elements");
+      if ((!mode.equals("mcp") && !mode.equals("doctor"))
+          || (mode.equals("doctor") && args.length != 1)
+          || (mode.equals("mcp") && args.length > 2)
+          || (mode.equals("mcp") && args.length == 2 && !elements))
+        throw new IllegalArgumentException("Usage: dev.opencu.android.Main [mcp [--elements]|doctor]");
+      engine = new AndroidEngine(Main::emit, elements);
       final AndroidEngine active = engine;
       Runtime.getRuntime().addShutdownHook(new Thread(active::close));
       if (mode.equals("doctor")) {

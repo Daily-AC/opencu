@@ -175,6 +175,11 @@ The measurements behind this section are in
 - Android 14/API 34 main-display and virtual-display modes are implemented. The
   fixture checks passed three consecutive rounds in each mode on the OPPO PGBM10;
   task reuse, permission activities and display lock transitions remain OEM risks.
+- The phone-only `app_process ... Main mcp --elements` switch is off by default.
+  When enabled, state and input results carry structured element metadata in
+  `_meta["opencu/elements"]` plus screen geometry in `_meta["opencu/screen"]`;
+  the text response remains unchanged. The metadata path has offline coverage;
+  its behavior on other OEM accessibility trees remains unmeasured.
 - Requires Android shell uid 2000 and API 34+. Unicode indexed editing, clicks,
   list scrolling, back, batch guards and idle EOF are covered by the fixture
   suite. Settings on the acceptance ColorOS build requires a real touch to enter

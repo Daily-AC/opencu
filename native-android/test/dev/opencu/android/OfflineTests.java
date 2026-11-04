@@ -500,6 +500,47 @@ public final class OfflineTests {
     Map<String, Object> tap = Core.activity("click", Json.obj("element_index", 4, "click_count", 2), pay, "", 0, 0);
     check(tap.get("target").equals("去结算") && tap.get("click_count").equals(2) && !tap.containsKey("step"),
         "a click names its element by text or description");
+    Screen structured = new Screen();
+    structured.foreground = "com.example.fixture";
+    structured.displayId = 2;
+    structured.width = 1080;
+    structured.height = 2400;
+    structured.rotation = 1;
+    Element button = element();
+    button.index = 7;
+    button.clazz = "android.widget.Button";
+    button.id = "com.example.fixture:id/submit";
+    button.text = "Submit";
+    button.desc = "Send form";
+    button.clickable = true;
+    button.enabled = false;
+    button.actions.put("click", 1);
+    Element password = element();
+    password.index = 8;
+    password.password = true;
+    password.text = "hunter2";
+    password.desc = "Password";
+    structured.elements.put(button.index, button);
+    structured.elements.put(password.index, password);
+    String baselineText = structured.text();
+    List<Map<String, Object>> records = structured.structuredElements();
+    check(structured.text().equals(baselineText), "structured mode leaves text output byte-for-byte unchanged");
+    check(records.size() == 2 && records.get(0).get("index").equals(7)
+        && records.get(1).get("index").equals(8), "structured indexes preserve line order");
+    check(structured.elements.get(((Number) records.get(0).get("index")).intValue()).line().contains("[7]"),
+        "structured index resolves the same element used by click");
+    check(records.get(0).get("text").equals("Submit")
+        && records.get(0).get("contentDescription").equals("Send form")
+        && records.get(0).get("bounds").equals(Arrays.asList(40, 200, 1000, 330))
+        && records.get(0).get("enabled").equals(false)
+        && list(records.get(0).get("actions")).equals(List.of("click")),
+        "structured record contains host fields");
+    check(!records.get(1).containsKey("text") && !records.get(1).containsKey("value")
+        && !records.get(1).containsKey("chars") && records.get(1).get("password").equals(true),
+        "structured password record contains no content or content length");
+    Map<String, Object> screenMeta = structured.structuredScreen();
+    check(screenMeta.get("package").equals("com.example.fixture") && screenMeta.get("rotation").equals(1),
+        "structured screen metadata fields");
     for (String bad : List.of("01", "1.", "{\"x\":1,\"x\":2}", "true junk", "[1,]")) {
       try {
         Json.read(bad);
