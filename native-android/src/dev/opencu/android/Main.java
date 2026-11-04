@@ -40,18 +40,18 @@ public final class Main {
     return code + ": " + detail;
   }
 
+  /** Parses the small app_process command line before any Android service is touched. */
+  static Arguments parseArguments(String[] args) {
+    return Arguments.parse(args);
+  }
+
   public static void main(String[] args) {
     AndroidEngine engine = null;
     String stage = "ENGINE_START_FAILED";
     try {
-      String mode = args.length == 0 ? "mcp" : args[0];
-      boolean elements = mode.equals("mcp") && args.length == 2 && args[1].equals("--elements");
-      if ((!mode.equals("mcp") && !mode.equals("doctor"))
-          || (mode.equals("doctor") && args.length != 1)
-          || (mode.equals("mcp") && args.length > 2)
-          || (mode.equals("mcp") && args.length == 2 && !elements))
-        throw new IllegalArgumentException("Usage: dev.opencu.android.Main [mcp [--elements]|doctor]");
-      engine = new AndroidEngine(Main::emit, elements);
+      Arguments parsed = parseArguments(args);
+      String mode = parsed.mode;
+      engine = new AndroidEngine(Main::emit, parsed.elements, parsed.attachDisplay);
       final AndroidEngine active = engine;
       Runtime.getRuntime().addShutdownHook(new Thread(active::close));
       if (mode.equals("doctor")) {

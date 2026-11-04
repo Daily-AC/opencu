@@ -46,6 +46,8 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
   private final Core.Person person;
   private final String monitorProblem;
   private final boolean structuredElements;
+  /** True when the display belongs to another process and must never be released here. */
+  private boolean attachedMode;
   private final Field taskDisplay;
   private final Map<String, Object> hidden = obj();
   private volatile boolean closed;
@@ -110,10 +112,15 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
   }
 
   AndroidEngine(Consumer<Map<String, Object>> output) throws Exception {
-    this(output, false);
+    this(output, false, null);
   }
 
   AndroidEngine(Consumer<Map<String, Object>> output, boolean structuredElements) throws Exception {
+    this(output, structuredElements, null);
+  }
+
+  AndroidEngine(Consumer<Map<String, Object>> output, boolean structuredElements, Integer attachDisplay)
+      throws Exception {
     this.structuredElements = structuredElements;
     if (Build.VERSION.SDK_INT < 34)
       throw fail("UNSUPPORTED_PLATFORM", "Android 14 (API 34) or later is required");
@@ -198,6 +205,16 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
               }
             },
             BuildInfo.COMPANION_CERT);
+    if (attachDisplay != null) {
+      try {
+        attachExistingDisplay(attachDisplay);
+      } catch (Exception failure) {
+        // Main has no engine reference until this constructor returns; release the main
+        // automation and monitor here so an unavailable target cannot leak a worker thread.
+        close();
+        throw failure;
+      }
+    }
   }
 
   /** Looks for the companion app and attaches it in the background, for an MCP connection. */
@@ -430,6 +447,49 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     if (companion != null) companion.desktopChanged();
   }
 
+  /** Attaches to a display owned by the host app; no display creation or ownership transfer occurs. */
+  private void attachExistingDisplay(int displayId) throws Exception {
+    if (displayId == Display.DEFAULT_DISPLAY)
+      throw fail("AGENT_DESKTOP_UNAVAILABLE", "Display 0 is the phone's main display; it cannot be attached");
+    Display target = displays.getDisplay(displayId);
+    if (target == null)
+      throw fail("AGENT_DESKTOP_UNAVAILABLE", "Display " + displayId + " does not exist");
+    int flags = target.getFlags();
+    List<String> missing = new ArrayList<>();
+    if ((flags & DISPLAY_TRUSTED) == 0) missing.add("trusted");
+    if ((flags & DISPLAY_OWN_FOCUS) == 0) missing.add("own focus");
+    if (!missing.isEmpty())
+      throw fail(
+          "AGENT_DESKTOP_UNAVAILABLE",
+          "Display " + displayId + " is unavailable: missing " + String.join(", ", missing));
+    UiAutomation agent = null;
+    boolean mainDisconnected = false;
+    try {
+      disconnectAutomation(mainAutomation);
+      mainDisconnected = true;
+      agent = createDisplayAutomation(displayId);
+    } catch (Exception e) {
+      if (agent != null) disconnectAutomation(agent);
+      if (mainDisconnected) restoreMainRoute();
+      Throwable cause = e instanceof InvocationTargetException && e.getCause() != null ? e.getCause() : e;
+      throw fail(
+          "AGENT_DESKTOP_UNAVAILABLE",
+          "Could not attach to display " + displayId + ": " + cause.getClass().getSimpleName());
+    }
+    attachedMode = true;
+    desktopDisplay = displayId;
+    desktopAutomation = agent;
+    automation = agent;
+    activeDisplay = displayId;
+    desktopFlags = flags;
+    desktopStartedAt = SystemClock.uptimeMillis();
+    lastCallAt = desktopStartedAt;
+    mainForegroundBeforeDesktop = foregroundOnDisplay(Display.DEFAULT_DISPLAY);
+    hidden.put("attachedDisplay", displayId);
+    hidden.put("attachedDisplayFlags", flags);
+    if (companion != null) companion.desktopChanged();
+  }
+
   /** Why this connection can no longer read or act: its main connection could not be restored. */
   private String routeLost;
 
@@ -652,6 +712,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
 
   void stopDesktop() {
     if (desktopDisplay < 0) return;
+    if (attachedMode) return;
     int oldDisplay = desktopDisplay;
     for (ActivityManager.RunningTaskInfo task : activityManager.getRunningTasks(50)) {
       try {
@@ -1219,7 +1280,12 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
       if (!r.containsKey("_meta")) r.put("_meta", obj());
       Map<String, Object> meta = map(r.get("_meta"));
       meta.put("opencu/elements", s.structuredElements());
-      meta.put("opencu/screen", s.structuredScreen());
+      Map<String, Object> screen = s.structuredScreen();
+      if (capture != null) {
+        screen.put("imageWidth", capture.width);
+        screen.put("imageHeight", capture.height);
+      }
+      meta.put("opencu/screen", screen);
     }
     latest = s;
     observationRequired = false;
@@ -1236,6 +1302,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
    * their place, so a failure is an error.
    */
   private Bitmap screenshotOf(Screen s) {
+    if (attachedMode) return mirrorDisplayScreenshot(s.displayId);
     if (s.displayId != Display.DEFAULT_DISPLAY || desktopDisplay >= 0) {
       OwnedDisplay owned = ownedDisplay;
       if (owned == null || owned.id != s.displayId || desktopDisplay != s.displayId)
@@ -1267,6 +1334,52 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     if (bitmap == null)
       throw fail("SCREENSHOT_FAILED", "Screenshot unavailable (secure content is not bypassed)");
     return bitmap;
+  }
+
+  /** Captures an attached display through a short-lived mirror display, then releases the mirror. */
+  private Bitmap mirrorDisplayScreenshot(int displayId) {
+    if (displayId != activeDisplay || desktopDisplay != displayId)
+      throw fail("SCREENSHOT_FAILED", "The attached display is no longer active");
+    int[] geometry = displayGeometry(displayId);
+    HandlerThread frameThread = new HandlerThread("opencu-mirror-frames");
+    frameThread.start();
+    ImageReader reader = null;
+    VirtualDisplay mirror = null;
+    try {
+      reader = ImageReader.newInstance(geometry[0], geometry[1], PixelFormat.RGBA_8888, 3);
+      Method create =
+          DisplayManager.class.getMethod(
+              "createVirtualDisplay", String.class, int.class, int.class, int.class, Surface.class);
+      mirror =
+          (VirtualDisplay)
+              create.invoke(null, "OpenCU attached screenshot", geometry[0], geometry[1], displayId,
+                  reader.getSurface());
+      if (mirror == null) throw new IllegalStateException("mirror display was not created");
+      OwnedDisplay frames = new OwnedDisplay(mirror, reader, frameThread, displayId, desktopFlags);
+      Bitmap image = frames.capture(FRAME_WAIT_MS);
+      // capture() copies pixels; releasing now removes the temporary mirror and its reader.
+      frames.release();
+      return image;
+    } catch (Failure e) {
+      if (mirror != null) mirror.release();
+      if (reader != null) reader.close();
+      frameThread.quitSafely();
+      throw e;
+    } catch (Exception e) {
+      if (mirror != null) mirror.release();
+      if (reader != null) reader.close();
+      frameThread.quitSafely();
+      throw fail("SCREENSHOT_FAILED", "The attached display could not be mirrored: " + e.getClass().getSimpleName());
+    }
+  }
+
+  /** Current real size of a display, with no fallback to display 0. */
+  private int[] displayGeometry(int displayId) {
+    Display display = displays.getDisplay(displayId);
+    if (display == null) throw fail("SCREENSHOT_FAILED", "Display " + displayId + " disappeared");
+    Point p = new Point();
+    display.getRealSize(p);
+    return new int[] {p.x, p.y};
   }
 
   /** Display 0's screenshot through the main connection; tests substitute the device. */
@@ -2880,13 +2993,13 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
               "value",
               desktopFlags,
               "displayFlags",
-              ownedDisplay.displayFlags,
+              ownedDisplay == null ? desktopFlags : ownedDisplay.displayFlags,
               "trusted",
-              (ownedDisplay.displayFlags & DISPLAY_TRUSTED) != 0,
+              ((ownedDisplay == null ? desktopFlags : ownedDisplay.displayFlags) & DISPLAY_TRUSTED) != 0,
               "ownFocus",
-              (ownedDisplay.displayFlags & DISPLAY_OWN_FOCUS) != 0,
+              ((ownedDisplay == null ? desktopFlags : ownedDisplay.displayFlags) & DISPLAY_OWN_FOCUS) != 0,
               "stealTopFocusDisabled",
-              (ownedDisplay.displayFlags & DISPLAY_STEAL_TOP_FOCUS_DISABLED) != 0,
+              ((ownedDisplay == null ? desktopFlags : ownedDisplay.displayFlags) & DISPLAY_STEAL_TOP_FOCUS_DISABLED) != 0,
               "imePolicy",
               "local"));
     }
@@ -3188,8 +3301,18 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
 
   /** Releases the agent display and the main connection; may block on Binder. */
   void releaseRoutes() {
-    stopDesktop();
-    disconnectAutomation(mainAutomation);
+    if (attachedMode) {
+      if (desktopAutomation != null) disconnectAutomation(desktopAutomation);
+      desktopAutomation = null;
+      if (mainAutomation != null) disconnectAutomation(mainAutomation);
+      desktopDisplay = -1;
+      activeDisplay = Display.DEFAULT_DISPLAY;
+      automation = mainAutomation;
+      attachedMode = false;
+    } else {
+      stopDesktop();
+      disconnectAutomation(mainAutomation);
+    }
     thread.quitSafely();
   }
 }

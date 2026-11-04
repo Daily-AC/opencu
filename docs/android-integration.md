@@ -61,7 +61,8 @@ This leaves every text line byte-for-byte unchanged. `initialize` and
 `tools/list` are also unchanged. In this mode, results that contain an
 element state add `_meta["opencu/elements"]`, in the same order and with the
 same `index` values as the text lines, and `_meta["opencu/screen"]`:
-`package`, `displayId`, `width`, `height`, and `rotation`. Each element record
+`package`, `displayId`, `width`, `height`, and `rotation`. When a screenshot is
+included, it also has `imageWidth` and `imageHeight`. Each element record
 contains `index`, `class`, `resourceId`, `text` (when non-password), optional
 `contentDescription`, `bounds` as `[left, top, right, bottom]`, booleans for
 `clickable`, `editable`, `scrollable`, `focused`, `checked`, `selected`,
@@ -69,6 +70,26 @@ contains `index`, `class`, `resourceId`, `text` (when non-password), optional
 names. Password records omit text, values, and content lengths entirely.
 Use the record's `index` with the input tools; it is the same number printed
 in the corresponding line.
+
+When the host app has already created and owns a trusted, own-focus virtual display, attach the
+engine to it instead of asking OpenCU to create another one:
+
+```sh
+CLASSPATH=/data/local/tmp/opencu-android-<sha256-16>.jar \
+  app_process / dev.opencu.android.Main mcp --attach-display DISPLAY_ID --elements
+```
+
+`--attach-display` is optional, accepts a non-main display ID, and may appear before or after
+`--elements`. At startup the engine reads the display back and requires that it exists, is not
+display 0, and has Android's trusted and own-focus flags. A failed check returns
+`AGENT_DESKTOP_UNAVAILABLE`; the engine never falls back to display 0. In attach mode all app
+launches, accessibility reads, input and scrolling target that display. `agent_desktop start`
+reports the already attached ID, while `stop`, idle shutdown and connection close release only
+OpenCU resources and never remove the host's display.
+
+Screenshots use a temporary Android mirror display and release it after each capture. The image
+metadata keeps `width`, `height`, `display` under `opencu/screenshot`; structured responses also
+include `imageWidth` and `imageHeight` in `opencu/screen` when that response contains a screenshot.
 
 An ordinary app's identity is refused, and so is root that has not dropped to
 `shell`. The wanctl app works this way.

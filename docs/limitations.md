@@ -213,7 +213,10 @@ The measurements behind this section are in
 - Screenshots cover the full active display, including overlays, and use scaled
   JPEG coordinates. Agent-display screenshots come from that display's own
   frames, because Android 14's UiAutomation screenshot always shows display 0;
-  this path is not yet verified on a device. The agent display requires a trusted, own-focus display that
+  this path is not yet verified on a device. `--attach-display ID` can use a host-created
+  virtual display when it is non-main, trusted and own-focus; a failed check returns
+  `AGENT_DESKTOP_UNAVAILABLE` and never falls back to display 0. Attached-display screenshots
+  use a temporary mirror display. The agent display requires a trusted, own-focus display that
   cannot take the top focus and a local IME policy, all read back; a phone that
   cannot provide them gets `AGENT_DESKTOP_UNAVAILABLE`. External displays and
   other OEM builds are untested. Secure windows are not bypassed. Window polling can miss

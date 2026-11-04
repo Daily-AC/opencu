@@ -24,6 +24,17 @@ public final class OfflineTests {
     }
   }
 
+  static void usageError(String contains, String... args) {
+    tests++;
+    try {
+      Arguments.parse(args);
+      throw new AssertionError("accepted invalid arguments " + Arrays.toString(args));
+    } catch (IllegalArgumentException e) {
+      if (!e.getMessage().contains(contains))
+        throw new AssertionError(e.getMessage());
+    }
+  }
+
   static Element element() {
     Element e = new Element();
     e.index = 1;
@@ -65,6 +76,19 @@ public final class OfflineTests {
   }
 
   public static void main(String[] args) throws Exception {
+    Arguments baseline = Arguments.parse(new String[0]);
+    check(baseline.mode.equals("mcp") && !baseline.elements && baseline.attachDisplay == null,
+        "no arguments keep the baseline mcp mode");
+    Arguments attached = Arguments.parse(new String[] {"mcp", "--attach-display", "42", "--elements"});
+    check(attached.mode.equals("mcp") && attached.elements && attached.attachDisplay.equals(42),
+        "attach display combines with elements in either option order");
+    Arguments reverse = Arguments.parse(new String[] {"mcp", "--elements", "--attach-display", "7"});
+    check(reverse.elements && reverse.attachDisplay.equals(7), "elements can precede attach display");
+    usageError("requires a display ID", "mcp", "--attach-display");
+    usageError("numeric display ID", "mcp", "--attach-display", "phone");
+    usageError("numeric display ID", "mcp", "--attach-display", "-1");
+    usageError("numeric display ID", "mcp", "--attach-display", "999999999999999999999");
+    usageError("Usage:", "mcp", "--attach-display", "1", "--attach-display", "2");
     Map<String, Object> recording =
         map(Json.read(Files.readString(Path.of(args[0], "recorded-form.json"))));
     for (Object raw : list(recording.get("nodes"))) {
