@@ -85,7 +85,12 @@ display 0, and has Android's trusted and own-focus flags. A failed check returns
 `AGENT_DESKTOP_UNAVAILABLE`; the engine never falls back to display 0. In attach mode all app
 launches, accessibility reads, input and scrolling target that display. `agent_desktop start`
 reports the already attached ID, while `stop`, idle shutdown and connection close release only
-OpenCU resources and never remove the host's display.
+OpenCU resources and never remove the host's display. An attached engine does not start the
+companion app: the host owns status, preview and stop. The host also owns opening apps:
+`get_app_state` reads whatever the display shows and reports its package instead of pulling `app`
+back, and input while another app is in front returns `APP_SWITCHED` with nothing sent. Waiting is
+the host's too: an attached engine answers reads and input without settling, so wait for the
+display to settle (for example on accessibility events) before reading the result of an action.
 
 Screenshots use a temporary Android mirror display and release it after each capture. The image
 metadata keeps `width`, `height`, `display` under `opencu/screenshot`; structured responses also

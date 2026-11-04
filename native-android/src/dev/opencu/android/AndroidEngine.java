@@ -1191,7 +1191,9 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
   private Screen readReady(String pkg, long token, boolean inputCall) {
     Screen s = observe(pkg);
     long end = SystemClock.uptimeMillis() + 3000;
-    while (s.elements.values().stream().noneMatch(e -> e.pkg.equals(pkg))
+    // An attached read follows the display, where a task can show another package's window: only
+    // an empty tree means nothing has been drawn yet.
+    while ((attachedMode ? s.elements.isEmpty() : s.elements.values().stream().noneMatch(e -> e.pkg.equals(pkg)))
         && s.foreground.equals(pkg)
         && SystemClock.uptimeMillis() < end) {
       if (inputCall) check(token, false);
@@ -1199,6 +1201,8 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
       SystemClock.sleep(30);
       s = observe(pkg);
     }
+    // The host of an attached display waits for it to settle before it reads.
+    if (attachedMode && !inputCall) return s;
     {
       if (inputCall) settleAfterInput(token);
       else waitIdle();
@@ -2900,6 +2904,9 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     if (!name.equals("run_actions")) show(name, args, latest, latest, pkg, 0, 0);
     boolean screenshot = Boolean.TRUE.equals(args.get("includeScreenshot"));
     if (name.equals("get_app_state") || name.equals("activate_app")) {
+      // The host of an attached display opens apps: a read follows what the display shows, so an
+      // app another one handed over to (a payment, a share) is not pulled back.
+      if (attachedMode && name.equals("get_app_state") && !foreground()[0].isEmpty()) pkg = foreground()[0];
       boolean inputCall = name.equals("activate_app") || !foreground()[0].equals(pkg);
       if (inputCall) activate(pkg, token);
       Screen s = readReady(pkg, token, inputCall);
@@ -2934,6 +2941,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     Screen base = latest;
     try {
       if (!foreground()[0].equals(pkg)) {
+        if (attachedMode) throw fail("APP_SWITCHED", "The display now shows another app; nothing sent");
         check(token, true);
         // Revalidate retained indexes before any implicit foreground change.
         if (args.containsKey("element_index"))
@@ -3007,6 +3015,10 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
   }
 
   private Screen afterAction(Screen before, String pkg, long token) {
+    if (attachedMode) {
+      check(token, false);
+      return observe(pkg);
+    }
     settleAfterInput(token);
     return stable(observe(pkg), pkg, token);
   }

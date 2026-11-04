@@ -61,7 +61,8 @@ public final class Main {
         System.exit(0);
       }
       stage = "ENGINE_FAILED";
-      engine.startCompanion();
+      // An attached engine runs inside a host that has its own status, preview and stop.
+      if (parsed.attachDisplay == null) engine.startCompanion();
       Protocol protocol = new Protocol(engine, BuildInfo.VERSION);
       // One serialized worker runs every call and the engine's idle timer.
       ScheduledThreadPoolExecutor worker =
