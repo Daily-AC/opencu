@@ -95,6 +95,33 @@ test('Android launcher sends every adb call of one launch to one device', () => 
   for(const call of given.calls)assert.deepEqual(call.slice(0,2),['-s','phone-2'],JSON.stringify(call));
 });
 
+test('Android launcher rejects an unsupported phone before publishing or starting the engine', () => {
+  for (const args of [[], ['doctor']]) {
+    const r=launchWithFakeAdb({FAKE_ADB_SERIAL:'phone-1',FAKE_ADB_SDK:'30',FAKE_ADB_RELEASE:'11',FAKE_ADB_STAT:'2000 644 regular file'},args);
+    assert.notEqual(r.status,0,args.join(' '));
+    assert.equal(r.stdout,'',args.join(' '));
+    assert.match(r.stderr.trim(),/^UNSUPPORTED_PLATFORM: phone is Android 11 \(SDK 30\); OpenCU requires Android 14 \(SDK 34\) or later$/,args.join(' '));
+    assert.deepEqual(r.calls,[
+      ['get-serialno'],
+      ['-s','phone-1','shell','-T','getprop ro.build.version.sdk; getprop ro.build.version.release'],
+    ],args.join(' '));
+  }
+});
+
+test('Android launcher proceeds for SDK 34 and when the SDK cannot be read', () => {
+  for (const env of [
+    {FAKE_ADB_SERIAL:'phone-1',FAKE_ADB_SDK:'34',FAKE_ADB_STAT:'2000 644 regular file'},
+    {FAKE_ADB_SERIAL:'phone-1',FAKE_ADB_STAT:'2000 644 regular file'},
+    {FAKE_ADB_SERIAL:'phone-1',FAKE_ADB_GETPROP_ERROR:'1',FAKE_ADB_STAT:'2000 644 regular file'},
+  ]) {
+    const r=launchWithFakeAdb(env);
+    assert.equal(r.status,0,r.stderr);
+    assert.match(r.stdout,/"launched"/);
+    assert.ok(r.calls.some(call=>call.slice(-1)[0].startsWith('getprop ro.build.version.sdk')),JSON.stringify(r.calls));
+    assert.ok(r.calls.some(call=>call.some(part=>part.includes('app_process'))),JSON.stringify(r.calls));
+  }
+});
+
 test('Android launcher refuses a cached engine jar that shell does not own exclusively', () => {
   for(const stat of ['2000 666 regular file','2000 664 regular file','0 644 regular file','2000 644 symbolic link','2000 4644 regular file','2000 755 regular file','']){
     const r=launchWithFakeAdb({FAKE_ADB_SERIAL:'phone-1',FAKE_ADB_STAT:stat});
