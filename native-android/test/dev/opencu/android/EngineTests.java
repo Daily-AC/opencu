@@ -1835,6 +1835,415 @@ public final class EngineTests {
           "batch: " + map(result.get("_meta")).get("opencu/batch"));
     });
 
+    test("a batch popup returns indexes from the settled popup tree", () -> {
+      Scene scene = new Scene();
+      scene.add("/0", "android.widget.Button", "next", "Next", 100, 200, 300, 260).clickable = true;
+      scene.add("/1", "android.widget.Button", "send", "Send", 100, 400, 300, 460).clickable = true;
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      final long[] popupAt = {0};
+      final Element[] popup = {null};
+      int[] resolves = {0};
+      engine.resolveHook = () -> {
+        if (++resolves[0] != 2) return;
+        Window dialog = new Window();
+        dialog.id = 9;
+        dialog.type = 1;
+        dialog.pkg = PKG;
+        dialog.layer = 5;
+        dialog.left = 100;
+        dialog.top = 800;
+        dialog.right = 980;
+        dialog.bottom = 1400;
+        dialog.focused = dialog.active = true;
+        scene.extraWindows.add(dialog);
+        popup[0] = scene.add("/0", "android.widget.Button", "choice", "Opening", 120, 900, 900, 1020);
+        popup[0].window = dialog.id;
+        popup[0].clickable = true;
+        scene.node(popup[0]).clickable = true;
+        popupAt[0] = android.os.SystemClock.uptimeMillis();
+      };
+      engine.onObserve = n -> {
+        if (popup[0] == null) return;
+        long elapsed = android.os.SystemClock.uptimeMillis() - popupAt[0];
+        popup[0].text = elapsed < 700 ? "Opening " + (elapsed / 100) : "Ready";
+      };
+      engine.read();
+      Map<String, Object> result =
+          engine.call("run_actions", args("actions", List.of(
+              obj("method", "click", "element_index", 1),
+              obj("method", "click", "element_index", 2, "until", obj("app", PKG)))));
+      String output = text(result);
+      require(output.contains("text=\"Ready\" id=choice"), "final popup state: " + output);
+      Map<String, Object> meta = map(result.get("_meta"));
+      Map<String, Object> settle = map(meta.get("opencu/settle"));
+      require(Boolean.TRUE.equals(settle.get("stable")) && ((Number) settle.get("waitedMs")).longValue() >= 700,
+          "settle " + settle);
+      require(String.valueOf(meta.get("opencu/batch")).contains("reason=popup"), "batch: " + meta);
+    });
+
+    test("a delayed popup is caught before the next batch action", () -> {
+      Scene scene = new Scene();
+      Element first = scene.add("/0", "android.widget.Button", "first", "First", 100, 200, 300, 260);
+      first.clickable = true;
+      Element second = scene.add("/1", "android.widget.Button", "second", "Second", 100, 400, 300, 460);
+      second.clickable = true;
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      final long[] tappedAt = {0};
+      final boolean[] opened = {false};
+      engine.shellHook = tap -> {
+        if (tappedAt[0] == 0) tappedAt[0] = android.os.SystemClock.uptimeMillis();
+        return "";
+      };
+      engine.onObserve = n -> {
+        if (!opened[0] && tappedAt[0] != 0
+            && android.os.SystemClock.uptimeMillis() - tappedAt[0] >= 400) {
+          opened[0] = true;
+          Window dialog = new Window();
+          dialog.id = 9;
+          dialog.type = 1;
+          dialog.pkg = PKG;
+          dialog.layer = 5;
+          dialog.left = 100;
+          dialog.top = 800;
+          dialog.right = 980;
+          dialog.bottom = 1400;
+          dialog.focused = dialog.active = true;
+          scene.extraWindows.add(dialog);
+          Element choice = scene.add("/0", "android.widget.Button", "choice", "Choice", 120, 900, 900, 1020);
+          choice.window = dialog.id;
+          choice.clickable = true;
+        }
+      };
+      engine.read();
+      Map<String, Object> result = engine.call("run_actions", args("actions", List.of(
+          obj("method", "click", "element_index", 1),
+          obj("method", "click", "element_index", 2))));
+      Map<String, Object> batch = map(map(result.get("_meta")).get("opencu/batch"));
+      require(Integer.valueOf(1).equals(batch.get("completed")) && "popup".equals(batch.get("reason")),
+          "batch " + batch);
+      require(engine.log.stream().filter(line -> line.contains(" tap ")).count() == 1,
+          "input sent: " + engine.log);
+    });
+
+    test("a delayed popup after a later step is caught before the step after it", () -> {
+      Scene scene = new Scene();
+      Element first = scene.add("/0", "android.widget.Button", "first", "First", 100, 200, 300, 260);
+      first.clickable = true;
+      Element second = scene.add("/1", "android.widget.Button", "second", "Second", 100, 400, 300, 460);
+      second.clickable = true;
+      Element third = scene.add("/2", "android.widget.Button", "third", "Third", 100, 600, 300, 660);
+      third.clickable = true;
+      Element status = scene.add("/3", "android.widget.TextView", "status", "0", 100, 800, 300, 860);
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      final int[] taps = {0};
+      final long[] secondAt = {0};
+      final boolean[] opened = {false};
+      engine.shellHook = tap -> {
+        taps[0]++;
+        // The first tap shows at once, so it is not held; the second changes nothing yet.
+        if (taps[0] == 1) status.text = "1";
+        if (taps[0] == 2) secondAt[0] = android.os.SystemClock.uptimeMillis();
+        return "";
+      };
+      engine.onObserve = n -> {
+        if (!opened[0] && secondAt[0] != 0
+            && android.os.SystemClock.uptimeMillis() - secondAt[0] >= 200) {
+          opened[0] = true;
+          Window dialog = new Window();
+          dialog.id = 9;
+          dialog.type = 1;
+          dialog.pkg = PKG;
+          dialog.layer = 5;
+          dialog.left = 100;
+          dialog.top = 800;
+          dialog.right = 980;
+          dialog.bottom = 1400;
+          dialog.focused = dialog.active = true;
+          scene.extraWindows.add(dialog);
+          Element choice = scene.add("/0", "android.widget.Button", "choice", "Choice", 120, 900, 900, 1020);
+          choice.window = dialog.id;
+          choice.clickable = true;
+        }
+      };
+      engine.read();
+      Map<String, Object> result = engine.call("run_actions", args("actions", List.of(
+          obj("method", "click", "element_index", 1),
+          obj("method", "click", "element_index", 2),
+          obj("method", "click", "element_index", 3))));
+      Map<String, Object> batch = map(map(result.get("_meta")).get("opencu/batch"));
+      require(Integer.valueOf(2).equals(batch.get("completed")) && "popup".equals(batch.get("reason")),
+          "batch " + batch);
+      require(taps[0] == 2, "taps " + taps[0] + ": " + engine.log);
+    });
+
+    test("a batch does not add the delayed-popup wait after an immediate tree change", () -> {
+      Scene scene = new Scene();
+      Element first = scene.add("/0", "android.widget.Button", "first", "First", 100, 200, 300, 260);
+      first.clickable = true;
+      Element second = scene.add("/1", "android.widget.Button", "second", "Second", 100, 400, 300, 460);
+      second.clickable = true;
+      Element third = scene.add("/2", "android.widget.Button", "third", "Third", 100, 600, 300, 660);
+      third.clickable = true;
+      Element status = scene.add("/3", "android.widget.TextView", "status", "0", 100, 800, 300, 860);
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      final int[] taps = {0};
+      engine.shellHook = tap -> {
+        status.text = String.valueOf(++taps[0]);
+        return "";
+      };
+      engine.read();
+      long started = android.os.SystemClock.uptimeMillis();
+      Map<String, Object> result = engine.call("run_actions", args("actions", List.of(
+          obj("method", "click", "element_index", 1),
+          obj("method", "click", "element_index", 2),
+          obj("method", "click", "element_index", 3))));
+      long elapsed = android.os.SystemClock.uptimeMillis() - started;
+      Map<String, Object> batch = map(map(result.get("_meta")).get("opencu/batch"));
+      require(Integer.valueOf(3).equals(batch.get("completed")) && batch.get("reason") == null,
+          "batch " + batch);
+      // The first step's 300 ms and the final read take about 600 ms; holding step 1 and 2 adds 500 ms.
+      require(elapsed < 900, "immediate changes took " + elapsed + " ms");
+    });
+
+    test("a first step that changes the tree at once still catches a popup that follows it", () -> {
+      Scene scene = new Scene();
+      Element first = scene.add("/0", "android.widget.Button", "first", "First", 100, 200, 300, 260);
+      first.clickable = true;
+      Element second = scene.add("/1", "android.widget.Button", "second", "Second", 100, 400, 300, 460);
+      second.clickable = true;
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      final long[] tappedAt = {0};
+      final boolean[] opened = {false};
+      engine.shellHook = tap -> {
+        if (tappedAt[0] == 0) {
+          tappedAt[0] = android.os.SystemClock.uptimeMillis();
+          first.text = "Changed";
+        }
+        return "";
+      };
+      engine.onObserve = n -> {
+        if (!opened[0] && tappedAt[0] != 0
+            && android.os.SystemClock.uptimeMillis() - tappedAt[0] >= 200) {
+          opened[0] = true;
+          Window dialog = new Window();
+          dialog.id = 9;
+          dialog.type = 1;
+          dialog.pkg = PKG;
+          dialog.layer = 5;
+          dialog.left = 100;
+          dialog.top = 800;
+          dialog.right = 980;
+          dialog.bottom = 1400;
+          dialog.focused = dialog.active = true;
+          scene.extraWindows.add(dialog);
+          Element choice = scene.add("/0", "android.widget.Button", "choice", "Choice", 120, 900, 900, 1020);
+          choice.window = dialog.id;
+          choice.clickable = true;
+        }
+      };
+      engine.read();
+      Map<String, Object> result = engine.call("run_actions", args("actions", List.of(
+          obj("method", "click", "element_index", 1),
+          obj("method", "click", "element_index", 2))));
+      Map<String, Object> batch = map(map(result.get("_meta")).get("opencu/batch"));
+      require("popup".equals(batch.get("reason")), "batch " + batch);
+      require(engine.log.stream().filter(line -> line.contains(" tap ")).count() == 1,
+          "input sent: " + engine.log);
+    });
+
+    test("a wait step is not held for a delayed popup", () -> {
+      Scene scene = new Scene();
+      scene.add("/0", "android.widget.Button", "first", "First", 100, 200, 300, 260).clickable = true;
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      engine.read();
+      long started = android.os.SystemClock.uptimeMillis();
+      engine.call("run_actions", args("actions", List.of(
+          obj("method", "wait", "ms", 50),
+          obj("method", "wait", "ms", 50),
+          obj("method", "wait", "ms", 50))));
+      long elapsed = android.os.SystemClock.uptimeMillis() - started;
+      // Three waits and the final read take about 450 ms; holding two of them adds 800 ms.
+      require(elapsed < 900, "three short waits took " + elapsed + " ms");
+    });
+
+    test("a first step that changes nothing is held 450 ms in all, not on top of its 300 ms", () -> {
+      Scene scene = new Scene();
+      scene.add("/0", "android.widget.Button", "first", "First", 100, 200, 300, 260).clickable = true;
+      scene.add("/1", "android.widget.Button", "second", "Second", 100, 400, 300, 460).clickable = true;
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      final long[] tapAt = {0, 0};
+      final int[] taps = {0};
+      engine.shellHook = tap -> {
+        if (taps[0] < 2) tapAt[taps[0]++] = android.os.SystemClock.uptimeMillis();
+        return "";
+      };
+      engine.read();
+      engine.call("run_actions", args("actions", List.of(
+          obj("method", "click", "element_index", 1),
+          obj("method", "click", "element_index", 2))));
+      long gap = tapAt[1] - tapAt[0];
+      require(taps[0] == 2 && gap >= 440 && gap < 700, "taps " + taps[0] + ", gap " + gap + " ms");
+    });
+
+    test("an attached host gets neither the delayed-popup hold nor the empty-window wait", () -> {
+      Scene scene = new Scene();
+      scene.add("/0", "android.widget.Button", "first", "First", 100, 200, 300, 260).clickable = true;
+      scene.add("/1", "android.widget.Button", "second", "Second", 100, 400, 300, 460).clickable = true;
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      Window empty = new Window();
+      empty.id = 9;
+      empty.type = 1;
+      empty.pkg = PKG;
+      empty.layer = 0;
+      empty.left = 100;
+      empty.top = 800;
+      empty.right = 980;
+      empty.bottom = 1400;
+      empty.focused = empty.active = true;
+      scene.extraWindows.add(empty);
+      engine.read();
+      engine.attachedMode = true;
+      long started = android.os.SystemClock.uptimeMillis();
+      Map<String, Object> result = engine.call("run_actions", args("actions", List.of(
+          obj("method", "press_key", "key", "back"),
+          obj("method", "press_key", "key", "back"),
+          obj("method", "press_key", "key", "back"))));
+      long elapsed = android.os.SystemClock.uptimeMillis() - started;
+      Map<String, Object> batch = map(map(result.get("_meta")).get("opencu/batch"));
+      require(Integer.valueOf(3).equals(batch.get("completed")), "batch " + batch);
+      Map<String, Object> settle = map(map(result.get("_meta")).get("opencu/settle"));
+      require(Boolean.TRUE.equals(settle.get("stable")), "settle " + settle);
+      // 300 ms after step 1 and the final read take about 600 ms; the hold adds 500 ms, the empty wait 1.4 s.
+      require(elapsed < 800, "attached batch took " + elapsed + " ms");
+    });
+
+    test("stable waits for controls in a focused dialog window", () -> {
+      Scene scene = new Scene();
+      Element button = scene.add("/0", "android.widget.Button", "open", "Open", 100, 200, 300, 260);
+      button.clickable = true;
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      final long[] openedAt = {0};
+      final boolean[] controlAdded = {false};
+      engine.shellHook = tap -> {
+        openedAt[0] = android.os.SystemClock.uptimeMillis();
+        Window dialog = new Window();
+        dialog.id = 9;
+        dialog.type = 1;
+        dialog.pkg = PKG;
+        dialog.layer = 5;
+        dialog.left = 100;
+        dialog.top = 800;
+        dialog.right = 980;
+        dialog.bottom = 1400;
+        dialog.focused = dialog.active = true;
+        scene.extraWindows.add(dialog);
+        return "";
+      };
+      engine.onObserve = n -> {
+        if (!controlAdded[0] && openedAt[0] != 0
+            && android.os.SystemClock.uptimeMillis() - openedAt[0] >= 280) {
+          controlAdded[0] = true;
+          Element choice = scene.add("/0", "android.widget.Button", "choice", "Choice", 120, 900, 900, 1020);
+          choice.window = 9;
+          choice.clickable = true;
+        }
+      };
+      engine.read();
+      Map<String, Object> result = engine.call("click", args("element_index", 1));
+      Map<String, Object> settle = map(map(result.get("_meta")).get("opencu/settle"));
+      require(text(result).contains("id=choice"), "dialog controls missing: " + text(result));
+      require(Boolean.TRUE.equals(settle.get("stable")), "settle " + settle);
+    });
+
+    test("stable reports false when a focused dialog stays empty", () -> {
+      Scene scene = new Scene();
+      Element button = scene.add("/0", "android.widget.Button", "open", "Open", 100, 200, 300, 260);
+      button.clickable = true;
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      engine.shellHook = tap -> {
+        Window dialog = new Window();
+        dialog.id = 9;
+        dialog.type = 1;
+        dialog.pkg = PKG;
+        dialog.layer = 5;
+        dialog.left = 100;
+        dialog.top = 800;
+        dialog.right = 980;
+        dialog.bottom = 1400;
+        dialog.focused = dialog.active = true;
+        scene.extraWindows.add(dialog);
+        return "";
+      };
+      engine.read();
+      long started = android.os.SystemClock.uptimeMillis();
+      Map<String, Object> result = engine.call("click", args("element_index", 1));
+      long elapsed = android.os.SystemClock.uptimeMillis() - started;
+      Map<String, Object> settle = map(map(result.get("_meta")).get("opencu/settle"));
+      require(Boolean.FALSE.equals(settle.get("stable")), "settle " + settle);
+      require(((Number) settle.get("waitedMs")).longValue() <= 1700 && elapsed <= 1900,
+          "empty dialog wait " + settle + " elapsed=" + elapsed);
+    });
+
+    test("person activity during the delayed-popup wait stops the batch", () -> {
+      Scene scene = new Scene();
+      Element first = scene.add("/0", "android.widget.Button", "first", "First", 100, 200, 300, 260);
+      first.clickable = true;
+      Element second = scene.add("/1", "android.widget.Button", "second", "Second", 100, 400, 300, 460);
+      second.clickable = true;
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      final long[] tappedAt = {0};
+      engine.shellHook = tap -> {
+        if (tappedAt[0] == 0) tappedAt[0] = android.os.SystemClock.uptimeMillis();
+        return "";
+      };
+      engine.checkHook = () -> {
+        if (tappedAt[0] != 0 && android.os.SystemClock.uptimeMillis() - tappedAt[0] >= 400)
+          throw Core.fail("PERSON_ACTIVE", "Physical input detected.");
+      };
+      engine.read();
+      Map<String, Object> result = engine.call("run_actions", args("actions", List.of(
+          obj("method", "click", "element_index", 1),
+          obj("method", "click", "element_index", 2))));
+      Map<String, Object> batch = map(map(result.get("_meta")).get("opencu/batch"));
+      require(Integer.valueOf(1).equals(batch.get("completed"))
+              && "person_active".equals(batch.get("reason")), "batch " + batch);
+      require(scene.node(second).performed.isEmpty(), "second action sent: " + scene.node(second).performed);
+    });
+
+    test("person activity ends the delayed-popup hold at once", () -> {
+      Scene scene = new Scene();
+      Element first = scene.add("/0", "android.widget.Button", "first", "First", 100, 200, 300, 260);
+      first.clickable = true;
+      Element second = scene.add("/1", "android.widget.Button", "second", "Second", 100, 400, 300, 460);
+      second.clickable = true;
+      Element third = scene.add("/2", "android.widget.Button", "third", "Third", 100, 600, 300, 660);
+      third.clickable = true;
+      Element status = scene.add("/3", "android.widget.TextView", "status", "0", 100, 800, 300, 860);
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      final int[] taps = {0};
+      final long[] secondAt = {0};
+      engine.shellHook = tap -> {
+        taps[0]++;
+        // The first tap shows at once, so it is not held; the second changes nothing and is.
+        if (taps[0] == 1) status.text = "1";
+        if (taps[0] == 2) secondAt[0] = android.os.SystemClock.uptimeMillis();
+        return "";
+      };
+      engine.checkHook = () -> {
+        if (secondAt[0] != 0 && android.os.SystemClock.uptimeMillis() - secondAt[0] >= 100)
+          throw Core.fail("PERSON_ACTIVE", "Physical input detected.");
+      };
+      engine.read();
+      Map<String, Object> result = engine.call("run_actions", args("actions", List.of(
+          obj("method", "click", "element_index", 1),
+          obj("method", "click", "element_index", 2),
+          obj("method", "click", "element_index", 3))));
+      long afterSecond = android.os.SystemClock.uptimeMillis() - secondAt[0];
+      Map<String, Object> batch = map(map(result.get("_meta")).get("opencu/batch"));
+      require("person_active".equals(batch.get("reason")) && taps[0] == 2, "batch " + batch + ", taps " + taps[0]);
+      require(afterSecond < 350, "stopped " + afterSecond + " ms after the second tap");
+    });
+
     test("a batch step that could outlast the batch time limit is not started", () -> {
       Scene scene = new Scene();
       scene.add("/0", "android.widget.Button", "hold", "Hold", 100, 200, 300, 260).clickable = true;

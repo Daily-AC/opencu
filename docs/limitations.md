@@ -212,6 +212,11 @@ the evidence files linked below.
   fallbacks (an enclosing element's action, a touch swipe), wheel paging and the
   stable final-state wait were added for ColorOS Clock and Calculator behaviour
   and have host checks only so far.
+- A batch holds its next step for up to 450 ms after input that changed nothing, so a
+  delayed popup stops it. A popup later than that, or one that follows an immediate
+  change on screen, can still receive the next input; use `until` or separate calls.
+  A full-screen dialog, as ColorOS draws them, stops the next indexed step with
+  `stale_element` rather than `popup`, and does not stop a key press.
 - Unicode uses accessible editable fields; custom editors and opaque content
   may not expose enough information. There is no OCR or keyboard replacement.
   No scope/select_text, arbitrary keycodes, power/volume tool keys or rich paste.

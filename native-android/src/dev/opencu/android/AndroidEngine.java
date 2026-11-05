@@ -47,7 +47,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
   private final String monitorProblem;
   private final boolean structuredElements;
   /** True when the display belongs to another process and must never be released here. */
-  private boolean attachedMode;
+  boolean attachedMode;
   /** This call is the host reading the screen, not an action reading it on the way. */
   private boolean hostRead;
   /** Input may have changed the screen since the accessibility cache was last cleared. */
@@ -3063,6 +3063,11 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
 
   /** A final state is stable once two reads this far apart agree; the wait for it is bounded. */
   static final long STABLE_GAP_MS = 120, STABLE_MAX_MS = 1500;
+  /**
+   * How long after an input that changed nothing a batch holds its next step, so a delayed popup
+   * can stop it. Covers the roughly 300 ms measured for a ColorOS dialog plus scheduling margin.
+   */
+  static final long BATCH_RESPONSE_WAIT_MS = 450;
 
   /** The wait for the final state of this call, for {@code _meta["opencu/settle"]}; or null. */
   private Map<String, Object> settled;
@@ -3071,8 +3076,9 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
    * The final state after input: reads from {@code first} until two reads {@link #STABLE_GAP_MS}
    * apart agree, so an animation still running (a key's press scale, a moving formula row, a wheel
    * settling on its value) is not returned as the result. An empty tree of the target app is not
-   * stable. Waits at most {@link #STABLE_MAX_MS} and never past the batch deadline, and records the
-   * wait for the result.
+   * stable, nor, unless attached to a host's display, is a focused application window with no
+   * controls yet. Waits at most {@link #STABLE_MAX_MS} and never past the batch deadline, and
+   * records the wait for the result.
    */
   private Screen stable(Screen first, String pkg, long token) {
     long start = SystemClock.uptimeMillis(), end = start + STABLE_MAX_MS;
@@ -3084,13 +3090,37 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
       pause(STABLE_GAP_MS, token);
       s = observe(pkg);
       String value = s.fingerprint();
-      if (value.equals(signature) && !(s.elements.isEmpty() && s.foreground.equals(pkg))) {
+      if (value.equals(signature)
+          && !(s.elements.isEmpty() && s.foreground.equals(pkg))
+          && (attachedMode || !hasFocusedEmptyWindow(s))) {
         stable = true;
         break;
       }
       signature = value;
     }
     settled = obj("waitedMs", SystemClock.uptimeMillis() - start, "stable", stable);
+    return s;
+  }
+
+  private static boolean hasFocusedEmptyWindow(Screen s) {
+    for (Window w : s.windows) if (w.type == 1 && w.focused && w.elements.isEmpty()) return true;
+    return false;
+  }
+
+  /**
+   * Holds the next step until {@code end} while nothing has visibly changed since {@code fence}, so
+   * a delayed popup is seen before more input is sent. The caller's interruption check decides what
+   * the result means.
+   */
+  private Screen waitForBatchResponse(Screen fence, Screen current, String pkg, long end, long token) {
+    end = Math.min(batchDeadline, end);
+    Screen s = current;
+    while (s.fingerprint().equals(fence.fingerprint())
+        && windowIdentity(s).equals(windowIdentity(fence))
+        && SystemClock.uptimeMillis() < end) {
+      pause(Math.min(25, Math.max(0, end - SystemClock.uptimeMillis())), token);
+      s = observe(pkg);
+    }
     return s;
   }
 
@@ -3113,14 +3143,13 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
   }
 
   /**
-   * Whether a batch that stopped for {@code reason} still waits for a stable final state. A dialog
-   * has its own short settle; at the time limit no time is left; a person, a stop, a lock or
-   * shutdown ends the call at once.
+   * Whether a batch that stopped for {@code reason} still waits for a stable final state. Popup and
+   * system-dialog stops use the same bounded stability wait as successful calls; at the time limit
+   * no time is left; a person, a stop, a lock or shutdown ends the call at once.
    */
   private static boolean settlesAfterStop(String reason) {
     return !Arrays.asList(
-            "popup", "system_dialog", "time_limit", "person_active", "user_stopped",
-            "screen_locked", "engine_stopping")
+            "time_limit", "person_active", "user_stopped", "screen_locked", "engine_stopping")
         .contains(reason);
   }
 
@@ -3159,6 +3188,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
         started = SystemClock.uptimeMillis();
         waited = 0;
         show(method, a, base, fence, activePackage, step, actions.size());
+        long sent = 0;
         if (method.equals("wait")) {
           long end = SystemClock.uptimeMillis() + ((Number) a.get("ms")).longValue();
           do {
@@ -3173,6 +3203,7 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
           }
       } else {
         perform(method, a, activePackage, base, fence, step == 1 ? cap : null, token);
+        sent = SystemClock.uptimeMillis();
         if (step == 1) pause(300, token);
       }
         // An until wait ends at the batch deadline at the latest.
@@ -3207,6 +3238,12 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
           pause(until.isEmpty() ? 10 : 40, token);
         }
         if (reason != null) break;
+        // A host attached to its own display paces its input itself.
+        if (sent != 0 && step < actions.size() && !attachedMode) {
+          last = waitForBatchResponse(fence, last, activePackage, sent + BATCH_RESPONSE_WAIT_MS, token);
+          reason = Core.stopReason(fence, last, expected);
+          if (reason != null) break;
+        }
         // Only an explicit until.app can authorize the new foreground for later non-indexed input.
         if (!expected.isEmpty() && last.foreground.equals(expected)) {
           activePackage = expected;
@@ -3230,20 +3267,11 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     if (reason != null) {
       try {
         last = observe(activePackage);
+        // A popup or system dialog is actionable as soon as it is reported, so the returned
+        // indexes must come from its settled tree too. Use the same bounded stability wait as a
+        // normal final state; stable() still honors the batch deadline and pause() keeps checking
+        // person input, volume-stop and shutdown during the wait.
         if (settlesAfterStop(reason)) last = stable(last, activePackage, token);
-        if (reason.equals("popup") || reason.equals("system_dialog")) {
-          long end = SystemClock.uptimeMillis() + 500, unchanged = SystemClock.uptimeMillis();
-          String fingerprint = last.fingerprint();
-          while (SystemClock.uptimeMillis() < end && SystemClock.uptimeMillis() - unchanged < 120) {
-            pause(35, token);
-            Screen next = observe(activePackage);
-            if (!next.fingerprint().equals(fingerprint)) {
-              fingerprint = next.fingerprint();
-              unchanged = SystemClock.uptimeMillis();
-            }
-            last = next;
-          }
-        }
       } catch (Failure safety) {
         failure = safety;
         reason = safety.code.toLowerCase(Locale.ROOT);
