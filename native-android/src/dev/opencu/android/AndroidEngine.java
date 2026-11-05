@@ -3113,14 +3113,13 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
   }
 
   /**
-   * Whether a batch that stopped for {@code reason} still waits for a stable final state. A dialog
-   * has its own short settle; at the time limit no time is left; a person, a stop, a lock or
-   * shutdown ends the call at once.
+   * Whether a batch that stopped for {@code reason} still waits for a stable final state. Popup and
+   * system-dialog stops use the same bounded stability wait as successful calls; at the time limit
+   * no time is left; a person, a stop, a lock or shutdown ends the call at once.
    */
   private static boolean settlesAfterStop(String reason) {
     return !Arrays.asList(
-            "popup", "system_dialog", "time_limit", "person_active", "user_stopped",
-            "screen_locked", "engine_stopping")
+            "time_limit", "person_active", "user_stopped", "screen_locked", "engine_stopping")
         .contains(reason);
   }
 
@@ -3230,20 +3229,11 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     if (reason != null) {
       try {
         last = observe(activePackage);
+        // A popup or system dialog is actionable as soon as it is reported, so the returned
+        // indexes must come from its settled tree too. Use the same bounded stability wait as a
+        // normal final state; stable() still honors the batch deadline and pause() keeps checking
+        // person input, volume-stop and shutdown during the wait.
         if (settlesAfterStop(reason)) last = stable(last, activePackage, token);
-        if (reason.equals("popup") || reason.equals("system_dialog")) {
-          long end = SystemClock.uptimeMillis() + 500, unchanged = SystemClock.uptimeMillis();
-          String fingerprint = last.fingerprint();
-          while (SystemClock.uptimeMillis() < end && SystemClock.uptimeMillis() - unchanged < 120) {
-            pause(35, token);
-            Screen next = observe(activePackage);
-            if (!next.fingerprint().equals(fingerprint)) {
-              fingerprint = next.fingerprint();
-              unchanged = SystemClock.uptimeMillis();
-            }
-            last = next;
-          }
-        }
       } catch (Failure safety) {
         failure = safety;
         reason = safety.code.toLowerCase(Locale.ROOT);
