@@ -1835,6 +1835,52 @@ public final class EngineTests {
           "batch: " + map(result.get("_meta")).get("opencu/batch"));
     });
 
+    test("a batch popup returns indexes from the settled popup tree", () -> {
+      Scene scene = new Scene();
+      scene.add("/0", "android.widget.Button", "next", "Next", 100, 200, 300, 260).clickable = true;
+      scene.add("/1", "android.widget.Button", "send", "Send", 100, 400, 300, 460).clickable = true;
+      ScriptedEngine engine = ScriptedEngine.create(scene);
+      final long[] popupAt = {0};
+      final Element[] popup = {null};
+      int[] resolves = {0};
+      engine.resolveHook = () -> {
+        if (++resolves[0] != 2) return;
+        Window dialog = new Window();
+        dialog.id = 9;
+        dialog.type = 1;
+        dialog.pkg = PKG;
+        dialog.layer = 5;
+        dialog.left = 100;
+        dialog.top = 800;
+        dialog.right = 980;
+        dialog.bottom = 1400;
+        dialog.focused = dialog.active = true;
+        scene.extraWindows.add(dialog);
+        popup[0] = scene.add("/0", "android.widget.Button", "choice", "Opening", 120, 900, 900, 1020);
+        popup[0].window = dialog.id;
+        popup[0].clickable = true;
+        scene.node(popup[0]).clickable = true;
+        popupAt[0] = android.os.SystemClock.uptimeMillis();
+      };
+      engine.onObserve = n -> {
+        if (popup[0] == null) return;
+        long elapsed = android.os.SystemClock.uptimeMillis() - popupAt[0];
+        popup[0].text = elapsed < 700 ? "Opening " + (elapsed / 100) : "Ready";
+      };
+      engine.read();
+      Map<String, Object> result =
+          engine.call("run_actions", args("actions", List.of(
+              obj("method", "click", "element_index", 1),
+              obj("method", "click", "element_index", 2, "until", obj("app", PKG)))));
+      String output = text(result);
+      require(output.contains("text=\"Ready\" id=choice"), "final popup state: " + output);
+      Map<String, Object> meta = map(result.get("_meta"));
+      Map<String, Object> settle = map(meta.get("opencu/settle"));
+      require(Boolean.TRUE.equals(settle.get("stable")) && ((Number) settle.get("waitedMs")).longValue() >= 700,
+          "settle " + settle);
+      require(String.valueOf(meta.get("opencu/batch")).contains("reason=popup"), "batch: " + meta);
+    });
+
     test("a batch step that could outlast the batch time limit is not started", () -> {
       Scene scene = new Scene();
       scene.add("/0", "android.widget.Button", "hold", "Hold", 100, 200, 300, 260).clickable = true;
