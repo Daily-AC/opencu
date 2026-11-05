@@ -2,7 +2,8 @@
 
 `list_apps`, `get_app_state`, `activate_app`, `click`, `drag`, `press_key`,
 `type_text`, `paste`, `scroll`, `set_value`, `select_text`,
-`perform_secondary_action`, `run_actions` and `agent_desktop`.
+`perform_secondary_action`, `run_actions` and `agent_desktop`. `select_text` is macOS
+and Linux only; Linux has no `agent_desktop`.
 
 Start with `get_app_state`. It takes a bundle identifier, app name or `.app`
 path, launches the app in the background if needed, and returns indexed

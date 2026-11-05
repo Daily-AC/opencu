@@ -491,8 +491,14 @@ optional: without it nothing changes. With it, the phone shows what the agent do
   the app there: a view that refuses obscured touches (`filterTouchesWhenObscured`)
   ignores taps right under the island, the person's and the engine's alike.
 
-Install it once and allow it to draw over other apps (from npm, the APK is at
-`"$(npm root -g)/@z10/opencu/.build/android/opencu-companion.apk"`):
+Install it once and allow it to draw over other apps. From npm:
+
+```sh
+adb install -r "$(npm root -g)/@z10/opencu/.build/android/opencu-companion.apk"
+adb shell appops set dev.opencu.companion SYSTEM_ALERT_WINDOW allow
+```
+
+From a source checkout:
 
 ```sh
 adb install -r .build/android/opencu-companion.apk

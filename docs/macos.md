@@ -4,8 +4,10 @@ On macOS, OpenCU reads and operates app windows through Accessibility,
 CoreGraphics and ScreenCaptureKit, and it can work in a background app while you
 keep using the one in front.
 
-**Status (v0.9.0):** npm package and source builds for Apple silicon. On the development Mac, 9 of
-the last 10 runs of the 18-check background GUI suite passed, and it has completed
+**Status (v0.9.0):** npm package and source builds for Apple silicon. At the first release, 9 of 10
+runs of the 18-check background GUI suite passed on the development Mac. The suite is
+not re-run for every release, and the committed record is an earlier
+[12-check run](../evidence/opencu-background-gui-2026-10-12.json). It has completed
 a handful of real tasks. Read [Limitations](limitations.md) before relying on it.
 
 ## What it does

@@ -1,7 +1,8 @@
 # Limitations
 
-The measurements behind this section are in
-[measured behavior and limits](opencu-independent-2026-10-12.md).
+Measurements of the first macOS engine are in
+[measured behavior and limits](opencu-independent-2026-10-12.md); later ones are in
+the evidence files linked below.
 
 ## Install and permissions
 
@@ -205,9 +206,9 @@ The measurements behind this section are in
   change foreground once the power service's last user activity, read after the
   input monitor is live, is ten seconds old; a contact already held at that moment
   is known only through that time.
-- Wheel pickers (time/date pickers) cannot be set directly: Android has no
-  standard action for their value, so they are scrolled one value per page.
-  `set_value` sets editable fields and range elements such as sliders. The scroll
+- Android has no standard action for a wheel picker's (time/date picker's) value,
+  so `set_value` steps it by scrolling and reads the result back. `set_value` also
+  sets editable fields and range elements such as sliders. The scroll
   fallbacks (an enclosing element's action, a touch swipe), wheel paging and the
   stable final-state wait were added for ColorOS Clock and Calculator behaviour
   and have host checks only so far.
