@@ -24,6 +24,20 @@ public final class Core {
   }
 
   /** Notice after a scroll, decided by whether each page's content moved. */
+  /** How long an attached host may go on reading through the accessibility cache with no input. */
+  public static final long CACHE_TRUST_MS = 3000;
+
+  /**
+   * Whether a read clears the accessibility cache first, which takes it from about 15 ms to about
+   * 300 ms. Standalone reads always do. An attached host reads several times per action: only its
+   * own reads are fresh, once after input and then at least every {@link #CACHE_TRUST_MS}, which
+   * bounds how long an app that changes without an accessibility event can stay unseen.
+   */
+  public static boolean clearsCache(
+      boolean attached, boolean hostRead, boolean sentSinceClear, long sinceClearMs) {
+    return !attached || (hostRead && (sentSinceClear || sinceClearMs >= CACHE_TRUST_MS));
+  }
+
   public static String scrollNotice(int moved, int requested) {
     if (moved == 0) return "Nothing moved; the list is at its end or does not scroll this way";
     if (moved < requested)

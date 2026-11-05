@@ -76,6 +76,16 @@ public final class OfflineTests {
   }
 
   public static void main(String[] args) throws Exception {
+    // Standalone reads are always fresh, whatever happened before them.
+    check(clearsCache(false, false, false, 0), "a standalone action read clears the cache");
+    check(clearsCache(false, true, false, 0), "a standalone host read clears the cache");
+    // Attached: an action's own reads never clear, however long ago the last clear was.
+    check(!clearsCache(true, false, true, 60_000), "an attached action's read uses the cache");
+    // Attached: the host sees the result of its input, and an app that changes without events
+    // cannot stay unseen for longer than the limit.
+    check(clearsCache(true, true, true, 0), "the host's read after input clears the cache");
+    check(!clearsCache(true, true, false, CACHE_TRUST_MS - 1), "the host's repeat read uses the cache");
+    check(clearsCache(true, true, false, CACHE_TRUST_MS), "the host's read past the limit clears the cache");
     Arguments baseline = Arguments.parse(new String[0]);
     check(baseline.mode.equals("mcp") && !baseline.elements && baseline.attachDisplay == null,
         "no arguments keep the baseline mcp mode");

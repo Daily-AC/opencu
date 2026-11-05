@@ -92,6 +92,11 @@ back, and input while another app is in front returns `APP_SWITCHED` with nothin
 the host's too: an attached engine answers reads and input without settling, so wait for the
 display to settle (for example on accessibility events) before reading the result of an action.
 
+An attached engine's `get_app_state` reads the display afresh once after input and then at least
+every three seconds; other reads use the accessibility cache, about 20 times faster. Wait for the
+display to settle before you read, as the host owns waiting. Input re-reads its target element
+first and re-reads the screen if that element changed.
+
 Screenshots use a temporary Android mirror display and release it after each capture. The image
 metadata keeps `width`, `height`, `display` under `opencu/screenshot`; structured responses also
 include `imageWidth` and `imageHeight` in `opencu/screen` when that response contains a screenshot.

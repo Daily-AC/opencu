@@ -48,6 +48,11 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
   private final boolean structuredElements;
   /** True when the display belongs to another process and must never be released here. */
   private boolean attachedMode;
+  /** This call is the host reading the screen, not an action reading it on the way. */
+  private boolean hostRead;
+  /** Input may have changed the screen since the accessibility cache was last cleared. */
+  private boolean sentSinceClear = true;
+  private long clearedAt;
   private final Field taskDisplay;
   private final Map<String, Object> hidden = obj();
   private volatile boolean closed;
@@ -1035,7 +1040,12 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
   }
 
   Screen observe(String target) {
-    automation.clearCache();
+    long now = SystemClock.uptimeMillis();
+    if (Core.clearsCache(attachedMode, hostRead, sentSinceClear, now - clearedAt)) {
+      automation.clearCache();
+      clearedAt = now;
+      sentSinceClear = false;
+    }
     nodes.clear();
     Screen s = new Screen();
     s.displayId = activeDisplay;
@@ -1173,6 +1183,19 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
       if (label != null) e.actions.put(label, id);
     }
     return e;
+  }
+
+  /** Whether {@code n}, read afresh, no longer matches the {@code seen} state read from the cache. */
+  private boolean changedSinceRead(AccessibilityNodeInfo n, Element seen) {
+    if (n == null || !n.refresh()) return true;
+    Element fresh = element(n, seen.path, seen.window);
+    return fresh.left != seen.left
+        || fresh.top != seen.top
+        || fresh.right != seen.right
+        || fresh.bottom != seen.bottom
+        || fresh.enabled != seen.enabled
+        || !fresh.text.equals(seen.text)
+        || !fresh.desc.equals(seen.desc);
   }
 
   /** The live element that {@code old} (from {@code before}) still names in {@code now}. */
@@ -1956,6 +1979,18 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
               ? liveAfterOwnChange(old, base, now)
               : live(old, base, now);
       n = nodes.get(target.index);
+      // An attached engine read this through the accessibility cache, which events keep current.
+      // The element about to be touched is read afresh, so that a change whose event is still on
+      // its way does not send input to where it used to be.
+      if (attachedMode && changedSinceRead(n, target)) {
+        automation.clearCache();
+        now = observe(pkg);
+        target =
+            batchChanged != null && batchChanged.contains(index)
+                ? liveAfterOwnChange(old, base, now)
+                : live(old, base, now);
+        n = nodes.get(target.index);
+      }
     }
     // Whether this step changes the element's own value (and so maybe its text): set_value, or a
     // wheel's own scroll actions or scroll. Other actions (dismiss, delete, custom) do not loosen
@@ -2899,6 +2934,8 @@ class AndroidEngine implements Protocol.Backend, AutoCloseable {
     passedOver = "";
     settled = null;
     sent = false;
+    hostRead = name.equals("get_app_state");
+    if (!hostRead) sentSinceClear = true;
     long token = person.token();
     if (!name.equals("get_app_state")) check(token, false);
     String pkg = resolve((String) args.get("app"));
