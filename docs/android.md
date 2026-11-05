@@ -120,6 +120,9 @@ wheel still settling is not returned as the result: after input the engine reads
 until two reads 120 ms apart agree, for at most 1.5 s (never past a batch's time
 limit). `_meta["opencu/settle"]` reports `waitedMs` and `stable`, which is false
 when the bound ended the wait, as on a screen that keeps animating.
+A focused application window with no controls yet, such as a dialog still loading, is
+also unsettled; if it stays empty through the 1.5 s bound the state is returned with
+`stable: false`.
 
 State reports foreground package/activity, main display size, IME visibility and
 a connection-local state id. Visible useful nodes get dense indexes. Pure layout
@@ -388,6 +391,20 @@ Polling is local, normally every 40 ms plus the tree read.
 Apps that preview a result while you type, such as a calculator, can satisfy an
 `until` on the result text before the last key. Wait on the last step with
 `stable: true`, or with a condition only the last action produces.
+
+After an input step in `run_actions` that leaves the screen and window list unchanged,
+the next step is held for up to 450 ms after the input, so a dialog that opens late
+(about 300 ms on ColorOS) stops the batch instead of taking the next step. The hold ends
+as soon as anything changes, and a person's input, volume-down stop, lock or shutdown end
+it as usual. A step that changes the screen at once is not held, so ordinary batches are
+no slower. A popup later than 450 ms, or one that follows an immediate change, can still
+receive the next input: use `until` or separate calls when that matters. None of this
+applies to `--attach-display`, where the host paces its own input.
+
+ColorOS draws an app's dialog as a new full-screen window, which looks the same as a new
+page of that activity, so it is not reported as `popup`. The batch still stops, with
+`stale_element`, when the next step names an element by index; a step that names none,
+such as a key press, is sent to the dialog.
 
 The batch stops on timeout, a new dialog/covering foreign window, unexpected
 foreground app, stale element, failed action, lock, physical input or stop.
