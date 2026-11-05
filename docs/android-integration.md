@@ -21,8 +21,9 @@ opencu android                    # exactly one phone on adb
 opencu android --serial SERIAL    # or set ANDROID_SERIAL
 ```
 
-From a source checkout the command is `bin/opencu android`. The launcher needs
-Node.js 22 or later and `adb`; set `ADB` if `adb` is not on `PATH`. It pushes the jar
+Get `opencu` with `npm install -g @z10/opencu` (Apple silicon Macs only for now); from
+a source checkout the command is `bin/opencu android`. The launcher needs Node.js 22
+or later and `adb`; set `ADB` if `adb` is not on `PATH`. It pushes the jar
 when the phone does not already have those exact bytes, then starts it. It neither
 pairs nor restarts the adb server.
 
@@ -160,7 +161,7 @@ certificate its jar pins, so install the APK that came with your jar. It cannot 
 embedded in another app or reused with another signing key.
 
 ```sh
-adb install -r opencu-companion.apk
+adb install -r "$(npm root -g)/@z10/opencu/.build/android/opencu-companion.apk"
 ```
 
 Then allow it to draw over other apps in Android's settings. See

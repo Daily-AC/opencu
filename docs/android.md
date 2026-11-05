@@ -15,6 +15,10 @@ Requires Android 14 (API 34) or newer, shell uid 2000, and USB/wireless debuggin
 Newer Android versions are untested. The conservative minimum matches the only
 connected device and avoids claiming compatibility with older hidden APIs.
 
+On an Apple silicon Mac, `npm install -g @z10/opencu` brings the jar and the
+companion app; only Node 22+ and adb are needed. Run `opencu android doctor`.
+The npm package installs on no other computer yet, so elsewhere build from source:
+
 Build on a computer with JDK 21, Node 22+, Android platform `android-34`,
 build-tools `36.1.0`, and platform-tools:
 
@@ -487,7 +491,8 @@ optional: without it nothing changes. With it, the phone shows what the agent do
   the app there: a view that refuses obscured touches (`filterTouchesWhenObscured`)
   ignores taps right under the island, the person's and the engine's alike.
 
-Install it once and allow it to draw over other apps:
+Install it once and allow it to draw over other apps (from npm, the APK is at
+`"$(npm root -g)/@z10/opencu/.build/android/opencu-companion.apk"`):
 
 ```sh
 adb install -r .build/android/opencu-companion.apk

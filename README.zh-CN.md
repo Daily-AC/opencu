@@ -8,6 +8,10 @@
   <strong>给任何 AI agent 用的 computer use，跑在你自己的电脑上。</strong>
 </p>
 
+https://github.com/user-attachments/assets/5da04b21-47fe-44c4-9d3d-e2b3a2e9a9c6
+
+<p align="center"><sub>根据一次真实使用，用代码重绘。</sub></p>
+
 <p align="center">
   OpenCU 是一个 MCP 服务器，让 Claude Code、Codex 或任何 MCP 客户端读取并操作<br>
   macOS、Windows、Linux 和 Android 上的应用。它在本机运行，不需要账号和模型密钥，<br>
@@ -56,20 +60,18 @@ irm https://github.com/Daily-AC/opencu/releases/latest/download/install.ps1 | ie
 curl -fsSL https://github.com/Daily-AC/opencu/releases/latest/download/install.sh | sh
 ```
 
-**macOS** · Apple 芯片，macOS 14 及以上，需要 Node.js 22+ 和 Command Line Tools
+**macOS** · Apple 芯片，macOS 14 及以上，需要 Node.js 22+
 
 ```sh
-git clone https://github.com/Daily-AC/opencu.git && cd opencu
-npm ci --ignore-scripts && npm run build
-./bin/opencu setup    # 授予一次「辅助功能」和「录屏」权限
+npm install -g @z10/opencu
+opencu setup    # 授予一次「辅助功能」和「录屏」权限
 ```
 
 **Android** · 预览版，Android 14 及以上，由电脑经 adb（USB 或无线调试）驱动
 
 ```sh
-git clone https://github.com/Daily-AC/opencu.git && cd opencu
-npm ci --ignore-scripts && npm run build:android   # 需要 JDK 21 和 Android SDK platform 34
-./bin/opencu android doctor
+npm install -g @z10/opencu    # Apple 芯片的 Mac，需要 adb；其他电脑从源码构建，见 Android 说明
+opencu android doctor
 ```
 
 装好后运行 `opencu doctor` 检查。各平台说明：
@@ -81,25 +83,27 @@ OpenCU 是 stdio 方式的 MCP 服务器，要注册的命令是：
 
 | 平台 | 命令 |
 |---|---|
-| macOS | `/path/to/opencu/bin/opencu` |
+| macOS | `opencu` |
 | Windows | `%LOCALAPPDATA%\OpenCU\bin\opencu.cmd` |
 | Linux | `~/.local/share/opencu/bin/opencu` |
-| Android | `/path/to/opencu/bin/opencu android`（adb 上只连一台手机，或设 `ANDROID_SERIAL`） |
+| Android | `opencu android`（adb 上只连一台手机，或设 `ANDROID_SERIAL`） |
 
 ```sh
 # Claude Code
-claude mcp add --scope user opencu -- /path/to/opencu/bin/opencu
+claude mcp add --scope user opencu -- opencu
 
 # Codex
-codex mcp add opencu -- /path/to/opencu/bin/opencu
+codex mcp add opencu -- opencu
 ```
+
+Windows 和 Linux 把 `opencu` 换成上表里的命令。
 
 其他 MCP 客户端：
 
 ```json
 {
   "mcpServers": {
-    "opencu": { "command": "/path/to/opencu/bin/opencu" }
+    "opencu": { "command": "opencu" }
   }
 }
 ```
@@ -151,7 +155,7 @@ codex mcp add opencu -- /path/to/opencu/bin/opencu
 
 | | macOS | Windows | Linux | Android |
 |---|---|---|---|---|
-| 安装 | 从源码构建 | x64 预编译包，未签名 | x64 预编译包 | 从源码构建，经 adb 运行 |
+| 安装 | npm，Apple 芯片 | x64 预编译包，未签名 | x64 预编译包 | npm（Apple 芯片的 Mac），其他电脑从源码构建；经 adb 运行 |
 | 输入 | 后台，只送到目标应用 | 前台，你 10 秒没动键鼠才切 | 前台，你 10 秒没动键鼠才切 | 前台，你 10 秒没碰屏幕才切 |
 | agent 桌面 | 虚拟显示器，带只看不点的预览窗 | 独立会话，显示在一个窗口里 | 暂无 | 虚拟屏；装上可选的手机 App 后有只看不点的预览窗 |
 | 锁屏时 | 拒绝操作；agent 桌面暂停 | 拒绝操作；agent 桌面仍可按编号点击和设值 | 拒绝操作 | 拒绝操作 |
@@ -167,10 +171,10 @@ OpenCU 是给人用的刹车，不是沙箱：agent 操作的应用和你共用�
 
 ## 限制
 
-- **macOS：** 只能从源码构建，只支持 Apple 芯片。macOS 大约每月问一次是否允许 OpenCU 继续录屏。电脑锁屏时无法操作。
+- **macOS：** 只支持 Apple 芯片。安装包用 OpenCU 自己的证书签名，没有经过苹果公证，所以要用 npm 安装，不要从浏览器下载。macOS 大约每月问一次是否允许 OpenCU 继续录屏。电脑锁屏时无法操作。
 - **Windows：** 安装包没有签名，SmartScreen 或 Defender 可能会提示。不在 agent 桌面里时，输入走前台。
 - **Linux：** 只支持 X11，Wayland 会被拒绝。输入走前台。
-- **Android：** 预览版，只在一台手机（OPPO PGBM10，Android 14）上测过。要在电脑上经 adb 运行，没有预编译包。手机端 App 可选，只用来显示状态、预览和停止。
+- **Android：** 预览版，只在一台手机（OPPO PGBM10，Android 14）上测过。要在电脑上经 adb 运行；npm 包只能装在 Apple 芯片的 Mac 上，其他电脑要从源码构建。手机端 App 可选，只用来显示状态、预览和停止。
 - Blender 这类自绘界面的应用，以及台前调度侧栏里的窗口，需要在前台操作。
 
 完整清单和实测数据见 [Limitations](docs/limitations.md)（英文）。
