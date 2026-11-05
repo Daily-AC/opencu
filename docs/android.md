@@ -82,6 +82,8 @@ screen or clipboard content. `doctor` also returns that line as `error`.
 When the phone or its adb transport is gone, the computer-side launcher (`bin/opencu
 android`) ends with its own coded stderr line, so a host does not report an engine
 fault: `DEVICE_UNAVAILABLE: adb cannot reach the phone SERIAL (adb's reason); …`.
+A phone below Android 14 ends the launch with `UNSUPPORTED_PLATFORM: phone is Android
+11 (SDK 30); OpenCU requires Android 14 (SDK 34) or later`, before anything is pushed.
 Before launch it ends `the engine was not started and nothing was sent`. When the
 adb connection ends while the engine runs (the launch exits with an error and adb
 no longer reports the phone as `device`), it says the connection ended while the

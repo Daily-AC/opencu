@@ -29,6 +29,12 @@ function deviceState(){
 function unavailable(why,progress){
   return `DEVICE_UNAVAILABLE: adb cannot reach the phone${serial?` ${serial}`:''} (${why}); ${progress}`;
 }
+function deviceVersion(){
+  try{
+    const [sdk,release]=run(['shell','-T','getprop ro.build.version.sdk; getprop ro.build.version.release'],5000).split('\n').map(line=>line.trim());
+    return /^\d+$/.test(sdk)?{sdk:Number(sdk),release}:null;
+  }catch{return null;}
+}
 try{
   // Every adb call of this launch, the final exec included, goes to the same device.
   if(!serial){
@@ -42,6 +48,8 @@ try{
   }
   const jar=path.join(root,'.build/android/opencu-android.jar');
   if(!existsSync(jar))throw new Error('Android engine missing. Run npm run build:android.');
+  const version=deviceVersion();
+  if(version&&version.sdk<34)throw Object.assign(new Error(`UNSUPPORTED_PLATFORM: phone is Android ${version.release||'?'} (SDK ${version.sdk}); OpenCU requires Android 14 (SDK 34) or later`),{coded:true});
   const digest=createHash('sha256').update(readFileSync(jar)).digest('hex');
   const remote=`/data/local/tmp/opencu-android-${digest.slice(0,16)}.jar`;
   try{
