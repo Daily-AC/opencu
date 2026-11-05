@@ -11,7 +11,7 @@ desktop-specific interfaces. Wayland is not supported.
 
 ## Install
 
-On x86_64 Linux, as the desktop's user:
+On x86_64 Linux with glibc (musl systems such as Alpine are refused), as the desktop's user:
 
 ```sh
 curl -fsSL https://github.com/Daily-AC/opencu/releases/latest/download/install.sh | sh

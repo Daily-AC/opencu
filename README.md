@@ -43,9 +43,10 @@ window. Your cursor stays where it is and the app in front keeps the keyboard.
 a virtual display (macOS) or in a separate session (Windows), which you watch in an
 ordinary window.
 
-**You stay in charge.** There is always a Stop button. On Windows and Linux a
-physical Escape also stops it, and it will not take the foreground within 10
-seconds of your last input. A stopped connection never restarts on its own.
+**You stay in charge.** You can always stop it: the Stop button on macOS, a physical
+Escape on Windows and Linux, three presses of volume-down on Android. On Windows,
+Linux and Android it will not take the foreground within 10 seconds of your last
+input. A stopped connection never restarts on its own.
 
 **It is measured.** On Windows tasks that can only be done through the UI, the same
 agent passed 7 of 8 trials with OpenCU and 2 of 8 with a shell and screenshots.
@@ -62,7 +63,7 @@ hosted. The agent you already use brings the model.
 irm https://github.com/Daily-AC/opencu/releases/latest/download/install.ps1 | iex
 ```
 
-**Linux** · x86_64, X11 desktops
+**Linux** · x86_64 with glibc, X11 desktops
 
 ```sh
 curl -fsSL https://github.com/Daily-AC/opencu/releases/latest/download/install.sh | sh
@@ -72,7 +73,7 @@ curl -fsSL https://github.com/Daily-AC/opencu/releases/latest/download/install.s
 
 ```sh
 npm install -g @z10/opencu
-opencu setup    # grant Accessibility and Screen Recording once
+opencu setup    # grant Accessibility and Screen Recording
 ```
 
 **Android** · preview, Android 14 or later, driven from a computer over adb (USB or wireless debugging)
@@ -82,7 +83,7 @@ npm install -g @z10/opencu    # Apple silicon Macs, with adb; other computers bu
 opencu android doctor
 ```
 
-Run `opencu doctor` to check an installation. Platform guides:
+To check an installation, run `opencu doctor` (on Windows and Linux, the command from the table below). Platform guides:
 [macOS](docs/macos.md) · [Windows](docs/windows.md) · [Linux](docs/linux.md) · [Android](docs/android.md). Connecting your own host to Android: [Android integration](docs/android-integration.md).
 
 ## Connect your agent
@@ -104,9 +105,9 @@ claude mcp add --scope user opencu -- opencu
 codex mcp add opencu -- opencu
 ```
 
-On Windows and Linux, use the command from the table instead of `opencu`.
+On Windows, Linux and Android, use the command from the table instead of `opencu`.
 
-Any other MCP client:
+Any other MCP client (on Android, add `"args": ["android"]`):
 
 ```json
 {
@@ -131,6 +132,8 @@ Then ask your agent to do something in an app. It starts by reading the app with
 | `activate_app` | Bring an app to the front when a step needs it |
 | `run_actions` | Run up to 16 actions in one call and return one final state |
 | `agent_desktop` | Start, check or stop the agent desktop |
+
+`select_text` is macOS and Linux only. Linux has no `agent_desktop`.
 
 Input requires a fresh observation of the same app, and every error starts with a
 stable code such as `STOPPED_BY_PERSON`. Details are in [Tools](docs/tools.md) and
@@ -184,7 +187,7 @@ windows, or its global pointer setting
 | | macOS | Windows | Linux | Android |
 |---|---|---|---|---|
 | Install | npm, Apple silicon | Prebuilt x64, unsigned | Prebuilt x64 | npm on Apple silicon Macs, otherwise build from source; runs over adb |
-| Input | Background, to the target app only | Foreground, after 10 s without your input | Foreground, after 10 s without your input | Foreground, after 10 s without your touch |
+| Input | Background, to the target app only | Foreground, after 10 s without your input | Foreground, after 10 s without your input | Foreground, after 10 s without your input |
 | Agent desktop | Virtual display with a watch-only preview | Separate session in a window | Not available | Virtual display; watch-only preview with the optional phone app |
 | Screen locked | Refused; the agent desktop pauses | Refused; the agent desktop keeps indexed clicks and values | Refused | Refused |
 

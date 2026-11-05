@@ -40,7 +40,7 @@ https://github.com/user-attachments/assets/5da04b21-47fe-44c4-9d3d-e2b3a2e9a9c6
 
 **可以有自己的屏幕。** 打开 agent 桌面后，agent 在一块虚拟显示器（macOS）或一个独立会话（Windows）里干活，你在一个普通窗口里看着它。
 
-**你说了算。** 随时有停止按钮。在 Windows 和 Linux 上按一下实体 Esc 也能停；你最近 10 秒内动过键鼠，它就不会抢前台。被人停掉的连接不会自己恢复。
+**你说了算。** 随时能叫停：macOS 上有停止按钮，Windows 和 Linux 上按一下实体 Esc，安卓上连按三次音量减。在 Windows、Linux 和安卓上，你最近 10 秒内有操作，它就不会抢前台。被人停掉的连接不会自己恢复。
 
 **有实测数据。** 在只能走界面的 Windows 任务上，同一个 agent 接上 OpenCU 过了 8 次中的 7 次，只用 shell 加截图只过了 2 次。[见下文](#实测)。
 
@@ -54,7 +54,7 @@ https://github.com/user-attachments/assets/5da04b21-47fe-44c4-9d3d-e2b3a2e9a9c6
 irm https://github.com/Daily-AC/opencu/releases/latest/download/install.ps1 | iex
 ```
 
-**Linux** · x86_64，X11 桌面
+**Linux** · x86_64，需要 glibc，X11 桌面
 
 ```sh
 curl -fsSL https://github.com/Daily-AC/opencu/releases/latest/download/install.sh | sh
@@ -64,7 +64,7 @@ curl -fsSL https://github.com/Daily-AC/opencu/releases/latest/download/install.s
 
 ```sh
 npm install -g @z10/opencu
-opencu setup    # 授予一次「辅助功能」和「录屏」权限
+opencu setup    # 授予「辅助功能」和「录屏」权限
 ```
 
 **Android** · 预览版，Android 14 及以上，由电脑经 adb（USB 或无线调试）驱动
@@ -74,7 +74,7 @@ npm install -g @z10/opencu    # Apple 芯片的 Mac，需要 adb；其他电脑�
 opencu android doctor
 ```
 
-装好后运行 `opencu doctor` 检查。各平台说明：
+装好后运行 `opencu doctor` 检查（Windows 和 Linux 用下文表格里的命令）。各平台说明：
 [macOS](docs/macos.md) · [Windows](docs/windows.md) · [Linux](docs/linux.md) · [Android](docs/android.md)（英文）。把自己的宿主接到安卓：[Android integration](docs/android-integration.md)（英文）。
 
 ## 接入你的 agent
@@ -96,9 +96,9 @@ claude mcp add --scope user opencu -- opencu
 codex mcp add opencu -- opencu
 ```
 
-Windows 和 Linux 把 `opencu` 换成上表里的命令。
+Windows、Linux 和安卓把 `opencu` 换成上表里的命令。
 
-其他 MCP 客户端：
+其他 MCP 客户端（安卓加上 `"args": ["android"]`）：
 
 ```json
 {
@@ -122,6 +122,8 @@ Windows 和 Linux 把 `opencu` 换成上表里的命令。
 | `activate_app` | 需要时把应用切到前台 |
 | `run_actions` | 一次调用最多执行 16 个动作，只返回最后的状态 |
 | `agent_desktop` | 打开、查看或关闭 agent 桌面 |
+
+`select_text` 只在 macOS 和 Linux 上有。Linux 没有 `agent_desktop`。
 
 每次输入前都要先读一次同一个应用；出错时，错误信息以固定的错误码开头，比如 `STOPPED_BY_PERSON`。完整说明见 [Tools](docs/tools.md) 和[引擎契约](docs/independent-engine-contract.md)。
 
@@ -156,7 +158,7 @@ Windows 和 Linux 把 `opencu` 换成上表里的命令。
 | | macOS | Windows | Linux | Android |
 |---|---|---|---|---|
 | 安装 | npm，Apple 芯片 | x64 预编译包，未签名 | x64 预编译包 | npm（Apple 芯片的 Mac），其他电脑从源码构建；经 adb 运行 |
-| 输入 | 后台，只送到目标应用 | 前台，你 10 秒没动键鼠才切 | 前台，你 10 秒没动键鼠才切 | 前台，你 10 秒没碰屏幕才切 |
+| 输入 | 后台，只送到目标应用 | 前台，你 10 秒没动键鼠才切 | 前台，你 10 秒没动键鼠才切 | 前台，你 10 秒没有操作才切 |
 | agent 桌面 | 虚拟显示器，带只看不点的预览窗 | 独立会话，显示在一个窗口里 | 暂无 | 虚拟屏；装上可选的手机 App 后有只看不点的预览窗 |
 | 锁屏时 | 拒绝操作；agent 桌面暂停 | 拒绝操作；agent 桌面仍可按编号点击和设值 | 拒绝操作 | 拒绝操作 |
 
