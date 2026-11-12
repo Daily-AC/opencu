@@ -56,7 +56,8 @@ enum AgentSlotPalette {
         let rgb: AgentRGB
     }
 
-    static let count = 6
+    static let count = 16
+    static let maxSlots = 24
 
     static let entries: [Entry] = [
         Entry(slot: 0, hex: "#FF6B9D", defaultName: "Agent 1", rgb: AgentRGB(r: 0xFF, g: 0x6B, b: 0x9D)),
@@ -65,11 +66,28 @@ enum AgentSlotPalette {
         Entry(slot: 3, hex: "#34D399", defaultName: "Agent 4", rgb: AgentRGB(r: 0x34, g: 0xD3, b: 0x99)),
         Entry(slot: 4, hex: "#A78BFA", defaultName: "Agent 5", rgb: AgentRGB(r: 0xA7, g: 0x8B, b: 0xFA)),
         Entry(slot: 5, hex: "#FB7185", defaultName: "Agent 6", rgb: AgentRGB(r: 0xFB, g: 0x71, b: 0x85)),
+        Entry(slot: 6, hex: "#2DD4BF", defaultName: "Agent 7", rgb: AgentRGB(r: 0x2D, g: 0xD4, b: 0xBF)),
+        Entry(slot: 7, hex: "#FBBF24", defaultName: "Agent 8", rgb: AgentRGB(r: 0xFB, g: 0xBF, b: 0x24)),
+        Entry(slot: 8, hex: "#60A5FA", defaultName: "Agent 9", rgb: AgentRGB(r: 0x60, g: 0xA5, b: 0xFA)),
+        Entry(slot: 9, hex: "#F472B6", defaultName: "Agent 10", rgb: AgentRGB(r: 0xF4, g: 0x72, b: 0xB6)),
+        Entry(slot: 10, hex: "#4ADE80", defaultName: "Agent 11", rgb: AgentRGB(r: 0x4A, g: 0xDE, b: 0x80)),
+        Entry(slot: 11, hex: "#C084FC", defaultName: "Agent 12", rgb: AgentRGB(r: 0xC0, g: 0x84, b: 0xFC)),
+        Entry(slot: 12, hex: "#FB923C", defaultName: "Agent 13", rgb: AgentRGB(r: 0xFB, g: 0x92, b: 0x3C)),
+        Entry(slot: 13, hex: "#22D3EE", defaultName: "Agent 14", rgb: AgentRGB(r: 0x22, g: 0xD3, b: 0xEE)),
+        Entry(slot: 14, hex: "#A3E635", defaultName: "Agent 15", rgb: AgentRGB(r: 0xA3, g: 0xE6, b: 0x35)),
+        Entry(slot: 15, hex: "#E879F9", defaultName: "Agent 16", rgb: AgentRGB(r: 0xE8, g: 0x79, b: 0xF9)),
     ]
 
     static func entry(for slot: Int) -> Entry {
-        let normalized = ((slot % count) + count) % count
-        return entries[normalized]
+        let normalizedSlot = ((slot % maxSlots) + maxSlots) % maxSlots
+        let colorIndex = ((slot % count) + count) % count
+        let base = entries[colorIndex]
+        return Entry(
+            slot: normalizedSlot,
+            hex: base.hex,
+            defaultName: "Agent \(normalizedSlot + 1)",
+            rgb: base.rgb
+        )
     }
 }
 
@@ -401,15 +419,16 @@ final class AgentHub {
     }
 
     static func pickDeterministicSlot(existing: [AgentRecord]) -> Int {
-        var counts = [Int](repeating: 0, count: AgentSlotPalette.count)
-        for record in existing where (0..<AgentSlotPalette.count).contains(record.slot) {
+        let totalSlots = AgentSlotPalette.maxSlots
+        var counts = [Int](repeating: 0, count: totalSlots)
+        for record in existing where (0..<totalSlots).contains(record.slot) {
             counts[record.slot] += 1
         }
-        if let free = (0..<AgentSlotPalette.count).first(where: { counts[$0] == 0 }) {
+        if let free = (0..<totalSlots).first(where: { counts[$0] == 0 }) {
             return free
         }
         var bestSlot = 0
-        for candidate in 1..<AgentSlotPalette.count where counts[candidate] < counts[bestSlot] {
+        for candidate in 1..<totalSlots where counts[candidate] < counts[bestSlot] {
             bestSlot = candidate
         }
         return bestSlot

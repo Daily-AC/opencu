@@ -30,6 +30,11 @@ final class PresenceController: NSObject, NSMenuDelegate, NSApplicationDelegate 
     private var selectionPanel: CursorWindow?
     private let selectionView = SelectionOverlayView(frame: .zero)
     private var selection: CursorMotion.SelectionHighlight?
+    private var swarmPanel: CursorWindow?
+    private let swarmView = ClusterSwarmOverlayView(frame: .zero)
+    private(set) var swarmAgents: [String: SwarmAgentState] = [:]
+    private var swarmHudText: String?
+    private var swarmHudProgress: Double?
     private var badgePanel: CursorWindow?
     private let badgeView = BadgeView()
     private var badgeLifetime = BadgeLifetime(holdDuration: 8)
@@ -74,7 +79,7 @@ final class PresenceController: NSObject, NSMenuDelegate, NSApplicationDelegate 
         badgeLifetime.setWaitingTurn(waiting, now: time)
         refreshBadgeDisplayText()
         if waiting { needsZOrderRaise = true }
-        if state.cursorVisible(at: time) || badgeLifetime.opacity(at: time) > 0 || selectionActive(at: time) {
+        if state.cursorVisible(at: time) || badgeLifetime.opacity(at: time) > 0 || selectionActive(at: time) || swarmActive(at: time) {
             startTimer(); tick()
         }
     }
@@ -84,7 +89,7 @@ final class PresenceController: NSObject, NSMenuDelegate, NSApplicationDelegate 
         // `called(target:)` and `observed(_:)` hide only when switching targets.
         let resolvedPID = AppTarget.processID(query).map(String.init)
         if let resolvedPID, let existing = state.target, existing != resolvedPID {
-            hideCursor(); hideSelection(); hideBadge()
+            hideCursor(); hideSelection(); hideSwarm(); hideBadge()
         }
         called(target: resolvedPID, name: targetName.isEmpty ? query : targetName)
     }
@@ -92,7 +97,7 @@ final class PresenceController: NSObject, NSMenuDelegate, NSApplicationDelegate 
     func called(target: String?, name: String) {
         guard state.connected else { return }
         if let target, let existing = state.target, existing != target {
-            hideCursor(); hideSelection(); hideBadge()
+            hideCursor(); hideSelection(); hideSwarm(); hideBadge()
         }
         state.call(target: target ?? state.target ?? name, now: now)
         targetName = name
@@ -112,7 +117,7 @@ final class PresenceController: NSObject, NSMenuDelegate, NSApplicationDelegate 
     func observed(_ snapshot: WindowSnapshot) {
         let switchingTarget = targetWindow != nil && (targetWindow != snapshot.windowID || targetPID != snapshot.app.pid)
         if switchingTarget {
-            hideCursor(); hideSelection(); hideBadge()
+            hideCursor(); hideSelection(); hideSwarm(); hideBadge()
         }
         let oldBounds = targetBounds
         targetWindow = snapshot.windowID
@@ -123,7 +128,7 @@ final class PresenceController: NSObject, NSMenuDelegate, NSApplicationDelegate 
 
         guard state.connected, !state.stopped, snapshot.windowID != nil,
               !snapshot.bounds.isEmpty, !snapshot.bounds.isNull else {
-            if snapshot.windowID == nil { hideCursor(); hideSelection(); hideBadge() }
+            if snapshot.windowID == nil { hideCursor(); hideSelection(); hideSwarm(); hideBadge() }
             return
         }
 
@@ -141,30 +146,39 @@ final class PresenceController: NSObject, NSMenuDelegate, NSApplicationDelegate 
             } else if !snapshot.bounds.insetBy(dx: 8, dy: 8).contains(existing.end) {
                 let cur = clampPoint(existing.point(at: time), inside: snapshot.bounds)
                 let anchor = PresenceArtwork.anchorPoint(forSlot: hub.identity.slot, within: snapshot.bounds)
-                motion = CursorMotion(start: cur, end: anchor, began: time, duration: CursorMotion.defaultGlideDuration)
+                let arc = CursorMotion.deterministicArcOffset(slot: hub.identity.slot, start: cur, end: anchor, isDrag: false)
+                motion = CursorMotion(start: cur, end: anchor, began: time, duration: CursorMotion.defaultGlideDuration, arcOffset: arc)
             }
             state.pointer(now: time)
         } else {
             let anchor = PresenceArtwork.anchorPoint(forSlot: hub.identity.slot, within: snapshot.bounds)
             let entry = PresenceArtwork.entryPoint(forAnchor: anchor, slot: hub.identity.slot, within: snapshot.bounds)
-            motion = CursorMotion(start: entry, end: anchor, began: time, duration: CursorMotion.defaultGlideDuration)
+            let arc = CursorMotion.deterministicArcOffset(slot: hub.identity.slot, start: entry, end: anchor, isDrag: false)
+            motion = CursorMotion(start: entry, end: anchor, began: time, duration: CursorMotion.defaultGlideDuration, arcOffset: arc)
             dragStepTrail = []
             state.pointer(now: time)
         }
         startTimer(); tick()
     }
 
-    /// Initiates smooth 280ms cubic-out cursor flight and optional target wireframe selection
+    /// Initiates smooth 280ms curved Bézier (or straight drag) cursor flight and optional target wireframe selection
     /// BEFORE acquiring `pid-<pid>.lock`, returning flight distance in screen points.
     @discardableResult
-    func glideTo(_ targetPoint: CGPoint?, selectionRect: CGRect?, snapshot: WindowSnapshot, click: Bool = false) -> CGFloat {
+    func glideTo(
+        _ targetPoint: CGPoint?,
+        selectionRect: CGRect?,
+        snapshot: WindowSnapshot,
+        click: Bool = false,
+        isDrag: Bool = false,
+        guideLines: Bool = true
+    ) -> CGFloat {
         guard !state.stopped, state.connected, snapshot.windowID != nil else { return 0 }
         observed(snapshot)
         syncAgentIdentity()
         let time = now
         needsZOrderRaise = true
         if let selectionRect, !selectionRect.isEmpty, !selectionRect.isNull {
-            selection = CursorMotion.SelectionHighlight(rect: selectionRect, began: time)
+            selection = CursorMotion.SelectionHighlight(rect: selectionRect, began: time, guideLines: guideLines)
         }
         guard let targetPoint else {
             startTimer(); tick()
@@ -174,10 +188,12 @@ final class PresenceController: NSObject, NSMenuDelegate, NSApplicationDelegate 
             ?? PresenceArtwork.entryPoint(forAnchor: targetPoint, slot: hub.identity.slot, within: snapshot.bounds)
         let distance = hypot(targetPoint.x - previous.x, targetPoint.y - previous.y)
         if distance > 0.5 {
-            motion = CursorMotion(start: previous, end: targetPoint, began: time, duration: CursorMotion.defaultGlideDuration)
+            let arc = CursorMotion.deterministicArcOffset(slot: hub.identity.slot, start: previous, end: targetPoint, isDrag: isDrag)
+            motion = CursorMotion(start: previous, end: targetPoint, began: time, duration: CursorMotion.defaultGlideDuration, arcOffset: arc)
         } else if motion == nil {
             let start = PresenceArtwork.entryPoint(forAnchor: targetPoint, slot: hub.identity.slot, within: snapshot.bounds)
-            motion = CursorMotion(start: start, end: targetPoint, began: time, duration: CursorMotion.defaultGlideDuration)
+            let arc = CursorMotion.deterministicArcOffset(slot: hub.identity.slot, start: start, end: targetPoint, isDrag: isDrag)
+            motion = CursorMotion(start: start, end: targetPoint, began: time, duration: CursorMotion.defaultGlideDuration, arcOffset: arc)
         }
         dragStepDeliveredReset()
         if click { pressBegan = time }
@@ -186,10 +202,10 @@ final class PresenceController: NSObject, NSMenuDelegate, NSApplicationDelegate 
         return distance
     }
 
-    func highlightSelection(_ rect: CGRect?, snapshot: WindowSnapshot) {
+    func highlightSelection(_ rect: CGRect?, snapshot: WindowSnapshot, guideLines: Bool = true) {
         guard !state.stopped, state.connected, let rect, !rect.isEmpty, !rect.isNull else { return }
         observed(snapshot)
-        selection = CursorMotion.SelectionHighlight(rect: rect, began: now)
+        selection = CursorMotion.SelectionHighlight(rect: rect, began: now, guideLines: guideLines)
         needsZOrderRaise = true
         startTimer(); tick()
     }
@@ -243,7 +259,7 @@ final class PresenceController: NSObject, NSMenuDelegate, NSApplicationDelegate 
     func menuWillOpen(_ menu: NSMenu) { trackingMenu = true; onPersonInteraction?() }
     func menuDidClose(_ menu: NSMenu) { trackingMenu = false }
     @objc func stop() {
-        state.stop(); hideCursor(); hideSelection()
+        state.stop(); hideCursor(); hideSelection(); hideSwarm()
         badgeLifetime.stop(now: now)
         lastBadgeActionText = nil
         badgeView.text = BadgeAction(method: "stopped").localized(PresenceStrings().text)
@@ -281,25 +297,29 @@ final class PresenceController: NSObject, NSMenuDelegate, NSApplicationDelegate 
         let previous = currentCursorPoint(at: time, within: snapshot.bounds)
             ?? PresenceArtwork.anchorPoint(forSlot: hub.identity.slot, within: snapshot.bounds)
         let distance = hypot(point.x - previous.x, point.y - previous.y)
-        if !click, let existing = motion, time - existing.began < 0.08, distance > 0.5, distance < 48 {
-            // Incremental drag steps: track the slider thumb tightly while recording a live 5-dot comet wake.
-            recordDragTrailSample(previous)
-            motion = CursorMotion(start: previous, end: point, began: time, duration: 0.04)
+        if !click, let existing = motion, time - existing.began < 0.25, distance <= 64 {
+            // Live 60Hz drag steps: lock cursor tip with 0ms lag onto the slider knob in a dead-straight line.
+            if distance > 0.25 {
+                recordDragTrailSample(previous)
+            }
+            motion = CursorMotion(start: point, end: point, began: time, duration: 0.016, arcOffset: 0)
         } else if distance > 2.5 {
             dragStepTrail = []
-            motion = CursorMotion(start: previous, end: point, began: time, duration: CursorMotion.defaultGlideDuration)
+            let arc = CursorMotion.deterministicArcOffset(slot: hub.identity.slot, start: previous, end: point, isDrag: !click)
+            motion = CursorMotion(start: previous, end: point, began: time, duration: CursorMotion.defaultGlideDuration, arcOffset: arc)
         } else if let existing = motion {
             // Pre-lock glide already reached (or is finishing at) `point`: preserve its smooth tail!
             if hypot(existing.end.x - point.x, existing.end.y - point.y) > 2.5 {
-                motion = CursorMotion(start: previous, end: point, began: time, duration: 0.12)
+                motion = CursorMotion(start: previous, end: point, began: time, duration: 0.12, arcOffset: 0)
             }
         } else {
             let entry = PresenceArtwork.entryPoint(forAnchor: point, slot: hub.identity.slot, within: snapshot.bounds)
-            motion = CursorMotion(start: entry, end: point, began: time, duration: CursorMotion.defaultGlideDuration)
+            let arc = CursorMotion.deterministicArcOffset(slot: hub.identity.slot, start: entry, end: point, isDrag: !click)
+            motion = CursorMotion(start: entry, end: point, began: time, duration: CursorMotion.defaultGlideDuration, arcOffset: arc)
         }
         if click { pressBegan = time }
-        if var activeSelection = selection, time - activeSelection.began > 0.25 {
-            activeSelection.began = time - 0.15
+        if var activeSelection = selection, time - activeSelection.began > 0.15 {
+            activeSelection.began = time - 0.10
             selection = activeSelection
         }
         state.pointer(now: time)
@@ -320,6 +340,223 @@ final class PresenceController: NSObject, NSMenuDelegate, NSApplicationDelegate 
                 radius: 4.5 - 2.4 * fraction,
                 alpha: 0.52 - 0.38 * fraction
             )
+        }
+    }
+
+    struct SwarmAgentSpec {
+        var agentId: String
+        var agentName: String
+        var colorHex: String
+        var rgb: AgentRGB
+        var slot: Int
+        var mode: SwarmAgentMode
+        var point: CGPoint?
+        var fromPoint: CGPoint?
+        var toPoint: CGPoint?
+        var duration: TimeInterval
+        var delay: TimeInterval
+        var orbitRadius: CGFloat?
+        var orbitAngularSpeed: Double?
+        var orbitPhase: Double?
+        var selectionRect: CGRect?
+        var guideLines: Bool
+        var showTag: Bool
+        var holdDuration: TimeInterval
+        var emitCompanion: Bool
+    }
+
+    @discardableResult
+    func applySwarm(
+        specs: [SwarmAgentSpec],
+        snapshot: WindowSnapshot,
+        clearExisting: Bool = false,
+        hideHostCursor: Bool = false,
+        hudText: String? = nil,
+        updateHudText: Bool = false,
+        hudProgress: Double? = nil,
+        updateHudProgress: Bool = false
+    ) -> [SwarmAgentState] {
+        guard !state.stopped, state.connected, snapshot.windowID != nil,
+              !snapshot.bounds.isEmpty, !snapshot.bounds.isNull else {
+            return []
+        }
+        let switchingTarget = targetWindow != nil && (targetWindow != snapshot.windowID || targetPID != snapshot.app.pid)
+        if switchingTarget {
+            hideCursor(); hideSelection(); hideSwarm(); hideBadge()
+        }
+        targetWindow = snapshot.windowID
+        targetPID = snapshot.app.pid
+        targetBounds = snapshot.bounds
+        hub.updateTarget(windowID: snapshot.windowID, targetPID: snapshot.app.pid)
+        syncAgentIdentity()
+        if hideHostCursor {
+            hideCursor()
+            hideSelection()
+        }
+
+        let time = now
+        var disconnectedStates: [SwarmAgentState] = []
+        if clearExisting {
+            disconnectedStates.append(contentsOf: swarmAgents.values.filter(\.companionConnected))
+            swarmAgents.removeAll()
+        }
+        if updateHudText {
+            let trimmed = hudText?.trimmingCharacters(in: .whitespacesAndNewlines)
+            swarmHudText = (trimmed?.isEmpty == false) ? trimmed : nil
+        }
+        if updateHudProgress {
+            swarmHudProgress = hudProgress
+        }
+
+        let totalSpecs = max(1, specs.count)
+        for (idx, spec) in specs.enumerated() {
+            let existing = swarmAgents[spec.agentId]
+            if spec.mode == .dismiss {
+                if var entry = existing {
+                    entry.mode = .dismiss
+                    entry.dismissBegan = time + max(0, spec.delay)
+                    entry.lastUpdatedAt = time
+                    swarmAgents[spec.agentId] = entry
+                    if entry.companionConnected {
+                        disconnectedStates.append(entry)
+                        swarmAgents[spec.agentId]?.companionConnected = false
+                    }
+                }
+                continue
+            }
+
+            let began = time + max(0, spec.delay)
+            let liveCurrent = existing.map { clampPoint($0.point(at: time), inside: snapshot.bounds) }
+            let defaultAnchor = PresenceArtwork.anchorPoint(forSlot: spec.slot, within: snapshot.bounds)
+            let fallbackStart = spec.fromPoint
+                ?? liveCurrent
+                ?? PresenceArtwork.entryPoint(forAnchor: spec.toPoint ?? spec.point ?? defaultAnchor, slot: spec.slot, within: snapshot.bounds)
+            let destination = spec.toPoint ?? spec.point ?? liveCurrent ?? defaultAnchor
+            let flightDuration = max(0.04, spec.duration)
+            let isDragMode = spec.mode == .drag
+            let arc = CursorMotion.deterministicArcOffset(slot: spec.slot, start: fallbackStart, end: destination, isDrag: isDragMode)
+            let motion = CursorMotion(
+                start: fallbackStart,
+                end: destination,
+                began: began,
+                duration: flightDuration,
+                arcOffset: arc
+            )
+
+            var entry = existing ?? SwarmAgentState(
+                agentId: spec.agentId,
+                agentName: spec.agentName,
+                colorHex: spec.colorHex,
+                rgb: spec.rgb,
+                slot: spec.slot,
+                mode: spec.mode,
+                motion: motion,
+                lastUpdatedAt: time
+            )
+            entry.agentName = spec.agentName
+            entry.colorHex = spec.colorHex
+            entry.rgb = spec.rgb
+            entry.slot = spec.slot
+            entry.mode = spec.mode
+            entry.motion = motion
+            entry.dismissBegan = nil
+            entry.showTag = spec.showTag
+            entry.holdDuration = max(1.5, spec.holdDuration)
+            entry.lastUpdatedAt = max(time, began + flightDuration)
+            if spec.emitCompanion {
+                entry.emitCompanion = true
+            }
+
+            if let selRect = spec.selectionRect, !selRect.isEmpty, !selRect.isNull {
+                entry.selection = CursorMotion.SelectionHighlight(
+                    rect: selRect,
+                    began: began,
+                    holdDuration: max(1.35, flightDuration + 1.05),
+                    guideLines: spec.guideLines
+                )
+            } else if spec.mode != .ripple {
+                entry.selection = nil
+            }
+
+            switch spec.mode {
+            case .orbit:
+                let center = spec.point
+                    ?? spec.toPoint
+                    ?? CGPoint(x: snapshot.bounds.midX, y: snapshot.bounds.midY)
+                entry.orbitCenter = center
+                let maxOrbitR = min(snapshot.bounds.width, snapshot.bounds.height) * 0.36
+                entry.orbitRadius = spec.orbitRadius ?? min(maxOrbitR, max(54, min(snapshot.bounds.width, snapshot.bounds.height) * 0.19))
+                entry.orbitAngularSpeed = spec.orbitAngularSpeed ?? 2.35
+                entry.orbitPhase = spec.orbitPhase ?? (Double(idx) * (2.0 * .pi / Double(totalSpecs)))
+                entry.orbitBegan = began
+                entry.pendingClickAt = nil
+            case .click:
+                let distance = hypot(destination.x - fallbackStart.x, destination.y - fallbackStart.y)
+                if distance <= 3.0 && spec.delay <= 0.005 {
+                    entry.pressBegan = time
+                    entry.pendingClickAt = nil
+                } else {
+                    entry.pendingClickAt = began + flightDuration * 0.92
+                }
+            case .ripple:
+                entry.motion = CursorMotion(start: destination, end: destination, began: began, duration: 0.05, arcOffset: 0)
+                if spec.delay <= 0.005 {
+                    entry.pressBegan = time
+                    entry.pendingClickAt = nil
+                } else {
+                    entry.pendingClickAt = began
+                }
+            case .glide, .drag, .dismiss:
+                entry.pendingClickAt = nil
+            }
+
+            swarmAgents[spec.agentId] = entry
+        }
+
+        needsZOrderRaise = true
+        startTimer(); tick()
+        return disconnectedStates
+    }
+
+    func markSwarmCompanionConnected(agentId: String) {
+        swarmAgents[agentId]?.companionConnected = true
+    }
+
+    func updateSwarmAgentLivePoint(agentId: String, point: CGPoint, click: Bool = false) {
+        guard var entry = swarmAgents[agentId] else { return }
+        let time = now
+        let prev = entry.point(at: time)
+        entry.motion = CursorMotion(start: prev, end: point, began: time - 0.012, duration: 0.024, arcOffset: 0)
+        entry.lastUpdatedAt = time
+        if click {
+            entry.pressBegan = time
+            entry.pendingClickAt = nil
+        }
+        if var sel = entry.selection {
+            sel.began = time - 0.08
+            entry.selection = sel
+        }
+        swarmAgents[agentId] = entry
+        startTimer(); tick()
+    }
+
+    func clearSwarm() -> [SwarmAgentState] {
+        let connected = swarmAgents.values.filter(\.companionConnected)
+        hideSwarm()
+        return connected
+    }
+
+    private func swarmActive(at time: TimeInterval) -> Bool {
+        if swarmHudText != nil { return true }
+        return swarmAgents.values.contains { $0.opacity(at: time) > 0.005 }
+    }
+
+    private func hideSwarm() {
+        swarmAgents.removeAll()
+        swarmHudText = nil
+        swarmHudProgress = nil
+        if swarmPanel?.isVisible == true {
+            swarmPanel?.orderOut(nil)
         }
     }
 
@@ -396,7 +633,11 @@ final class PresenceController: NSObject, NSMenuDelegate, NSApplicationDelegate 
             if selectionPanel?.isVisible == true { selectionPanel?.orderOut(nil) }
             return
         }
-        let canvas = PresenceArtwork.selectionCanvasRect(for: currentSelection.rect, within: bounds)
+        let canvas = PresenceArtwork.selectionCanvasRect(
+            for: currentSelection.rect,
+            within: bounds,
+            showGuides: currentSelection.guideLines
+        )
         guard !canvas.isNull, !canvas.isEmpty else {
             if selectionPanel?.isVisible == true { selectionPanel?.orderOut(nil) }
             return
@@ -413,11 +654,121 @@ final class PresenceController: NSObject, NSMenuDelegate, NSApplicationDelegate 
         )
         selectionView.agentColor = hub.identity.rgb.nsColor
         selectionView.boxAlpha = alpha
+        selectionView.showGuides = currentSelection.guideLines
         selectionView.needsDisplay = true
         let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
         panel.sharingType = panelSharingType
         panel.level = Self.overlayWindowLevel
         panel.setFrame(CursorMotion.appKitRect(canvas, primaryHeight: primaryHeight), display: false)
+        if NSApp.isHidden { NSApp.unhideWithoutActivation() }
+        if !panel.isVisible || raise {
+            panel.orderFrontRegardless()
+        }
+    }
+
+    private func tickSwarm(at time: TimeInterval, bounds: CGRect?, raise: Bool) {
+        guard !state.stopped, state.connected, let bounds, !bounds.isEmpty, !bounds.isNull else {
+            if swarmPanel?.isVisible == true { swarmPanel?.orderOut(nil) }
+            return
+        }
+        var expiredIDs: [String] = []
+        var renderItems: [ClusterSwarmOverlayView.RenderItem] = []
+        renderItems.reserveCapacity(swarmAgents.count)
+
+        let sortedKeys = swarmAgents.keys.sorted { lhs, rhs in
+            let a = swarmAgents[lhs]!
+            let b = swarmAgents[rhs]!
+            if a.slot != b.slot { return a.slot < b.slot }
+            return a.agentId < b.agentId
+        }
+
+        for key in sortedKeys {
+            guard var agent = swarmAgents[key] else { continue }
+            agent.advanceEffects(at: time)
+            let alpha = agent.opacity(at: time)
+            if alpha <= 0.005 {
+                expiredIDs.append(key)
+                continue
+            }
+            swarmAgents[key] = agent
+
+            let screenPoint = clampPoint(agent.point(at: time), inside: bounds)
+            let localPoint = CGPoint(x: screenPoint.x - bounds.minX, y: screenPoint.y - bounds.minY)
+            let localTrail = agent.trail(at: time).map {
+                CursorMotion.CometDot(
+                    point: CGPoint(x: $0.point.x - bounds.minX, y: $0.point.y - bounds.minY),
+                    radius: $0.radius,
+                    alpha: $0.alpha
+                )
+            }
+            let tag: String? = agent.showTag ? agent.agentName : nil
+            let (_, flipLeft) = PresenceArtwork.cursorCanvasRect(
+                at: screenPoint,
+                trail: [],
+                tag: tag,
+                waitingTurn: false,
+                within: bounds
+            )
+
+            var localSelRect: CGRect?
+            var selAlpha: CGFloat = 0
+            var showGuides = false
+            if let sel = agent.selection, time >= sel.began {
+                let rawAlpha = sel.opacity(at: time, waitingTurn: false)
+                if rawAlpha > 0.01 {
+                    localSelRect = CGRect(
+                        x: sel.rect.minX - bounds.minX,
+                        y: sel.rect.minY - bounds.minY,
+                        width: sel.rect.width,
+                        height: sel.rect.height
+                    )
+                    selAlpha = rawAlpha
+                    showGuides = sel.guideLines
+                }
+            }
+
+            renderItems.append(
+                ClusterSwarmOverlayView.RenderItem(
+                    slot: agent.slot,
+                    point: localPoint,
+                    press: CursorMotion.press(at: time, began: agent.pressBegan),
+                    ripple: CursorMotion.rippleProgress(at: time, began: agent.pressBegan),
+                    color: agent.rgb.nsColor,
+                    rgb: agent.rgb,
+                    trail: localTrail,
+                    tag: tag,
+                    flipTagLeft: flipLeft,
+                    alpha: alpha,
+                    selectionRect: localSelRect,
+                    selectionAlpha: selAlpha,
+                    showGuides: showGuides
+                )
+            )
+        }
+
+        for id in expiredIDs {
+            swarmAgents.removeValue(forKey: id)
+        }
+
+        guard !renderItems.isEmpty || swarmHudText != nil else {
+            if swarmPanel?.isVisible == true { swarmPanel?.orderOut(nil) }
+            return
+        }
+
+        if swarmPanel == nil {
+            swarmPanel = makeOverlayPanel(contentView: swarmView)
+        }
+        guard let panel = swarmPanel else { return }
+        swarmView.items = renderItems
+        swarmView.pulsePhase = time
+        swarmView.hudText = swarmHudText
+        swarmView.hudProgress = swarmHudProgress
+        swarmView.needsDisplay = true
+
+        let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
+        panel.sharingType = panelSharingType
+        panel.level = Self.overlayWindowLevel
+        panel.setFrame(CursorMotion.appKitRect(bounds, primaryHeight: primaryHeight), display: false)
         if NSApp.isHidden { NSApp.unhideWithoutActivation() }
         if !panel.isVisible || raise {
             panel.orderFrontRegardless()
@@ -504,21 +855,41 @@ final class PresenceController: NSObject, NSMenuDelegate, NSApplicationDelegate 
                         start: CGPoint(x: existing.start.x + dx, y: existing.start.y + dy),
                         end: CGPoint(x: existing.end.x + dx, y: existing.end.y + dy),
                         began: existing.began,
-                        duration: existing.duration
+                        duration: existing.duration,
+                        arcOffset: existing.arcOffset
                     )
                 }
                 if var activeSelection = selection, abs(dx) > 0.5 || abs(dy) > 0.5 {
                     activeSelection.rect = activeSelection.rect.offsetBy(dx: dx, dy: dy)
                     selection = activeSelection
                 }
+                if abs(dx) > 0.5 || abs(dy) > 0.5 {
+                    for key in Array(swarmAgents.keys) {
+                        guard var agent = swarmAgents[key] else { continue }
+                        agent.orbitCenter = CGPoint(x: agent.orbitCenter.x + dx, y: agent.orbitCenter.y + dy)
+                        agent.motion = CursorMotion(
+                            start: CGPoint(x: agent.motion.start.x + dx, y: agent.motion.start.y + dy),
+                            end: CGPoint(x: agent.motion.end.x + dx, y: agent.motion.end.y + dy),
+                            began: agent.motion.began,
+                            duration: agent.motion.duration,
+                            arcOffset: agent.motion.arcOffset
+                        )
+                        if var sel = agent.selection {
+                            sel.rect = sel.rect.offsetBy(dx: dx, dy: dy)
+                            agent.selection = sel
+                        }
+                        swarmAgents[key] = agent
+                    }
+                }
             }
         } else {
             bounds = nil
         }
 
-        // Order badge -> selection -> cursor so the pointer arrow sits cleanly on top at level 25.
+        // Order badge -> selection -> swarm canvas -> primary cursor so level-25 layers stack cleanly.
         tickBadge(at: time, liveBounds: bounds, raise: raise)
         tickSelection(at: time, bounds: bounds, raise: raise)
+        tickSwarm(at: time, bounds: bounds, raise: raise)
 
         if state.cursorVisible(at: time), let motion, let bounds {
             let point = motion.point(at: time)
@@ -527,7 +898,7 @@ final class PresenceController: NSObject, NSMenuDelegate, NSApplicationDelegate 
             if computedTrail.isEmpty, time - motion.began > 0.12 {
                 dragStepTrail = []
             }
-            let tag = hub.shouldShowCursorTag() ? hub.identity.agentName : nil
+            let tag = (hub.shouldShowCursorTag() || !swarmAgents.isEmpty) ? hub.identity.agentName : nil
             let (rect, flipLeft) = PresenceArtwork.cursorCanvasRect(
                 at: point,
                 trail: activeTrail,
@@ -574,7 +945,7 @@ final class PresenceController: NSObject, NSMenuDelegate, NSApplicationDelegate 
             else if overlay?.isVisible == true { overlay?.orderOut(nil) }
         }
 
-        if statusItem == nil && !state.cursorVisible(at: time) && badgeLifetime.opacity(at: time) == 0 && !selectionActive(at: time) {
+        if statusItem == nil && !state.cursorVisible(at: time) && badgeLifetime.opacity(at: time) == 0 && !selectionActive(at: time) && !swarmActive(at: time) {
             timer?.invalidate(); timer = nil
         }
     }
@@ -586,7 +957,7 @@ final class PresenceController: NSObject, NSMenuDelegate, NSApplicationDelegate 
     }
 
     func disconnect() {
-        state.disconnect(); badgeLifetime.disconnect(); hideBadge(); hideSelection(); hideCursor(); timer?.invalidate(); timer = nil
+        state.disconnect(); badgeLifetime.disconnect(); hideBadge(); hideSelection(); hideSwarm(); hideCursor(); timer?.invalidate(); timer = nil
         if let item = statusItem { NSStatusBar.system.removeStatusItem(item); statusItem = nil }
         setup.close()
     }

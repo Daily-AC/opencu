@@ -92,6 +92,10 @@ struct PresenceRenderer {
                         let canvas = MultiplayerCanvasSample(dark: theme == "dark")
                         canvas.appearance = NSAppearance(named: appearance)
                         try render(canvas, to: output.appendingPathComponent("multiplayer-canvas-\(theme).png"))
+
+                        let cluster = ClusterSwarm16Sample(dark: theme == "dark")
+                        cluster.appearance = NSAppearance(named: appearance)
+                        try render(cluster, to: output.appendingPathComponent("cluster-swarm-16-\(theme).png"))
                     }
                 }
             }
@@ -296,6 +300,149 @@ final class MultiplayerCanvasSample: NSView {
                 waitingTurn: waiting,
                 pulsePhase: 0.25
             )
+        }
+    }
+}
+
+/// 16-Agent Computer Use Cluster Studio preview (`980 × 620`) exercising `ClusterSwarmOverlayView`,
+/// 16-color palette, curved Bézier comet trails, `+` crosshairs, dashed laser alignment guides,
+/// `W × H` dimension pills, and the bottom floating HUD bar.
+@MainActor
+final class ClusterSwarm16Sample: NSView {
+    override var isFlipped: Bool { true }
+    let dark: Bool
+    private let overlayView = ClusterSwarmOverlayView(frame: CGRect(x: 0, y: 0, width: 980, height: 620))
+
+    init(dark: Bool) {
+        self.dark = dark
+        super.init(frame: CGRect(x: 0, y: 0, width: 980, height: 620))
+        addSubview(overlayView)
+        populateSwarm()
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    private func populateSwarm() {
+        let agentNames = [
+            "Coder", "Designer", "Reviewer", "QA",
+            "Planner", "Layout", "Router", "Perf",
+            "Security", "Accessibility", "Schema", "Telemetry",
+            "Builder", "Inspector", "Verifier", "Release"
+        ]
+        var items: [ClusterSwarmOverlayView.RenderItem] = []
+
+        let targets: [(CGPoint, CGPoint, CGRect?, Bool, Bool)] = [
+            (CGPoint(x: 92, y: 148), CGPoint(x: 316, y: 148), CGRect(x: 68, y: 126, width: 320, height: 44), true, true),
+            (CGPoint(x: 64, y: 290), CGPoint(x: 196, y: 248), CGRect(x: 68, y: 218, width: 150, height: 58), true, false),
+            (CGPoint(x: 210, y: 342), CGPoint(x: 312, y: 248), CGRect(x: 238, y: 218, width: 150, height: 58), false, true),
+            (CGPoint(x: 78, y: 472), CGPoint(x: 216, y: 392), CGRect(x: 68, y: 356, width: 320, height: 68), true, false),
+            (CGPoint(x: 490, y: 92),  CGPoint(x: 486, y: 158), CGRect(x: 446, y: 126, width: 108, height: 64), false, true),
+            (CGPoint(x: 618, y: 78),  CGPoint(x: 610, y: 158), nil, false, false),
+            (CGPoint(x: 760, y: 88),  CGPoint(x: 734, y: 158), CGRect(x: 694, y: 126, width: 108, height: 64), true, false),
+            (CGPoint(x: 918, y: 96),  CGPoint(x: 858, y: 158), nil, false, true),
+            (CGPoint(x: 432, y: 296), CGPoint(x: 486, y: 266), nil, false, false),
+            (CGPoint(x: 560, y: 332), CGPoint(x: 610, y: 266), CGRect(x: 570, y: 234, width: 108, height: 64), true, true),
+            (CGPoint(x: 716, y: 340), CGPoint(x: 734, y: 266), nil, false, false),
+            (CGPoint(x: 936, y: 288), CGPoint(x: 858, y: 266), CGRect(x: 818, y: 234, width: 108, height: 64), false, true),
+            (CGPoint(x: 444, y: 468), CGPoint(x: 486, y: 382), CGRect(x: 446, y: 350, width: 108, height: 64), false, false),
+            (CGPoint(x: 590, y: 510), CGPoint(x: 610, y: 382), nil, false, true),
+            (CGPoint(x: 748, y: 512), CGPoint(x: 734, y: 382), CGRect(x: 694, y: 350, width: 108, height: 64), true, false),
+            (CGPoint(x: 930, y: 492), CGPoint(x: 858, y: 382), nil, false, true),
+        ]
+
+        for slot in 0..<16 {
+            let entry = AgentSlotPalette.entry(for: slot)
+            let (start, end, selRect, showGuides, clicking) = targets[slot]
+            let isDrag = (slot == 0)
+            let arc = CursorMotion.deterministicArcOffset(slot: slot, start: start, end: end, isDrag: isDrag)
+            let motion = CursorMotion(start: start, end: end, began: 0, duration: 0.28, arcOffset: arc)
+            let sampleTime = clicking ? 0.25 : 0.18
+            let point = motion.point(at: sampleTime)
+            let trail = motion.cometTrail(at: sampleTime)
+            let (_, flipLeft) = PresenceArtwork.cursorCanvasRect(
+                at: point,
+                trail: [],
+                tag: agentNames[slot],
+                waitingTurn: false,
+                within: CGRect(x: 0, y: 0, width: 980, height: 620)
+            )
+            items.append(
+                ClusterSwarmOverlayView.RenderItem(
+                    slot: slot,
+                    point: point,
+                    press: clicking ? 0.72 : 0,
+                    ripple: clicking ? 0.42 : nil,
+                    color: entry.rgb.nsColor,
+                    rgb: entry.rgb,
+                    trail: trail,
+                    tag: agentNames[slot],
+                    flipTagLeft: flipLeft,
+                    alpha: 1.0,
+                    selectionRect: selRect,
+                    selectionAlpha: selRect != nil ? 0.96 : 0,
+                    showGuides: showGuides
+                )
+            )
+        }
+        overlayView.items = items
+        overlayView.hudText = "16 agents · 96 / 128 ops · 60 fps"
+        overlayView.hudProgress = 0.75
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        (dark ? NSColor(srgbRed: 8/255, green: 10/255, blue: 15/255, alpha: 1)
+              : NSColor(srgbRed: 242/255, green: 244/255, blue: 249/255, alpha: 1)).setFill()
+        bounds.fill()
+
+        let headerBg = dark ? NSColor(srgbRed: 14/255, green: 17/255, blue: 25/255, alpha: 1)
+                            : NSColor(white: 0.96, alpha: 1)
+        headerBg.setFill()
+        CGRect(x: 0, y: 0, width: bounds.width, height: 42).fill()
+        for (idx, dot) in [NSColor.systemRed, .systemYellow, .systemGreen].enumerated() {
+            dot.setFill()
+            NSBezierPath(ovalIn: CGRect(x: 16 + CGFloat(idx) * 18, y: 15, width: 11, height: 11)).fill()
+        }
+        let titleAttrs: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 12.5, weight: .semibold),
+            .foregroundColor: (dark ? NSColor.white : NSColor.black).withAlphaComponent(0.86),
+        ]
+        ("OpenCU × ibuki · 16-Agent Computer Use Cluster Studio" as NSString)
+            .draw(at: CGPoint(x: 86, y: 13), withAttributes: titleAttrs)
+
+        let cardColor = dark ? NSColor(srgbRed: 17/255, green: 21/255, blue: 32/255, alpha: 1)
+                             : NSColor.white
+        let strokeColor = (dark ? NSColor.white : NSColor.black).withAlphaComponent(0.08)
+        let cardRects: [CGRect] = [
+            CGRect(x: 68, y: 126, width: 320, height: 44),
+            CGRect(x: 68, y: 218, width: 150, height: 58),
+            CGRect(x: 238, y: 218, width: 150, height: 58),
+            CGRect(x: 68, y: 356, width: 320, height: 68),
+        ]
+        for r in cardRects {
+            let p = NSBezierPath(roundedRect: r, xRadius: 9, yRadius: 9)
+            cardColor.setFill(); p.fill()
+            strokeColor.setStroke(); p.lineWidth = 1; p.stroke()
+        }
+        NSColor.white.withAlphaComponent(dark ? 0.14 : 0.25).setFill()
+        NSBezierPath(roundedRect: CGRect(x: 86, y: 145, width: 284, height: 6), xRadius: 3, yRadius: 3).fill()
+        AgentSlotPalette.entry(for: 0).rgb.nsColor.setFill()
+        NSBezierPath(roundedRect: CGRect(x: 86, y: 145, width: 230, height: 6), xRadius: 3, yRadius: 3).fill()
+
+        let cols: [CGFloat] = [446, 570, 694, 818]
+        let rows: [CGFloat] = [126, 234, 350]
+        var cellIndex = 4
+        for ry in rows {
+            for cx in cols {
+                let cell = CGRect(x: cx, y: ry, width: 108, height: 64)
+                let p = NSBezierPath(roundedRect: cell, xRadius: 8, yRadius: 8)
+                let accent = AgentSlotPalette.entry(for: cellIndex).rgb.nsColor
+                accent.withAlphaComponent(dark ? 0.14 : 0.12).setFill()
+                p.fill()
+                accent.withAlphaComponent(0.32).setStroke()
+                p.lineWidth = 1
+                p.stroke()
+                cellIndex += 1
+            }
         }
     }
 }

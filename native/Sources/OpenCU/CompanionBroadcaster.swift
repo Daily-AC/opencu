@@ -147,7 +147,7 @@ struct CompanionEventPayload: Codable, Equatable, Sendable {
         self.agentId = AgentConfig.sanitize(identity.agentId, maxCount: 64) ?? "opencu-\(identity.pid)"
         self.agentName = AgentConfig.sanitize(identity.agentName, maxCount: 24) ?? AgentSlotPalette.entry(for: identity.slot).defaultName
         self.agentColor = AgentRGB.parseHex(identity.agentColor)?.hex ?? AgentSlotPalette.entry(for: identity.slot).hex
-        self.slot = ((identity.slot % AgentSlotPalette.count) + AgentSlotPalette.count) % AgentSlotPalette.count
+        self.slot = ((identity.slot % AgentSlotPalette.maxSlots) + AgentSlotPalette.maxSlots) % AgentSlotPalette.maxSlots
         self.event = event
         self.app = app
         self.window = window

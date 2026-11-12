@@ -41,6 +41,12 @@ final class InputController {
         return bounds.insetBy(dx: -2, dy: -2)
     }
 
+    func resolveIndexedTarget(index: Int, snapshot: WindowSnapshot) throws -> (element: AXUIElement, point: CGPoint, selectionRect: CGRect?) {
+        let element = try indexedElement(["element_index": index], snapshot)
+        let location = try elementPoint(element)
+        return (element, location, usableElementRect(element))
+    }
+
     /// Resolves a non-mutating hover target (by `element_index`, screenshot pixel coordinates, or window-local points).
     func resolveHoverTarget(args: Arguments, snapshot: WindowSnapshot) throws -> (point: CGPoint, selectionRect: CGRect?) {
         try requireAccessibility()
@@ -605,9 +611,44 @@ final class InputController {
         return .chose
     }
 
+    /// Smooth C1-continuous ease-in (0..0.15) -> constant-velocity linear glide (0.15..0.85) -> ease-out (0.85..1.0)
+    /// curve so 60Hz slider drags start gently, track smoothly at steady pace, and settle cleanly onto the target.
+    nonisolated static func smoothDragProgress(_ rawT: Double) -> Double {
+        guard rawT.isFinite else { return 0 }
+        let t = min(1.0, max(0.0, rawT))
+        let ramp = 0.15
+        let vMax = 1.0 / (1.0 - ramp)
+        if t <= ramp {
+            return vMax * (t * t) / (2.0 * ramp)
+        } else if t < 1.0 - ramp {
+            return vMax * (t - ramp / 2.0)
+        } else {
+            let rem = 1.0 - t
+            return 1.0 - vMax * (rem * rem) / (2.0 * ramp)
+        }
+    }
+
+    private func customDurationMs(_ args: Arguments) throws -> Double? {
+        let key: String?
+        if args["duration_ms"] != nil {
+            key = "duration_ms"
+        } else if args["durationMs"] != nil {
+            key = "durationMs"
+        } else {
+            key = nil
+        }
+        guard let key else { return nil }
+        let raw = try finiteNumber(args, key)
+        guard raw > 0 else {
+            throw OpenCUError("INVALID_ARGUMENT", "\(key) must be a positive number of milliseconds")
+        }
+        return min(5000.0, max(120.0, raw))
+    }
+
     private func drag(_ args: Arguments, _ snapshot: WindowSnapshot) async throws {
         let start = try point(args, snapshot, x: "from_x", y: "from_y")
         let end = try point(args, snapshot, x: "to_x", y: "to_y")
+        let durationMs = try customDurationMs(args)
         try validatePointerDelivery(snapshot, from: start, to: end, coordinateInput: true)
         let window = try mouseWindow(snapshot)
         try await preparePointerFocus(snapshot, from: start, to: end, coordinateInput: true)
@@ -621,6 +662,39 @@ final class InputController {
             up.timestamp = DispatchTime.now().uptimeNanoseconds
             up.postToPid(snapshot.app.pid)
         }
+        if let durationMs {
+            let totalSeconds = durationMs / 1000.0
+            let steps = max(8, Int((durationMs / 16.0).rounded()))
+            let began = ProcessInfo.processInfo.systemUptime
+            for step in 1...steps {
+                try Task.checkCancellation()
+                try validate(snapshot)
+                _ = try point(args, snapshot, x: "from_x", y: "from_y")
+                let rawFraction = Double(step) / Double(steps)
+                let fraction = Self.smoothDragProgress(rawFraction)
+                let location = CGPoint(
+                    x: start.x + (end.x - start.x) * fraction,
+                    y: start.y + (end.y - start.y) * fraction
+                )
+                let move = try mouseEvent(.leftMouseDragged, at: location, button: .left, source: source, window: window)
+                up = try mouseEvent(.leftMouseUp, at: location, button: .left, source: source, window: window)
+                move.postToPid(snapshot.app.pid)
+                pointerDelivered?(location, snapshot, false)
+                dragStepDelivered?(location, start, end, fraction, snapshot)
+                if step < steps {
+                    let deadline = began + totalSeconds * rawFraction
+                    let remaining = deadline - ProcessInfo.processInfo.systemUptime
+                    if remaining > 0.002 {
+                        try await pause(remaining)
+                    } else {
+                        try await pause(0.002)
+                    }
+                } else {
+                    try await pause(0.012)
+                }
+            }
+            return
+        }
         for step in 1...20 {
             try Task.checkCancellation()
             try validate(snapshot)
@@ -633,6 +707,93 @@ final class InputController {
             pointerDelivered?(location, snapshot, false)
             dragStepDelivered?(location, start, end, fraction, snapshot)
             try await pause(0.015)
+        }
+    }
+
+    /// Delivers a real non-activating click on behalf of a `swarm_dispatch` fleet agent without
+    /// hijacking the host worker's primary `PresenceController` cursor.
+    func deliverSwarmClick(at location: CGPoint, element: AXUIElement? = nil, snapshot: WindowSnapshot) async throws {
+        try requireAccessibility()
+        try Task.checkCancellation()
+        if let element, (try? actionNames(element).contains(kAXPressAction)) == true {
+            try await prepareAXFocus(snapshot, element: element)
+            try validateLiveElement(element)
+            _ = try await perform(kAXPressAction, on: element)
+            return
+        }
+        guard !snapshot.bounds.isEmpty, snapshot.bounds.contains(location) else {
+            throw OpenCUError("INVALID_COORDINATE", "Swarm click coordinates must lie inside the observed window bounds")
+        }
+        try validatePointerDelivery(snapshot, from: location, to: location, coordinateInput: false)
+        let window = try mouseWindow(snapshot)
+        try await preparePointerFocus(snapshot, from: location, to: location, coordinateInput: false)
+        let source = try eventSource()
+        let down = try mouseEvent(.leftMouseDown, at: location, button: .left, source: source, window: window)
+        let up = try mouseEvent(.leftMouseUp, at: location, button: .left, source: source, window: window)
+        down.setIntegerValueField(.mouseEventClickState, value: 1)
+        up.setIntegerValueField(.mouseEventClickState, value: 1)
+        try Task.checkCancellation()
+        try validate(snapshot)
+        down.postToPid(snapshot.app.pid)
+        do {
+            defer {
+                up.timestamp = DispatchTime.now().uptimeNanoseconds
+                up.postToPid(snapshot.app.pid)
+            }
+            try await pause(0.022)
+        }
+    }
+
+    /// Delivers a real non-activating 60Hz smooth drag on behalf of a `swarm_dispatch` fleet agent.
+    func deliverSwarmDrag(
+        from start: CGPoint,
+        to end: CGPoint,
+        durationMs: Double,
+        snapshot: WindowSnapshot,
+        onStep: @MainActor (CGPoint, Double) -> Void
+    ) async throws {
+        try requireAccessibility()
+        try Task.checkCancellation()
+        guard !snapshot.bounds.isEmpty, snapshot.bounds.contains(start), snapshot.bounds.contains(end) else {
+            throw OpenCUError("INVALID_COORDINATE", "Swarm drag coordinates must lie inside the observed window bounds")
+        }
+        let clampedMs = min(5000.0, max(120.0, durationMs))
+        let totalSeconds = clampedMs / 1000.0
+        let steps = max(8, Int((clampedMs / 16.0).rounded()))
+        try validatePointerDelivery(snapshot, from: start, to: end, coordinateInput: false)
+        let window = try mouseWindow(snapshot)
+        try await preparePointerFocus(snapshot, from: start, to: end, coordinateInput: false)
+        let source = try eventSource()
+        let down = try mouseEvent(.leftMouseDown, at: start, button: .left, source: source, window: window)
+        var up = try mouseEvent(.leftMouseUp, at: start, button: .left, source: source, window: window)
+        try Task.checkCancellation()
+        down.postToPid(snapshot.app.pid)
+        onStep(start, 0)
+        defer {
+            up.timestamp = DispatchTime.now().uptimeNanoseconds
+            up.postToPid(snapshot.app.pid)
+        }
+        let began = ProcessInfo.processInfo.systemUptime
+        for step in 1...steps {
+            try Task.checkCancellation()
+            try validate(snapshot)
+            let rawFraction = Double(step) / Double(steps)
+            let fraction = Self.smoothDragProgress(rawFraction)
+            let location = CGPoint(
+                x: start.x + (end.x - start.x) * fraction,
+                y: start.y + (end.y - start.y) * fraction
+            )
+            let move = try mouseEvent(.leftMouseDragged, at: location, button: .left, source: source, window: window)
+            up = try mouseEvent(.leftMouseUp, at: location, button: .left, source: source, window: window)
+            move.postToPid(snapshot.app.pid)
+            onStep(location, fraction)
+            if step < steps {
+                let deadline = began + totalSeconds * rawFraction
+                let remaining = deadline - ProcessInfo.processInfo.systemUptime
+                try await pause(max(0.002, remaining))
+            } else {
+                try await pause(0.012)
+            }
         }
     }
 

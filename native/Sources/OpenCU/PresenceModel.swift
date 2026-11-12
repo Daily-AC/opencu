@@ -4,7 +4,8 @@ import CoreGraphics
 /// Per-connection policy, independent of AppKit and wall-clock adjustments.
 struct PresenceState {
     static let inputMethods: Set<String> = ["wait", "hover", "click", "drag", "press_key", "type_text", "paste", "scroll",
-                                            "set_value", "select_text", "perform_secondary_action", "activate_app"]
+                                            "set_value", "select_text", "perform_secondary_action", "activate_app",
+                                            "swarm_dispatch", "cluster_cursors"]
     var cursorHoldDuration: TimeInterval = 3
     private(set) var stopped = false
     private(set) var connected = true
@@ -63,6 +64,7 @@ struct CursorMotion {
         var rect: CGRect
         var began: TimeInterval
         var holdDuration: TimeInterval = 1.15
+        var guideLines: Bool = true
 
         func opacity(at now: TimeInterval, waitingTurn: Bool = false) -> CGFloat {
             if waitingTurn { return 1 }
@@ -80,18 +82,44 @@ struct CursorMotion {
     let end: CGPoint
     let began: TimeInterval
     let duration: TimeInterval
+    let arcOffset: CGFloat
 
-    init(start: CGPoint, end: CGPoint, began: TimeInterval, duration: TimeInterval = 0.25) {
+    init(start: CGPoint, end: CGPoint, began: TimeInterval, duration: TimeInterval = 0.25, arcOffset: CGFloat = 0) {
         self.start = start
         self.end = end
         self.began = began
         self.duration = max(0.001, duration)
+        self.arcOffset = arcOffset
+    }
+
+    /// Deterministic lateral quadratic Bézier control offset for organic curved cursor swoops
+    /// (always zero during active `drag` so slider drags remain dead-straight).
+    static func deterministicArcOffset(slot: Int, start: CGPoint, end: CGPoint, isDrag: Bool = false) -> CGFloat {
+        guard !isDrag else { return 0 }
+        let dist = hypot(end.x - start.x, end.y - start.y)
+        guard dist >= 22 else { return 0 }
+        let hashSeed = abs(slot &* 31 &+ Int(start.x.rounded()) &* 7 &+ Int(end.y.rounded()) &* 13)
+        let sign: CGFloat = (hashSeed % 2 == 0) ? 1 : -1
+        let ratio: CGFloat = 0.20 + CGFloat(abs(slot) % 4) * 0.035
+        return sign * min(68, max(14, dist * ratio))
     }
 
     func point(at now: TimeInterval) -> CGPoint {
         let t = min(1, max(0, (now - began) / duration))
         let ease = 1 - pow(1 - t, 3)
-        return CGPoint(x: start.x + (end.x - start.x) * ease, y: start.y + (end.y - start.y) * ease)
+        let lx = start.x + (end.x - start.x) * ease
+        let ly = start.y + (end.y - start.y) * ease
+        guard abs(arcOffset) > 0.01 else {
+            return CGPoint(x: lx, y: ly)
+        }
+        let dist = hypot(end.x - start.x, end.y - start.y)
+        guard dist >= 1 else {
+            return CGPoint(x: lx, y: ly)
+        }
+        let nx = -(end.y - start.y) / dist
+        let ny = (end.x - start.x) / dist
+        let bow = CGFloat(2 * ease * (1 - ease)) * arcOffset
+        return CGPoint(x: lx + nx * bow, y: ly + ny * bow)
     }
 
     /// 5-dot fading comet trail sampled behind the moving cursor tip.
@@ -144,4 +172,124 @@ struct PermissionStatus {
     var screenRecording: Bool
     var reconnect: Bool = false
     var ready: Bool { accessibility && screenRecording && !reconnect }
+}
+
+enum SwarmAgentMode: String, Equatable {
+    case orbit
+    case glide
+    case click
+    case drag
+    case ripple
+    case dismiss
+
+    static func parse(_ raw: String?) -> SwarmAgentMode {
+        guard let cleaned = raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(), !cleaned.isEmpty else {
+            return .glide
+        }
+        return SwarmAgentMode(rawValue: cleaned) ?? .glide
+    }
+}
+
+/// Pure 60fps state for a single cursor in the native `swarm_dispatch` Fleet/Swarm Pool.
+struct SwarmAgentState {
+    static let dismissFadeDuration: TimeInterval = 0.22
+
+    var agentId: String
+    var agentName: String
+    var colorHex: String
+    var rgb: AgentRGB
+    var slot: Int
+    var mode: SwarmAgentMode
+    var motion: CursorMotion
+    var orbitCenter: CGPoint = .zero
+    var orbitRadius: CGFloat = 84
+    var orbitAngularSpeed: Double = 2.6
+    var orbitPhase: Double = 0
+    var orbitBegan: TimeInterval = 0
+    var pressBegan: TimeInterval?
+    var pendingClickAt: TimeInterval?
+    var selection: CursorMotion.SelectionHighlight?
+    var showTag: Bool = true
+    var dismissBegan: TimeInterval?
+    var lastUpdatedAt: TimeInterval
+    var holdDuration: TimeInterval = 15.0
+    var emitCompanion: Bool = false
+    var companionConnected: Bool = false
+
+    func orbitTarget(at time: TimeInterval) -> CGPoint {
+        let elapsed = max(0, time - orbitBegan)
+        let angle = orbitPhase + elapsed * orbitAngularSpeed
+        let rx = orbitRadius
+        let ry = orbitRadius * 0.86
+        return CGPoint(
+            x: orbitCenter.x + CGFloat(cos(angle)) * rx,
+            y: orbitCenter.y + CGFloat(sin(angle)) * ry
+        )
+    }
+
+    func point(at now: TimeInterval) -> CGPoint {
+        if mode == .orbit {
+            let target = orbitTarget(at: now)
+            let blend = min(1, max(0, (now - orbitBegan) / 0.30))
+            let ease = CGFloat(1 - pow(1 - blend, 3))
+            return CGPoint(
+                x: motion.start.x + (target.x - motion.start.x) * ease,
+                y: motion.start.y + (target.y - motion.start.y) * ease
+            )
+        }
+        if now < motion.began {
+            return motion.start
+        }
+        return motion.point(at: now)
+    }
+
+    func trail(at now: TimeInterval, count: Int = 5) -> [CursorMotion.CometDot] {
+        guard count > 0 else { return [] }
+        if mode == .orbit {
+            guard now >= orbitBegan else { return [] }
+            let head = point(at: now)
+            var dots: [CursorMotion.CometDot] = []
+            dots.reserveCapacity(count)
+            for idx in 1...count {
+                let sampleTime = max(orbitBegan, now - Double(idx) * 0.028)
+                let sample = point(at: sampleTime)
+                if hypot(sample.x - head.x, sample.y - head.y) < 2.2 { continue }
+                let fraction = CGFloat(idx - 1) / CGFloat(max(1, count - 1))
+                dots.append(
+                    CursorMotion.CometDot(
+                        point: sample,
+                        radius: 4.4 - 2.5 * fraction,
+                        alpha: 0.54 - 0.40 * fraction
+                    )
+                )
+            }
+            return dots
+        }
+        return motion.cometTrail(at: now, count: count)
+    }
+
+    func opacity(at now: TimeInterval) -> CGFloat {
+        if let dismissBegan {
+            let elapsed = max(0, now - dismissBegan)
+            if elapsed >= Self.dismissFadeDuration { return 0 }
+            return CGFloat(max(0, 1 - elapsed / Self.dismissFadeDuration))
+        }
+        if mode == .orbit { return 1 }
+        let idleElapsed = max(0, now - max(lastUpdatedAt, motion.began + motion.duration))
+        if idleElapsed >= holdDuration { return 0 }
+        let fadeWindow = 0.35
+        if idleElapsed <= holdDuration - fadeWindow { return 1 }
+        return CGFloat(max(0, (holdDuration - idleElapsed) / fadeWindow))
+    }
+
+    mutating func advanceEffects(at now: TimeInterval) {
+        if let clickAt = pendingClickAt, now >= clickAt {
+            pressBegan = clickAt
+            pendingClickAt = nil
+            if var sel = selection {
+                sel.began = clickAt
+                selection = sel
+            }
+        }
+    }
 }

@@ -1156,6 +1156,72 @@ struct OpenCUInputLogicChecks {
         try expect(highlight.opacity(at: 51.20) == 0, "Selection box hides after ~1.15s")
         try expect(highlight.opacity(at: 60.0, waitingTurn: true) == 1.0, "Selection box remains visible while waiting turn")
 
+        // 5b. 16-Color Figma Cluster Palette, 24-Slot Hub, Curved Bézier Flight, Smooth Drag Curve & Swarm Fleet State.
+        let expected16Hex = [
+            "#FF6B9D", "#38BDF8", "#F59E0B", "#34D399", "#A78BFA", "#FB7185", "#2DD4BF", "#FBBF24",
+            "#60A5FA", "#F472B6", "#4ADE80", "#C084FC", "#FB923C", "#22D3EE", "#A3E635", "#E879F9",
+        ]
+        try expect(AgentSlotPalette.count == 16 && AgentSlotPalette.maxSlots == 24, "16-color palette and 24-slot hub capacity")
+        for idx in 0..<24 {
+            let entry = AgentSlotPalette.entry(for: idx)
+            try expect(entry.slot == idx, "Slot \(idx) preserved across 0..<24")
+            try expect(entry.hex == expected16Hex[idx % 16], "Slot \(idx) maps to expected 16-color Figma hex")
+            try expect(entry.defaultName == "Agent \(idx + 1)", "Slot \(idx) default name")
+            let anchor = PresenceArtwork.anchorPoint(forSlot: idx, within: canvasBounds)
+            try expect(canvasBounds.insetBy(dx: 16, dy: 16).contains(anchor), "24-slot anchor \(idx) inside window")
+        }
+
+        let arcStart = CGPoint(x: 100, y: 200)
+        let arcEnd = CGPoint(x: 400, y: 200)
+        let curvedOffset = CursorMotion.deterministicArcOffset(slot: 1, start: arcStart, end: arcEnd, isDrag: false)
+        let dragOffset = CursorMotion.deterministicArcOffset(slot: 1, start: arcStart, end: arcEnd, isDrag: true)
+        try expect(abs(curvedOffset) >= 14 && abs(curvedOffset) <= 68, "Glide/click computes subtle quadratic Bézier lateral arc")
+        try expect(dragOffset == 0, "Drag strictly disables lateral arc so slider drags stay dead-straight")
+        let curvedMotion = CursorMotion(start: arcStart, end: arcEnd, began: 20, duration: 0.28, arcOffset: curvedOffset)
+        try expect(curvedMotion.point(at: 20.0) == arcStart, "Bézier glide starts strictly at start point")
+        try expect(curvedMotion.point(at: 20.28) == arcEnd, "Bézier glide ends strictly at end point")
+        try expect(abs(curvedMotion.point(at: 20.14).y - 200) > 6, "Bézier glide curves laterally off chord mid-flight")
+
+        try expect(abs(InputController.smoothDragProgress(0.0) - 0.0) < 1e-9, "Smooth drag starts at 0")
+        try expect(abs(InputController.smoothDragProgress(0.5) - 0.5) < 1e-9, "Smooth drag hits 0.5 at midpoint")
+        try expect(abs(InputController.smoothDragProgress(1.0) - 1.0) < 1e-9, "Smooth drag ends at 1.0")
+        var prevDragP = 0.0
+        for step in 1...60 {
+            let curDragP = InputController.smoothDragProgress(Double(step) / 60.0)
+            try expect(curDragP > prevDragP, "Smooth drag curve is strictly monotonic at step \(step)")
+            prevDragP = curDragP
+        }
+
+        try expect(SwarmAgentMode.parse("Ripple") == .ripple && SwarmAgentMode.parse("ORBIT") == .orbit,
+                   "SwarmAgentMode parses case-insensitively")
+        var orbitAgent = SwarmAgentState(
+            agentId: "fleet-1",
+            agentName: "Agent 1",
+            colorHex: "#FF6B9D",
+            rgb: AgentSlotPalette.entry(for: 0).rgb,
+            slot: 0,
+            mode: .orbit,
+            motion: CursorMotion(start: CGPoint(x: 300, y: 240), end: CGPoint(x: 300, y: 240), began: 100),
+            orbitCenter: CGPoint(x: 420, y: 300),
+            orbitRadius: 90,
+            orbitAngularSpeed: 2.5,
+            orbitPhase: 0,
+            orbitBegan: 100,
+            lastUpdatedAt: 100
+        )
+        let orbitP1 = orbitAgent.point(at: 100.4)
+        let orbitP2 = orbitAgent.point(at: 100.9)
+        try expect(hypot(orbitP1.x - orbitP2.x, orbitP1.y - orbitP2.y) > 30, "Orbit mode animates smoothly around ring")
+        try expect(orbitAgent.trail(at: 100.9).count >= 3, "Orbit mode produces smooth multi-dot comet wake")
+        orbitAgent.mode = .click
+        orbitAgent.pendingClickAt = 101.2
+        orbitAgent.advanceEffects(at: 101.25)
+        try expect(orbitAgent.pressBegan == 101.2 && orbitAgent.pendingClickAt == nil, "Arrival triggers click ripple")
+        orbitAgent.dismissBegan = 102.0
+        try expect(orbitAgent.opacity(at: 102.1) > 0 && orbitAgent.opacity(at: 102.3) == 0, "Dismiss mode fades cleanly")
+        try expect(PresenceState.inputMethods.contains("swarm_dispatch") && PresenceState.inputMethods.contains("cluster_cursors"),
+                   "swarm_dispatch and cluster_cursors gated by Stop policy")
+
         // 6. Real 4-concurrent-worker `launchd` startup test:
         //    Spawn 4 `opencu-engine serve` processes simultaneously and verify zero ENGINE_EXITED / launchd race!
         let repoRoot = URL(fileURLWithPath: CommandLine.arguments[1]).deletingLastPathComponent().deletingLastPathComponent()
