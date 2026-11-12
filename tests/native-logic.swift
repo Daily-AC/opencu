@@ -1047,11 +1047,17 @@ struct OpenCUInputLogicChecks {
             errorCode: "TARGET_BUSY", errorMessage: "busy"
         )
         var sameAppWaitingFired = false
+        var contendedOnMainThread = false
+        var checkAllowedOnMainThread = false
         let sameAppTask = Task { @MainActor in
             let lease = try await AdvisoryFileLock.acquire(
                 path: pidLockA, timeout: 10.0, pollInterval: 0.015,
                 errorCode: "TARGET_BUSY", errorMessage: "busy",
-                onContended: { sameAppWaitingFired = true }
+                checkAllowed: { checkAllowedOnMainThread = Thread.isMainThread },
+                onContended: {
+                    sameAppWaitingFired = true
+                    contendedOnMainThread = Thread.isMainThread
+                }
             )
             defer { lease.release() }
             return "same-app-done"
@@ -1066,9 +1072,16 @@ struct OpenCUInputLogicChecks {
         try expect(crossElapsed < 0.03, "Different target PID lock acquires immediately in parallel")
         try await Task.sleep(nanoseconds: 50_000_000)
         try expect(sameAppWaitingFired, "Contended same-PID turn emits waiting_turn hook")
+        try expect(contendedOnMainThread, "onContended runs strictly on MainActor / main thread")
+        try expect(checkAllowedOnMainThread, "checkAllowed runs strictly on MainActor / main thread")
         appALease1.release()
         let sameResult = try await sameAppTask.value
         try expect(sameResult == "same-app-done", "Contended same-PID turn completes once holder releases")
+
+        try expect(WorkerJob.decodeWaitStatus(0) == (0, nil), "Clean exit(0) decodes to 0")
+        try expect(WorkerJob.decodeWaitStatus(42 << 8) == (42, nil), "exit(42) decodes to 42")
+        try expect(WorkerJob.decodeWaitStatus(SIGTRAP) == (128 + SIGTRAP, SIGTRAP), "SIGTRAP crash decodes to 133 with signal 5")
+        try expect(WorkerJob.decodeWaitStatus(SIGSEGV) == (128 + SIGSEGV, SIGSEGV), "SIGSEGV crash decodes to 139 with signal 11")
 
         // Timeout refusal check.
         let heldForever = try await AdvisoryFileLock.acquire(

@@ -483,6 +483,7 @@ final class PresenceController: NSObject, NSMenuDelegate, NSApplicationDelegate 
     }
 
     private func tick() {
+        dispatchPrecondition(condition: .onQueue(.main))
         let time = now
         let raise = needsZOrderRaise
         needsZOrderRaise = false

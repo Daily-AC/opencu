@@ -184,6 +184,42 @@ final class Engine {
         }
     }
 
+    @MainActor
+    private func acquireTargetLease(
+        app: TargetApp,
+        companionApp: CompanionApp,
+        window: CompanionWindow?,
+        method: String,
+        includeScreenshot: Bool
+    ) async throws -> (lease: AdvisoryFileLock.Lease, wasContended: Bool) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        var contended = false
+        let lease = try await AdvisoryFileLock.acquire(
+            path: hub.pidLockPath(app.pid),
+            timeout: 10.0,
+            pollInterval: 0.025,
+            errorCode: "TARGET_BUSY",
+            errorMessage: "Another OpenCU agent is still operating \(app.name) after 10 seconds. No input was sent.",
+            checkAllowed: { [weak self] in
+                guard let self else { throw CancellationError() }
+                try self.requireAllowed(method, screenshot: includeScreenshot)
+                if self.ownsDesktop { try self.desktop.requireContinuation() }
+            },
+            onContended: { [weak self] in
+                guard let self else { return }
+                contended = true
+                self.presence.setWaitingTurn(true)
+                self.broadcaster.waitingTurn(
+                    identity: self.hub.identity,
+                    app: companionApp,
+                    window: window,
+                    kind: CompanionActionKind(method: method)
+                )
+            }
+        )
+        return (lease, contended)
+    }
+
     private func perform(_ method: String, _ args: Arguments) async throws -> Any {
         try Task.checkCancellation()
         if method == "agent_desktop_start" {
@@ -228,34 +264,6 @@ final class Engine {
             ? snapshot.flatMap { CompanionWindow(id: $0.windowID, bounds: $0.bounds) }
             : nil
 
-        func acquireTargetLease(window: CompanionWindow?) async throws -> (lease: AdvisoryFileLock.Lease, wasContended: Bool) {
-            var contended = false
-            let lease = try await AdvisoryFileLock.acquire(
-                path: hub.pidLockPath(app.pid),
-                timeout: 10.0,
-                pollInterval: 0.025,
-                errorCode: "TARGET_BUSY",
-                errorMessage: "Another OpenCU agent is still operating \(app.name) after 10 seconds. No input was sent.",
-                checkAllowed: { [weak self] in
-                    guard let self else { throw CancellationError() }
-                    try self.requireAllowed(method, screenshot: args["includeScreenshot"] as? Bool ?? false)
-                    if self.ownsDesktop { try self.desktop.requireContinuation() }
-                },
-                onContended: { [weak self] in
-                    guard let self else { return }
-                    contended = true
-                    self.presence.setWaitingTurn(true)
-                    self.broadcaster.waitingTurn(
-                        identity: self.hub.identity,
-                        app: companionApp,
-                        window: window,
-                        kind: CompanionActionKind(method: method)
-                    )
-                }
-            )
-            return (lease, contended)
-        }
-
         // Use a stable identity after resolution, so aliases do not carry a
         // cursor across applications. Every observed window is checked as well.
         presence.called(target: String(app.pid), name: app.name)
@@ -287,7 +295,13 @@ final class Engine {
                 activationLease?.release()
             }
             if method == "activate_app" {
-                let acquired = try await acquireTargetLease(window: priorWindow)
+                let acquired = try await acquireTargetLease(
+                    app: app,
+                    companionApp: companionApp,
+                    window: priorWindow,
+                    method: method,
+                    includeScreenshot: args["includeScreenshot"] as? Bool ?? false
+                )
                 activationLease = acquired.lease
                 if acquired.wasContended { presence.setWaitingTurn(false) }
                 input.noteTurnAcquired(contended: acquired.wasContended)
@@ -392,7 +406,13 @@ final class Engine {
         }
 
         // Hold `pid-<pid>.lock` ONLY around the atomic input delivery!
-        let acquired = try await acquireTargetLease(window: targetWin)
+        let acquired = try await acquireTargetLease(
+            app: app,
+            companionApp: companionApp,
+            window: targetWin,
+            method: method,
+            includeScreenshot: false
+        )
         let pidLease = acquired.lease
         defer {
             presence.setWaitingTurn(false)
@@ -526,7 +546,7 @@ struct OpenCUMain {
         }
         var tail: Task<Void, Never>?
         var controls: [UUID: Task<Void, Never>] = [:]
-        func respond(_ request: Arguments, control: Bool) async {
+        @MainActor func respond(_ request: Arguments, control: Bool) async {
             let id = request["id"] ?? NSNull()
             do {
                 guard let method = request["method"] as? String, let args = request["params"] as? Arguments else {

@@ -184,7 +184,7 @@ struct AgentRecord: Codable, Equatable, Sendable {
 }
 
 enum AdvisoryFileLock {
-    private static let cFlock: (Int32, Int32) -> Int32 = flock
+    private static let cFlock: @Sendable (Int32, Int32) -> Int32 = flock
 
     final class Lease {
         private var fd: Int32
@@ -272,15 +272,17 @@ enum AdvisoryFileLock {
         return contended
     }
 
+    @MainActor
     static func acquire(
         path: String,
         timeout: TimeInterval,
         pollInterval: TimeInterval = 0.025,
         errorCode: String,
         errorMessage: String,
-        checkAllowed: (() throws -> Void)? = nil,
-        onContended: (() -> Void)? = nil
+        checkAllowed: (@MainActor () throws -> Void)? = nil,
+        onContended: (@MainActor () -> Void)? = nil
     ) async throws -> Lease {
+        dispatchPrecondition(condition: .onQueue(.main))
         let parent = (path as NSString).deletingLastPathComponent
         do {
             try ensureDirectory(parent)

@@ -31,7 +31,14 @@ enum WorkerLauncher {
             }
             let channels = try listener.acceptChannels(token: token, workerPID: job!.pid, doctor: mode == "doctor")
             defer { for fd in channels.values { close(fd) } }
-            let status = try WorkerTransport.relay(stdio: channels["stdio"]!, stderrSocket: channels["stderr"])
+            var status = try WorkerTransport.relay(stdio: channels["stdio"]!, stderrSocket: channels["stderr"])
+            if status == 0, WorkerTransport.interrupted == 0, let outcome = job?.exitStatus(), outcome.exitCode != 0 {
+                if let sig = outcome.signal {
+                    let line = "OpenCU worker (\(job!.pid)) terminated by signal \(sig).\n"
+                    line.withCString { _ = Darwin.write(STDERR_FILENO, $0, strlen($0)) }
+                }
+                status = outcome.exitCode
+            }
             job?.remove()
             return status
         } catch {
@@ -112,6 +119,44 @@ struct WorkerJob {
     }
 
     func remove() { _ = WorkerJob.launchctl(["bootout", "\(WorkerJob.domain)/\(label)"]) }
+
+    static func decodeWaitStatus(_ raw: Int32) -> (exitCode: Int32, signal: Int32?) {
+        let low = raw & 0x7f
+        if low == 0 {
+            return ((raw >> 8) & 0xff, nil)
+        }
+        if low != 0x7f {
+            return (128 + low, low)
+        }
+        return (1, nil)
+    }
+
+    func exitStatus(timeout: TimeInterval = 0.25) -> (exitCode: Int32, signal: Int32?)? {
+        let deadline = WorkerTransport.now + max(0, timeout)
+        while true {
+            let result = WorkerJob.launchctl(["list", label])
+            guard result.status == 0 else { return nil }
+            var stillRunning = false
+            var rawStatus: Int32?
+            for line in result.output.split(separator: "\n") {
+                let trimmed = line
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                    .trimmingCharacters(in: CharacterSet(charactersIn: ";"))
+                let parts = trimmed.split(separator: "=", maxSplits: 1).map {
+                    $0.trimmingCharacters(in: .whitespaces)
+                        .trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+                }
+                guard parts.count == 2 else { continue }
+                if parts[0] == "PID" { stillRunning = true }
+                if parts[0] == "LastExitStatus", let parsed = Int32(parts[1]) { rawStatus = parsed }
+            }
+            if !stillRunning, let rawStatus {
+                return Self.decodeWaitStatus(rawStatus)
+            }
+            if WorkerTransport.now >= deadline { return nil }
+            usleep(10_000)
+        }
+    }
 
     static func runningPID(_ label: String) -> pid_t? {
         let output = launchctl(["print", "\(domain)/\(label)"]).output

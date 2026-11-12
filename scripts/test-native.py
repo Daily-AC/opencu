@@ -66,6 +66,8 @@ def main() -> int:
             "-target", f"{platform.machine()}-apple-macos14.0",
             str(sources / "Types.swift"),
             str(sources / "AgentHub.swift"),
+            str(sources / "WorkerTransport.swift"),
+            str(sources / "WorkerLauncher.swift"),
             str(sources / "CompanionBroadcaster.swift"),
             str(sources / "PresenceModel.swift"),
             str(sources / "PresenceArtwork.swift"),
