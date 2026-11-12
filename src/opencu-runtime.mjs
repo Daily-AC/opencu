@@ -15,6 +15,7 @@ export const AGENT_ENV_KEYS = Object.freeze([
   'OPENCU_AGENT_COLOR',
   'OPENCU_HUB_DIR',
   'OPENCU_EVENT_SOCK',
+  'OPENCU_CAPTURE_OVERLAY',
 ]);
 
 function expandHomePath(raw, home) {
@@ -67,6 +68,13 @@ export function resolveAgentEnv(env = process.env, overrides = {}) {
   const agentColor = normalizeAgentColor(overrides.agentColor ?? base.OPENCU_AGENT_COLOR);
   if (agentColor) base.OPENCU_AGENT_COLOR = agentColor;
   else delete base.OPENCU_AGENT_COLOR;
+
+  const rawCaptureOverlay = overrides.captureOverlay ?? base.OPENCU_CAPTURE_OVERLAY;
+  if (rawCaptureOverlay === true || (typeof rawCaptureOverlay === 'string' && ['1', 'true'].includes(rawCaptureOverlay.trim().toLowerCase()))) {
+    base.OPENCU_CAPTURE_OVERLAY = '1';
+  } else {
+    delete base.OPENCU_CAPTURE_OVERLAY;
+  }
 
   return base;
 }

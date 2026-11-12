@@ -1086,6 +1086,135 @@ struct OpenCUInputLogicChecks {
             try expect(error.code == "TARGET_BUSY", "Lock timeout surfaces exact OpenCUError code")
         }
 
+        // 5. Figma-multiplayer presence: 12s persistent hold, 280ms cubic-out glide, 5-dot comet trail,
+        //    1.15s wireframe selection box, staggered per-slot anchors, and OPENCU_CAPTURE_OVERLAY=1.
+        try expect(!AgentConfig.captureOverlayEnabled(environment: [:]), "Capture overlay defaults to false (.none)")
+        try expect(AgentConfig.captureOverlayEnabled(environment: ["OPENCU_CAPTURE_OVERLAY": "1"]), "Capture overlay honors 1")
+        try expect(AgentConfig.captureOverlayEnabled(environment: ["OPENCU_CAPTURE_OVERLAY": "true"]), "Capture overlay honors true")
+        try expect(!AgentConfig.captureOverlayEnabled(environment: ["OPENCU_CAPTURE_OVERLAY": "0"]), "Capture overlay ignores 0")
+
+        var persistent = PresenceState(cursorHoldDuration: 12)
+        persistent.call(target: "4321", now: 10)
+        persistent.pointer(now: 10)
+        persistent.finished(now: 10)
+        try expect(persistent.cursorVisible(at: 21.99), "Persistent cursor remains visible across 12-second hold")
+        try expect(!persistent.cursorVisible(at: 22.01), "Persistent cursor expires cleanly after 12 seconds")
+        persistent.pointer(now: 25)
+        persistent.call(target: "4321", now: 28)
+        try expect(persistent.cursorVisible(at: 28), "Consecutive call to same target never hides cursor")
+
+        let glide = CursorMotion(
+            start: CGPoint(x: 100, y: 120),
+            end: CGPoint(x: 360, y: 240),
+            began: 10,
+            duration: CursorMotion.defaultGlideDuration
+        )
+        try expect(CursorMotion.defaultGlideDuration == 0.28, "Default multiplayer glide is 280ms")
+        try expect(glide.point(at: 10) == CGPoint(x: 100, y: 120), "Glide starts at previous screen point")
+        try expect(glide.point(at: 10.28) == CGPoint(x: 360, y: 240), "Glide settles at target after 280ms")
+        let midTrail = glide.cometTrail(at: 10.16)
+        try expect(midTrail.count == 5, "Flying cursor renders 5-dot comet trail")
+        try expect(midTrail.first!.alpha > midTrail.last!.alpha && midTrail.first!.radius > midTrail.last!.radius,
+                   "Comet trail fades and tapers from head to tail")
+        try expect(glide.cometTrail(at: 10.50).isEmpty, "Comet trail clears once cursor settles")
+
+        let canvasBounds = CGRect(x: 80, y: 60, width: 900, height: 640)
+        let anchors = (0..<6).map { PresenceArtwork.anchorPoint(forSlot: $0, within: canvasBounds) }
+        for (idx, anchor) in anchors.enumerated() {
+            try expect(canvasBounds.insetBy(dx: 16, dy: 16).contains(anchor), "Slot \(idx) anchor inside window")
+            for otherIdx in (idx + 1)..<anchors.count {
+                try expect(hypot(anchor.x - anchors[otherIdx].x, anchor.y - anchors[otherIdx].y) > 24,
+                           "Slot \(idx) and \(otherIdx) anchors are staggered apart")
+            }
+        }
+        let (trailCanvas, _) = PresenceArtwork.cursorCanvasRect(
+            at: glide.point(at: 10.16),
+            trail: midTrail,
+            tag: "Coder",
+            waitingTurn: true,
+            within: canvasBounds
+        )
+        try expect(!trailCanvas.isEmpty && canvasBounds.contains(trailCanvas), "Cursor canvas encloses arrow, tag, and comet trail")
+        try expect(PresenceArtwork.formattedTag("QA", waitingTurn: true) == "⏳ QA", "Waiting turn prefixes hourglass on tag")
+
+        let highlight = CursorMotion.SelectionHighlight(rect: CGRect(x: 200, y: 160, width: 140, height: 36), began: 50)
+        try expect(highlight.opacity(at: 50.5) == 1.0, "Selection box holds full opacity during first ~1s")
+        try expect(highlight.opacity(at: 51.05) > 0 && highlight.opacity(at: 51.05) < 1, "Selection box fades smoothly near 1.15s")
+        try expect(highlight.opacity(at: 51.20) == 0, "Selection box hides after ~1.15s")
+        try expect(highlight.opacity(at: 60.0, waitingTurn: true) == 1.0, "Selection box remains visible while waiting turn")
+
+        // 6. Real 4-concurrent-worker `launchd` startup test:
+        //    Spawn 4 `opencu-engine serve` processes simultaneously and verify zero ENGINE_EXITED / launchd race!
+        let repoRoot = URL(fileURLWithPath: CommandLine.arguments[1]).deletingLastPathComponent().deletingLastPathComponent()
+        let builtEngine = repoRoot.appendingPathComponent(".build/OpenCU.app/Contents/MacOS/opencu-engine")
+        if FileManager.default.isExecutableFile(atPath: builtEngine.path) {
+            let launchHub = shortRoot.appendingPathComponent("parallel-hub").path
+            let launchSock = shortRoot.appendingPathComponent("parallel.sock").path
+            let names = ["Coder", "Designer", "Reviewer", "QA"]
+            let colors = ["#FF6B9D", "#38BDF8", "#F59E0B", "#34D399"]
+            struct WorkerResult: Sendable {
+                let index: Int
+                let status: Int32
+                let stdout: String
+                let stderr: String
+            }
+            let results = await withTaskGroup(of: WorkerResult.self) { group -> [WorkerResult] in
+                for index in 0..<4 {
+                    let agentName = names[index]
+                    let agentColor = colors[index]
+                    group.addTask {
+                        let proc = Process()
+                        proc.executableURL = builtEngine
+                        proc.arguments = ["serve"]
+                        var env = ProcessInfo.processInfo.environment
+                        env["OPENCU_HUB_DIR"] = launchHub
+                        env["OPENCU_EVENT_SOCK"] = launchSock
+                        env["OPENCU_AGENT_NAME"] = agentName
+                        env["OPENCU_AGENT_COLOR"] = agentColor
+                        env["OPENCU_CAPTURE_OVERLAY"] = "1"
+                        proc.environment = env
+                        let stdinPipe = Pipe(), stdoutPipe = Pipe(), stderrPipe = Pipe()
+                        proc.standardInput = stdinPipe
+                        proc.standardOutput = stdoutPipe
+                        proc.standardError = stderrPipe
+                        do {
+                            try proc.run()
+                            let req = "{\"id\":1,\"method\":\"doctor\",\"params\":{}}\n"
+                            stdinPipe.fileHandleForWriting.write(Data(req.utf8))
+                            try? stdinPipe.fileHandleForWriting.close()
+                            let outData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+                            let errData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+                            proc.waitUntilExit()
+                            return WorkerResult(
+                                index: index,
+                                status: proc.terminationStatus,
+                                stdout: String(decoding: outData, as: UTF8.self),
+                                stderr: String(decoding: errData, as: UTF8.self)
+                            )
+                        } catch {
+                            return WorkerResult(index: index, status: -1, stdout: "", stderr: "\(error)")
+                        }
+                    }
+                }
+                var collected: [WorkerResult] = []
+                for await item in group { collected.append(item) }
+                return collected.sorted { $0.index < $1.index }
+            }
+            var workerPIDs = Set<Int>()
+            for res in results {
+                let index = res.index
+                try expect(res.status == 0, "Parallel worker \(index) exited cleanly (status=\(res.status), stderr=\(res.stderr))")
+                let firstLine = res.stdout.split(separator: "\n").first.map(String.init) ?? ""
+                let parsed = try JSONSerialization.jsonObject(with: Data(firstLine.utf8)) as? [String: Any]
+                let doctor = parsed?["result"] as? [String: Any]
+                try expect(doctor?["launchedBy"] as? String == "launchd", "Parallel worker \(index) launched via launchd")
+                if let wpid = doctor?["workerPID"] as? Int, wpid > 0 {
+                    workerPIDs.insert(wpid)
+                }
+            }
+            try expect(workerPIDs.count == 4, "4 concurrent workers received 4 distinct launchd worker PIDs without race")
+        }
+
         print("\(checked) multi-agent slot/color registry, non-overlapping badge, SOCK_DGRAM privacy-safe event stream, and flock concurrency checks passed")
     }
 }

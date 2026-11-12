@@ -63,18 +63,36 @@ struct PresenceRenderer {
                         try render(view, to: output.appendingPathComponent("cursor-\(theme)-\(name).png"))
                     }
                     for entry in AgentSlotPalette.entries.prefix(3) {
-                        let view = AgentCursorView(frame: NSRect(x: 0, y: 0, width: 128, height: 64))
-                        view.hotspot = CGPoint(x: 22, y: 22)
+                        let view = AgentCursorView(frame: NSRect(x: 0, y: 0, width: 172, height: 86))
+                        view.hotspot = CGPoint(x: 42, y: 30)
                         view.press = entry.slot == 1 ? 0.85 : 0
                         view.ripple = entry.slot == 1 ? 0.45 : nil
+                        view.agentRGB = entry.rgb
                         view.agentColor = entry.rgb.nsColor
                         view.tagText = entry.defaultName
+                        if entry.slot == 0 {
+                            let motion = CursorMotion(
+                                start: CGPoint(x: 6, y: 12),
+                                end: CGPoint(x: 42, y: 30),
+                                began: 0,
+                                duration: CursorMotion.defaultGlideDuration
+                            )
+                            view.trail = motion.cometTrail(at: 0.18)
+                        } else if entry.slot == 2 {
+                            view.waitingTurn = true
+                            view.pulsePhase = 0.25
+                        }
                         view.appearance = NSAppearance(named: appearance)
                         try render(view, to: output.appendingPathComponent("cursor-\(theme)-slot-\(entry.slot).png"))
                     }
                     let multiBadge = MultiAgentBadgeSample(strings: strings, dark: theme == "dark")
                     multiBadge.appearance = NSAppearance(named: appearance)
                     try render(multiBadge, to: output.appendingPathComponent("badge-\(language)-\(theme)-multi-agent.png"))
+                    if language == "en" {
+                        let canvas = MultiplayerCanvasSample(dark: theme == "dark")
+                        canvas.appearance = NSAppearance(named: appearance)
+                        try render(canvas, to: output.appendingPathComponent("multiplayer-canvas-\(theme).png"))
+                    }
                 }
             }
         }
@@ -227,5 +245,57 @@ final class MultiAgentBadgeSample: NSView {
         }
         ("Fixture.txt" as NSString).draw(at: CGPoint(x: sampleBounds.minX + 90, y: sampleBounds.minY + titleHeight/2 - 8),
             withAttributes: [.font: NSFont.systemFont(ofSize: 12), .foregroundColor: dark ? NSColor.white : NSColor.darkGray])
+    }
+}
+
+@MainActor
+final class MultiplayerCanvasSample: NSView {
+    override var isFlipped: Bool { true }
+    let dark: Bool
+    init(dark: Bool) {
+        self.dark = dark
+        super.init(frame: CGRect(x: 0, y: 0, width: 680, height: 320))
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override func draw(_ dirtyRect: NSRect) {
+        (dark ? NSColor(srgbRed: 18/255, green: 19/255, blue: 24/255, alpha: 1)
+              : NSColor(srgbRed: 244/255, green: 245/255, blue: 248/255, alpha: 1)).setFill()
+        bounds.fill()
+
+        let cardFill = dark ? NSColor(white: 0.16, alpha: 1) : NSColor.white
+        let controlA = CGRect(x: 56, y: 58, width: 170, height: 42)
+        let controlB = CGRect(x: 340, y: 64, width: 240, height: 34)
+        let controlC = CGRect(x: 84, y: 188, width: 184, height: 44)
+        let controlD = CGRect(x: 376, y: 188, width: 172, height: 44)
+        for rect in [controlA, controlB, controlC, controlD] {
+            cardFill.setFill()
+            NSBezierPath(roundedRect: rect, xRadius: 8, yRadius: 8).fill()
+        }
+
+        let agents: [(Int, String, CGRect, CGPoint, CGPoint, Bool)] = [
+            (0, "Coder", controlA.insetBy(dx: -2, dy: -2), CGPoint(x: 42, y: 24), CGPoint(x: 138, y: 78), false),
+            (1, "Designer", controlB.insetBy(dx: -4, dy: -4), CGPoint(x: 300, y: 40), CGPoint(x: 468, y: 81), false),
+            (2, "Reviewer", controlC.insetBy(dx: -2, dy: -2), CGPoint(x: 54, y: 148), CGPoint(x: 172, y: 210), false),
+            (3, "QA", controlD.insetBy(dx: -2, dy: -2), CGPoint(x: 340, y: 152), CGPoint(x: 454, y: 210), true),
+        ]
+        for (slot, name, selRect, from, to, waiting) in agents {
+            let entry = AgentSlotPalette.entry(for: slot)
+            PresenceArtwork.drawSelectionBox(rect: selRect, color: entry.rgb.nsColor, alpha: 1.0)
+            let motion = CursorMotion(start: from, end: to, began: 0, duration: CursorMotion.defaultGlideDuration)
+            let tip = motion.point(at: 0.19)
+            let trail = motion.cometTrail(at: 0.19)
+            PresenceArtwork.cursor(
+                at: tip,
+                press: slot == 0 ? 0.65 : 0,
+                color: entry.rgb.nsColor,
+                rgb: entry.rgb,
+                ripple: slot == 0 ? 0.42 : nil,
+                trail: trail,
+                tag: name,
+                flipTagLeft: false,
+                waitingTurn: waiting,
+                pulsePhase: 0.25
+            )
+        }
     }
 }

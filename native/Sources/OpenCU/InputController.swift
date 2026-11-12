@@ -27,9 +27,58 @@ final class InputController {
         }
     }
 
-    /// Computes privacy-safe companion geometry for an upcoming action without reading any user text, key or value.
-    func previewCompanionAction(method: String, args: Arguments, snapshot: WindowSnapshot) -> CompanionAction? {
-        guard let kind = CompanionActionKind(method: method) else { return nil }
+    struct ActionVisualPreview {
+        let companion: CompanionAction?
+        let cursorPoint: CGPoint?
+        let selectionRect: CGRect?
+    }
+
+    private func usableElementRect(_ element: AXUIElement) -> CGRect? {
+        guard let bounds = axRect(element), !bounds.isEmpty, !bounds.isNull, !bounds.isInfinite,
+              bounds.minX.isFinite, bounds.minY.isFinite, bounds.width.isFinite, bounds.height.isFinite else {
+            return nil
+        }
+        return bounds.insetBy(dx: -2, dy: -2)
+    }
+
+    /// Resolves a non-mutating hover target (by `element_index`, screenshot pixel coordinates, or window-local points).
+    func resolveHoverTarget(args: Arguments, snapshot: WindowSnapshot) throws -> (point: CGPoint, selectionRect: CGRect?) {
+        try requireAccessibility()
+        try Task.checkCancellation()
+        try validate(snapshot)
+        if args["element_index"] != nil {
+            let element = try indexedElement(args, snapshot)
+            let location = try elementPoint(element)
+            return (location, usableElementRect(element))
+        }
+        let rawX = try finiteNumber(args, "x")
+        let rawY = try finiteNumber(args, "y")
+        let location: CGPoint
+        if let width = snapshot.screenshotWidth, let height = snapshot.screenshotHeight, width > 0, height > 0 {
+            location = try point(args, snapshot)
+        } else if !snapshot.bounds.isEmpty {
+            let candidateLocal = CGPoint(x: snapshot.bounds.minX + rawX, y: snapshot.bounds.minY + rawY)
+            let candidateScreen = CGPoint(x: rawX, y: rawY)
+            if rawX >= 0, rawY >= 0, rawX <= snapshot.bounds.width, rawY <= snapshot.bounds.height {
+                location = candidateLocal
+            } else if snapshot.bounds.contains(candidateScreen) {
+                location = candidateScreen
+            } else {
+                throw OpenCUError("INVALID_COORDINATE", "Hover coordinates must lie inside the observed window bounds")
+            }
+        } else {
+            throw OpenCUError("NO_ACCESSIBLE_WINDOW", "Hover coordinates require an observed window")
+        }
+        var customRect: CGRect?
+        if let w = try? finiteNumber(args, "width"), let h = try? finiteNumber(args, "height"), w > 0, h > 0 {
+            customRect = CGRect(x: location.x - w / 2, y: location.y - h / 2, width: w, height: h)
+        }
+        return (location, customRect)
+    }
+
+    /// Computes privacy-safe companion geometry, target cursor destination, and optional element/drag wireframe box
+    /// BEFORE acquiring `pid-<pid>.lock`, without reading any user text, key or value.
+    func previewActionVisuals(method: String, args: Arguments, snapshot: WindowSnapshot) -> ActionVisualPreview {
         func previewScreenPoint(xKey: String, yKey: String) -> CGPoint? {
             guard let width = snapshot.screenshotWidth, let height = snapshot.screenshotHeight, width > 0, height > 0,
                   let px = try? finiteNumber(args, xKey), let py = try? finiteNumber(args, yKey),
@@ -40,44 +89,69 @@ final class InputController {
                                             pixels: CGSize(width: width, height: height),
                                             bounds: snapshot.bounds)
         }
-        func previewElementPoint() -> CGPoint? {
+        func previewElementInfo() -> (point: CGPoint?, rect: CGRect?) {
             guard let rawIndex = try? finiteNumber(args, "element_index"),
                   rawIndex.rounded(.towardZero) == rawIndex, rawIndex >= 0, rawIndex < Double(Int.max),
                   let element = snapshot.elements[Int(rawIndex)] else {
-                return nil
+                return (nil, nil)
             }
-            return try? elementPoint(element)
+            return (try? elementPoint(element), usableElementRect(element))
+        }
+        guard let kind = CompanionActionKind(method: method) else {
+            return ActionVisualPreview(companion: nil, cursorPoint: nil, selectionRect: nil)
         }
         switch kind {
         case .drag:
             let start = previewScreenPoint(xKey: "from_x", yKey: "from_y")
             let end = previewScreenPoint(xKey: "to_x", yKey: "to_y")
-            return CompanionAction(
+            let dragBox: CGRect?
+            if let start, let end {
+                dragBox = CGRect(
+                    x: min(start.x, end.x),
+                    y: min(start.y, end.y),
+                    width: max(12, abs(end.x - start.x)),
+                    height: max(12, abs(end.y - start.y))
+                ).insetBy(dx: -6, dy: -6)
+            } else {
+                dragBox = nil
+            }
+            let action = CompanionAction(
                 kind: .drag,
                 point: CompanionPoint(cgPoint: start),
                 from: CompanionPoint(cgPoint: start),
                 to: CompanionPoint(cgPoint: end),
                 progress: 0.0
             )
+            return ActionVisualPreview(companion: action, cursorPoint: start, selectionRect: dragBox)
         case .click, .scroll:
-            let pt = previewElementPoint() ?? previewScreenPoint(xKey: "x", yKey: "y")
-            return CompanionAction(kind: kind, point: CompanionPoint(cgPoint: pt))
+            let info = previewElementInfo()
+            let pt = info.point ?? previewScreenPoint(xKey: "x", yKey: "y")
+            let action = CompanionAction(kind: kind, point: CompanionPoint(cgPoint: pt))
+            return ActionVisualPreview(companion: action, cursorPoint: pt, selectionRect: info.rect)
         case .setValue, .selectText, .performSecondaryAction:
-            return CompanionAction(kind: kind, point: CompanionPoint(cgPoint: previewElementPoint()))
+            let info = previewElementInfo()
+            let action = CompanionAction(kind: kind, point: CompanionPoint(cgPoint: info.point))
+            return ActionVisualPreview(companion: action, cursorPoint: info.point, selectionRect: info.rect)
         case .typeText, .paste, .pressKey:
-            let focusedPoint: CGPoint? = {
-                let appElement = AXUIElementCreateApplication(snapshot.app.pid)
-                guard let focused = axElement(appElement, kAXFocusedUIElementAttribute),
-                      let pt = try? elementPoint(focused),
-                      snapshot.bounds.isEmpty || snapshot.bounds.insetBy(dx: -8, dy: -8).contains(pt) else {
-                    return nil
-                }
-                return pt
-            }()
-            return CompanionAction(kind: kind, point: CompanionPoint(cgPoint: focusedPoint))
+            let appElement = AXUIElementCreateApplication(snapshot.app.pid)
+            var focusedPoint: CGPoint?
+            var focusedRect: CGRect?
+            if let focused = axElement(appElement, kAXFocusedUIElementAttribute),
+               let pt = try? elementPoint(focused),
+               snapshot.bounds.isEmpty || snapshot.bounds.insetBy(dx: -8, dy: -8).contains(pt) {
+                focusedPoint = pt
+                focusedRect = usableElementRect(focused)
+            }
+            let action = CompanionAction(kind: kind, point: CompanionPoint(cgPoint: focusedPoint))
+            return ActionVisualPreview(companion: action, cursorPoint: focusedPoint, selectionRect: focusedRect)
         case .activateApp:
-            return CompanionAction(kind: .activateApp)
+            return ActionVisualPreview(companion: CompanionAction(kind: .activateApp), cursorPoint: nil, selectionRect: nil)
         }
+    }
+
+    /// Computes privacy-safe companion geometry for an upcoming action without reading any user text, key or value.
+    func previewCompanionAction(method: String, args: Arguments, snapshot: WindowSnapshot) -> CompanionAction? {
+        previewActionVisuals(method: method, args: args, snapshot: snapshot).companion
     }
     private var mouseEventNumber = 0
     private typealias SetWindowLocation = @convention(c) (CGEvent, CGPoint) -> Void

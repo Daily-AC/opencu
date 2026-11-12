@@ -212,7 +212,7 @@ final class Engine {
             return ["ok": true]
         }
         let actions = ["click", "drag", "press_key", "type_text", "paste", "scroll", "set_value", "select_text", "perform_secondary_action"]
-        guard actions.contains(method) || ["get_app_state", "activate_app"].contains(method) else {
+        guard actions.contains(method) || ["get_app_state", "activate_app", "hover"].contains(method) else {
             throw OpenCUError("METHOD_NOT_FOUND", "Unknown OpenCU operation: \(method)")
         }
         guard presence.state.connected else { throw OpenCUError("ENGINE_DISCONNECTED", "The client disconnected. No input was sent.") }
@@ -227,61 +227,87 @@ final class Engine {
         let priorWindow: CompanionWindow? = (snapshot?.app.pid == app.pid)
             ? snapshot.flatMap { CompanionWindow(id: $0.windowID, bounds: $0.bounds) }
             : nil
-        var wasContended = false
-        let pidLease = try await AdvisoryFileLock.acquire(
-            path: hub.pidLockPath(app.pid),
-            timeout: 10.0,
-            pollInterval: 0.025,
-            errorCode: "TARGET_BUSY",
-            errorMessage: "Another OpenCU agent is still operating \(app.name) after 10 seconds. No input was sent.",
-            checkAllowed: { [weak self] in
-                guard let self else { throw CancellationError() }
-                try self.requireAllowed(method, screenshot: args["includeScreenshot"] as? Bool ?? false)
-                if self.ownsDesktop { try self.desktop.requireContinuation() }
-            },
-            onContended: { [weak self] in
-                guard let self else { return }
-                wasContended = true
-                self.presence.setWaitingTurn(true)
-                self.broadcaster.waitingTurn(
-                    identity: self.hub.identity,
-                    app: companionApp,
-                    window: priorWindow,
-                    kind: CompanionActionKind(method: method)
-                )
-            }
-        )
-        defer {
-            presence.setWaitingTurn(false)
-            pidLease.release()
+
+        func acquireTargetLease(window: CompanionWindow?) async throws -> (lease: AdvisoryFileLock.Lease, wasContended: Bool) {
+            var contended = false
+            let lease = try await AdvisoryFileLock.acquire(
+                path: hub.pidLockPath(app.pid),
+                timeout: 10.0,
+                pollInterval: 0.025,
+                errorCode: "TARGET_BUSY",
+                errorMessage: "Another OpenCU agent is still operating \(app.name) after 10 seconds. No input was sent.",
+                checkAllowed: { [weak self] in
+                    guard let self else { throw CancellationError() }
+                    try self.requireAllowed(method, screenshot: args["includeScreenshot"] as? Bool ?? false)
+                    if self.ownsDesktop { try self.desktop.requireContinuation() }
+                },
+                onContended: { [weak self] in
+                    guard let self else { return }
+                    contended = true
+                    self.presence.setWaitingTurn(true)
+                    self.broadcaster.waitingTurn(
+                        identity: self.hub.identity,
+                        app: companionApp,
+                        window: window,
+                        kind: CompanionActionKind(method: method)
+                    )
+                }
+            )
+            return (lease, contended)
         }
-        if wasContended {
-            presence.setWaitingTurn(false)
-        }
-        input.noteTurnAcquired(contended: wasContended)
+
         // Use a stable identity after resolution, so aliases do not carry a
         // cursor across applications. Every observed window is checked as well.
         presence.called(target: String(app.pid), name: app.name)
-        input.releaseFocus(unlessTarget: app.pid)
-        if method == "activate_app" {
-            if let current = snapshot, current.app.pid == app.pid { presence.badge(method: method, args: args, snapshot: current) }
-            broadcaster.actionStart(identity: hub.identity, app: companionApp, window: priorWindow, action: CompanionAction(kind: .activateApp))
-            input.releaseFocus()
-            focusGuard.cancel()
-            guard app.application.activate(options: []) else {
-                throw OpenCUError("ACTIVATION_FAILED", "The application could not be activated. No input was sent.")
+
+        if method == "hover" {
+            if ownsDesktop { try desktop.requireInput(app, snapshot: snapshot) }
+            defer { if ownsDesktop { desktop.endInput() } }
+            guard let current = snapshot, current.app.pid == app.pid, current.app.id == app.id else {
+                throw OpenCUError("OBSERVATION_REQUIRED", "Read this application's state before hovering. No pointer movement was shown.")
             }
-            for _ in 0..<25 {
-                if NSWorkspace.shared.frontmostApplication?.processIdentifier == app.pid { break }
-                try await Task.sleep(nanoseconds: 100_000_000)
+            let (hoverPoint, hoverRect) = try input.resolveHoverTarget(args: args, snapshot: current)
+            presence.badge(method: "hover", args: args, snapshot: current)
+            let hoverDistance = presence.glideTo(hoverPoint, selectionRect: hoverRect, snapshot: current)
+            broadcaster.pointerMove(identity: hub.identity, snapshot: current, point: hoverPoint, kind: .click)
+            if hoverDistance > 8 {
+                let flight = min(0.26, max(0.10, Double(hoverDistance) / 900.0))
+                try await Task.sleep(nanoseconds: UInt64(flight * 1_000_000_000))
+                try requireAllowed(method)
             }
-            guard NSWorkspace.shared.frontmostApplication?.processIdentifier == app.pid else {
-                throw OpenCUError("ACTIVATION_FAILED", "The application did not become frontmost. No input was sent.")
-            }
-            // Stage Manager animates the rendered window after focus changes.
-            try await Task.sleep(nanoseconds: 250_000_000)
+            return ["ok": true, "app": app.json, "point": ["x": hoverPoint.x, "y": hoverPoint.y]]
         }
+
+        // Read-only `get_app_state` NEVER acquires `pid-<pid>.lock`, allowing N agents
+        // to observe the same window and place coexisting cursors completely in parallel.
         if method == "get_app_state" || method == "activate_app" {
+            var activationLease: AdvisoryFileLock.Lease?
+            defer {
+                presence.setWaitingTurn(false)
+                activationLease?.release()
+            }
+            if method == "activate_app" {
+                let acquired = try await acquireTargetLease(window: priorWindow)
+                activationLease = acquired.lease
+                if acquired.wasContended { presence.setWaitingTurn(false) }
+                input.noteTurnAcquired(contended: acquired.wasContended)
+                if let current = snapshot, current.app.pid == app.pid { presence.badge(method: method, args: args, snapshot: current) }
+                broadcaster.actionStart(identity: hub.identity, app: companionApp, window: priorWindow, action: CompanionAction(kind: .activateApp))
+                input.releaseFocus()
+                focusGuard.cancel()
+                guard app.application.activate(options: []) else {
+                    throw OpenCUError("ACTIVATION_FAILED", "The application could not be activated. No input was sent.")
+                }
+                for _ in 0..<25 {
+                    if NSWorkspace.shared.frontmostApplication?.processIdentifier == app.pid { break }
+                    try await Task.sleep(nanoseconds: 100_000_000)
+                }
+                guard NSWorkspace.shared.frontmostApplication?.processIdentifier == app.pid else {
+                    throw OpenCUError("ACTIVATION_FAILED", "The application did not become frontmost. No input was sent.")
+                }
+                // Stage Manager animates the rendered window after focus changes.
+                try await Task.sleep(nanoseconds: 250_000_000)
+            }
             let scope: ScopeSelection<MacScopeRoot>.Selection?
             if args["scope"] != nil {
                 let index = try finiteNumber(args, "scope")
@@ -335,6 +361,7 @@ final class Engine {
             snapshot = admitted ? state.snapshot : nil
             return result
         }
+
         if ownsDesktop { try desktop.requireInput(app, snapshot: snapshot) }
         defer { if ownsDesktop { desktop.endInput() } }
         guard let current = snapshot, current.app.pid == app.pid, current.app.id == app.id else {
@@ -345,13 +372,37 @@ final class Engine {
                                   windowID: current.windowID, elements: current.elements, elementPaths: current.elementPaths,
                                   elementTraits: current.elementTraits,
                                   screenshotWidth: nil, screenshotHeight: nil, windowIsOpaque: current.windowIsOpaque)
+
+        // Launch cursor flight, wireframe target highlight, and companion `action_start`
+        // BEFORE acquiring `pid-<pid>.lock` so coexisting agents fly simultaneously!
         presence.badge(method: method, args: args, snapshot: current)
         let targetWin = CompanionWindow(id: current.windowID, bounds: current.bounds)
-        let startAction = input.previewCompanionAction(method: method, args: args, snapshot: current)
+        let visuals = input.previewActionVisuals(method: method, args: args, snapshot: current)
+        let startAction = visuals.companion
+        let glideDistance = presence.glideTo(visuals.cursorPoint, selectionRect: visuals.selectionRect, snapshot: current)
         lastDeliveredPoint = nil
         if let startAction {
             broadcaster.actionStart(identity: hub.identity, app: companionApp, window: targetWin, action: startAction)
         }
+        if glideDistance > 12 {
+            let preLockFlight = min(0.22, max(0.12, Double(glideDistance) / 1100.0))
+            try await Task.sleep(nanoseconds: UInt64(preLockFlight * 1_000_000_000))
+            try requireAllowed(method)
+            if ownsDesktop { try desktop.requireContinuation() }
+        }
+
+        // Hold `pid-<pid>.lock` ONLY around the atomic input delivery!
+        let acquired = try await acquireTargetLease(window: targetWin)
+        let pidLease = acquired.lease
+        defer {
+            presence.setWaitingTurn(false)
+            pidLease.release()
+        }
+        if acquired.wasContended {
+            presence.setWaitingTurn(false)
+        }
+        input.noteTurnAcquired(contended: acquired.wasContended)
+        input.releaseFocus(unlessTarget: app.pid)
         focusGuard.protect(target: app.pid)
         let effect = try await input.perform(method: method, args: args, snapshot: current)
         if let startAction {

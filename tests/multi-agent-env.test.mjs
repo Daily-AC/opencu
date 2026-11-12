@@ -15,6 +15,7 @@ test('resolveAgentEnv applies hub/socket defaults, expands tilde, and sanitizes 
     'OPENCU_AGENT_COLOR',
     'OPENCU_HUB_DIR',
     'OPENCU_EVENT_SOCK',
+    'OPENCU_CAPTURE_OVERLAY',
   ]);
 
   const defaults = resolveAgentEnv({ HOME: '/tmp/opencu-home', PATH: '/usr/bin' });
@@ -23,6 +24,7 @@ test('resolveAgentEnv applies hub/socket defaults, expands tilde, and sanitizes 
   assert.equal(Object.hasOwn(defaults, 'OPENCU_AGENT_ID'), false);
   assert.equal(Object.hasOwn(defaults, 'OPENCU_AGENT_NAME'), false);
   assert.equal(Object.hasOwn(defaults, 'OPENCU_AGENT_COLOR'), false);
+  assert.equal(Object.hasOwn(defaults, 'OPENCU_CAPTURE_OVERLAY'), false);
 
   const custom = resolveAgentEnv({
     HOME: '/tmp/opencu-home',
@@ -31,12 +33,14 @@ test('resolveAgentEnv applies hub/socket defaults, expands tilde, and sanitizes 
     OPENCU_AGENT_COLOR: ' #38bdf8 ',
     OPENCU_HUB_DIR: '~/my-hub',
     OPENCU_EVENT_SOCK: '~/ibuki/custom.sock',
+    OPENCU_CAPTURE_OVERLAY: ' true ',
   });
   assert.equal(custom.OPENCU_AGENT_ID, 'agent-alpha');
   assert.equal([...custom.OPENCU_AGENT_NAME].length <= 24, true);
   assert.equal(custom.OPENCU_AGENT_COLOR, '#38BDF8');
   assert.equal(custom.OPENCU_HUB_DIR, path.join('/tmp/opencu-home', 'my-hub'));
   assert.equal(custom.OPENCU_EVENT_SOCK, path.join('/tmp/opencu-home', 'ibuki', 'custom.sock'));
+  assert.equal(custom.OPENCU_CAPTURE_OVERLAY, '1');
 
   assert.equal(normalizeAgentColor('#f69'), '#FF6699');
   assert.equal(normalizeAgentColor('invalid-color'), undefined);
@@ -45,12 +49,14 @@ test('resolveAgentEnv applies hub/socket defaults, expands tilde, and sanitizes 
     HOME: '/tmp/opencu-home',
     OPENCU_AGENT_NAME: '   ',
     OPENCU_AGENT_COLOR: 'rgb(255,0,0)',
+    OPENCU_CAPTURE_OVERLAY: '0',
   });
   assert.equal(Object.hasOwn(fallbackInvalid, 'OPENCU_AGENT_NAME'), false);
   assert.equal(Object.hasOwn(fallbackInvalid, 'OPENCU_AGENT_COLOR'), false);
+  assert.equal(Object.hasOwn(fallbackInvalid, 'OPENCU_CAPTURE_OVERLAY'), false);
 });
 
-test('OpenCURuntime forwards multi-agent identity and companion socket env to the spawned engine', async t => {
+test('OpenCURuntime forwards multi-agent identity, capture overlay, and companion socket env to the spawned engine', async t => {
   const dir = await mkdtemp(path.join(tmpdir(), 'opencu-multi-env-'));
   t.after(async () => { await rm(dir, { recursive: true, force: true }); });
 
@@ -66,6 +72,7 @@ writeFileSync(${JSON.stringify(envDump)}, JSON.stringify({
   OPENCU_AGENT_COLOR: process.env.OPENCU_AGENT_COLOR ?? null,
   OPENCU_HUB_DIR: process.env.OPENCU_HUB_DIR ?? null,
   OPENCU_EVENT_SOCK: process.env.OPENCU_EVENT_SOCK ?? null,
+  OPENCU_CAPTURE_OVERLAY: process.env.OPENCU_CAPTURE_OVERLAY ?? null,
 }));
 const rl = createInterface({ input: process.stdin });
 rl.on('line', line => {
@@ -84,6 +91,7 @@ rl.on('line', line => {
       OPENCU_AGENT_ID: 'swarm-worker-2',
       OPENCU_AGENT_NAME: 'Reviewer',
       OPENCU_AGENT_COLOR: '#a78bfa',
+      OPENCU_CAPTURE_OVERLAY: '1',
     },
   });
   t.after(() => runtime.close());
@@ -98,12 +106,18 @@ rl.on('line', line => {
     OPENCU_AGENT_COLOR: '#A78BFA',
     OPENCU_HUB_DIR: path.join(dir, '.opencu', 'hub'),
     OPENCU_EVENT_SOCK: path.join(dir, '.ibuki-pet', 'opencu.sock'),
+    OPENCU_CAPTURE_OVERLAY: '1',
   });
 });
 
-test('WorkerLauncher forwards agent env vars to launchd worker and CompanionBroadcaster stays secret-free', async () => {
+test('WorkerLauncher guards launchd bootstrap with inter-process lock and CompanionBroadcaster stays secret-free', async () => {
   const launcher = await readFile(path.join(root, 'native/Sources/OpenCU/WorkerLauncher.swift'), 'utf8');
   assert.match(launcher, /AgentConfig\.forwardedEnvironmentKeys/);
+  assert.match(launcher, /AgentConfig\.launchdLockPath/);
+
+  const presence = await readFile(path.join(root, 'native/Sources/OpenCU/PresenceController.swift'), 'utf8');
+  assert.match(presence, /NSWindow\.Level = \.statusBar/);
+  assert.match(presence, /AgentConfig\.captureOverlayEnabled\(\) \? \.readOnly : \.none/);
 
   const broadcaster = await readFile(path.join(root, 'native/Sources/OpenCU/CompanionBroadcaster.swift'), 'utf8');
   assert.match(broadcaster, /SOCK_DGRAM/);

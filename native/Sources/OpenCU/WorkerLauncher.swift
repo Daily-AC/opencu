@@ -13,7 +13,6 @@ enum WorkerLauncher {
         WorkerTransport.installSignals()
         var job: WorkerJob?
         do {
-            WorkerJob.removeStale()
             guard let executable = Bundle.main.executablePath else { throw WorkerTransport.Failure("cannot locate the OpenCU executable") }
             let listener = try WorkerTransport.Listener()
             var random = [UInt8](repeating: 0, count: 32)
@@ -23,8 +22,13 @@ enum WorkerLauncher {
             for key in ["HOME", "TMPDIR", "PATH", "LANG"] + AgentConfig.forwardedEnvironmentKeys {
                 if let value = ProcessInfo.processInfo.environment[key], !value.isEmpty { environment[key] = value }
             }
-            job = try WorkerJob.start(executable: executable, arguments: ["worker", mode, listener.path],
-                                      environment: environment, directory: listener.directory)
+            do {
+                let launchdLease = AdvisoryFileLock.acquireSync(path: AgentConfig.launchdLockPath, timeout: 15.0)
+                defer { launchdLease?.release() }
+                WorkerJob.removeStale()
+                job = try WorkerJob.start(executable: executable, arguments: ["worker", mode, listener.path],
+                                          environment: environment, directory: listener.directory)
+            }
             let channels = try listener.acceptChannels(token: token, workerPID: job!.pid, doctor: mode == "doctor")
             defer { for fd in channels.values { close(fd) } }
             let status = try WorkerTransport.relay(stdio: channels["stdio"]!, stderrSocket: channels["stderr"])
@@ -70,23 +74,33 @@ struct WorkerJob {
     let pid: pid_t
 
     static func start(executable: String, arguments: [String], environment: [String: String], directory: String) throws -> WorkerJob {
-        var random = [UInt8](repeating: 0, count: 4)
-        random.withUnsafeMutableBytes { arc4random_buf($0.baseAddress!, $0.count) }
-        let label = prefix + "\(getpid())." + random.map { String(format: "%02x", $0) }.joined()
-        let definition: [String: Any] = [
-            "Label": label, "ProgramArguments": [executable] + arguments, "EnvironmentVariables": environment,
-            "ProcessType": "Interactive", "RunAtLoad": true, "KeepAlive": false,
-            "StandardInPath": "/dev/null", "StandardOutPath": "/dev/null", "StandardErrorPath": "/dev/null",
-        ]
-        // The definition holds the token: write it 0600 inside the 0700 socket
-        // directory and delete it as soon as launchd has read it.
         let file = directory + "/worker.plist"
-        let data = try PropertyListSerialization.data(fromPropertyList: definition, format: .xml, options: 0)
-        guard FileManager.default.createFile(atPath: file, contents: data, attributes: [.posixPermissions: 0o600]) else {
-            throw WorkerTransport.Failure("cannot write the worker job definition")
-        }
         defer { unlink(file) }
-        guard launchctl(["bootstrap", domain, file]).status == 0 else { throw WorkerTransport.Failure("launchd refused the worker job") }
+        var bootstrappedLabel: String?
+        for attempt in 0..<3 {
+            var random = [UInt8](repeating: 0, count: 4)
+            random.withUnsafeMutableBytes { arc4random_buf($0.baseAddress!, $0.count) }
+            let label = prefix + "\(getpid())." + random.map { String(format: "%02x", $0) }.joined()
+            let definition: [String: Any] = [
+                "Label": label, "ProgramArguments": [executable] + arguments, "EnvironmentVariables": environment,
+                "ProcessType": "Interactive", "RunAtLoad": true, "KeepAlive": false,
+                "StandardInPath": "/dev/null", "StandardOutPath": "/dev/null", "StandardErrorPath": "/dev/null",
+            ]
+            // The definition holds the token: write it 0600 inside the 0700 socket
+            // directory and delete it as soon as launchd has read it.
+            unlink(file)
+            let data = try PropertyListSerialization.data(fromPropertyList: definition, format: .xml, options: 0)
+            guard FileManager.default.createFile(atPath: file, contents: data, attributes: [.posixPermissions: 0o600]) else {
+                throw WorkerTransport.Failure("cannot write the worker job definition")
+            }
+            if launchctl(["bootstrap", domain, file]).status == 0 {
+                bootstrappedLabel = label
+                break
+            }
+            _ = launchctl(["bootout", "\(domain)/\(label)"])
+            if attempt < 2 { usleep(40_000) }
+        }
+        guard let label = bootstrappedLabel else { throw WorkerTransport.Failure("launchd refused the worker job") }
         let job = WorkerJob(label: label, pid: 0)
         let deadline = WorkerTransport.now + 10
         while WorkerTransport.now < deadline && WorkerTransport.interrupted == 0 {

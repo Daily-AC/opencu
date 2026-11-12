@@ -80,7 +80,19 @@ enum AgentConfig {
         "OPENCU_AGENT_COLOR",
         "OPENCU_HUB_DIR",
         "OPENCU_EVENT_SOCK",
+        "OPENCU_CAPTURE_OVERLAY",
     ]
+
+    static var launchdLockPath: String {
+        "/tmp/opencu-launchd-\(getuid()).lock"
+    }
+
+    static func captureOverlayEnabled(environment: [String: String] = ProcessInfo.processInfo.environment) -> Bool {
+        guard let raw = environment["OPENCU_CAPTURE_OVERLAY"]?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() else {
+            return false
+        }
+        return raw == "1" || raw == "true"
+    }
 
     static func homeDirectory(environment: [String: String] = ProcessInfo.processInfo.environment) -> String {
         if let home = environment["HOME"]?.trimmingCharacters(in: .whitespacesAndNewlines), !home.isEmpty {
@@ -200,6 +212,10 @@ enum AdvisoryFileLock {
     }
 
     static func ensureDirectory(_ path: String) throws {
+        var isDir: ObjCBool = false
+        if FileManager.default.fileExists(atPath: path, isDirectory: &isDir), isDir.boolValue {
+            return
+        }
         try FileManager.default.createDirectory(
             atPath: path,
             withIntermediateDirectories: true,

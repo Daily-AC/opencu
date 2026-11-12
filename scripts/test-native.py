@@ -68,6 +68,7 @@ def main() -> int:
             str(sources / "AgentHub.swift"),
             str(sources / "CompanionBroadcaster.swift"),
             str(sources / "PresenceModel.swift"),
+            str(sources / "PresenceArtwork.swift"),
             str(sources / "BadgeModel.swift"),
             str(sources / "Keyboard.swift"),
             str(sources / "BackgroundFocus.swift"),

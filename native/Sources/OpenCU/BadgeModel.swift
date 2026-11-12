@@ -77,11 +77,17 @@ struct BadgeAction {
 }
 
 struct BadgeLifetime {
+    var holdDuration: TimeInterval = 3
     private(set) var target: String?
     private(set) var lastCall: TimeInterval?
     private(set) var stopped = false
     private(set) var connected = true
     private(set) var waitingTurn = false
+
+    init(holdDuration: TimeInterval = 3) {
+        self.holdDuration = holdDuration
+    }
+
     mutating func call(target: String, now: TimeInterval) {
         guard connected, !stopped else { return }
         self.target = target; lastCall = now
@@ -102,7 +108,7 @@ struct BadgeLifetime {
         if waitingTurn && !stopped { return 1 }
         let elapsed = max(0, now - lastCall)
         if stopped { return elapsed < 3 ? 1 : 0 }
-        return min(1, max(0, 1 - (elapsed - 3) / 0.2))
+        return min(1, max(0, 1 - (elapsed - holdDuration) / 0.2))
     }
 }
 
