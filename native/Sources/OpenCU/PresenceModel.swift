@@ -11,20 +11,26 @@ struct PresenceState {
     private(set) var callInFlight = false
     private(set) var lastCall: TimeInterval?
     private(set) var lastPointer: TimeInterval?
+    private(set) var waitingTurn = false
 
     mutating func call(target: String, now: TimeInterval) {
-        if self.target != target { lastPointer = nil }
+        if self.target != target { lastPointer = nil; waitingTurn = false }
         self.target = target
         lastCall = now
         callInFlight = true
     }
-    mutating func finished(now: TimeInterval) { callInFlight = false; if lastCall != nil { lastCall = now } }
+    mutating func finished(now: TimeInterval) { callInFlight = false; waitingTurn = false; if lastCall != nil { lastCall = now } }
     mutating func pointer(now: TimeInterval) { if connected && !stopped { lastPointer = now } }
-    mutating func hideCursor() { lastPointer = nil }
+    mutating func setWaitingTurn(_ waiting: Bool, now: TimeInterval) {
+        guard connected, !stopped else { waitingTurn = false; return }
+        waitingTurn = waiting
+        if lastPointer != nil { lastPointer = now }
+    }
+    mutating func hideCursor() { lastPointer = nil; waitingTurn = false }
     mutating func stop() { stopped = true; hideCursor() }
     mutating func disconnect() { connected = false; lastCall = nil; hideCursor() }
     func menuVisible(at now: TimeInterval) -> Bool { connected && (callInFlight || lastCall.map { now - $0 < 15 } == true) }
-    func cursorVisible(at now: TimeInterval) -> Bool { connected && !stopped && lastPointer.map { now - $0 < 3 } == true }
+    func cursorVisible(at now: TimeInterval) -> Bool { connected && !stopped && lastPointer.map { waitingTurn || now - $0 < 3 } == true }
     // Creating a display or moving a window onto it rearranges the person's screen.
     // Restore and destroy undo that work and stay allowed after a stop.
     static let screenChangingMethods: Set<String> = ["agent_desktop_start"]
@@ -61,6 +67,11 @@ struct CursorMotion {
         guard let began else { return 0 }
         let t = (now - began) / 0.3
         return (0...1).contains(t) ? sin(t * .pi) : 0
+    }
+    static func rippleProgress(at now: TimeInterval, began: TimeInterval?) -> CGFloat? {
+        guard let began else { return nil }
+        let t = (now - began) / 0.35
+        return (0...1).contains(t) ? CGFloat(t) : nil
     }
 }
 

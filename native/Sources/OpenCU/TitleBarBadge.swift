@@ -7,6 +7,7 @@ final class BadgeView: NSView {
     var text = ""
     var glyphOnly = false
     var stopped = false
+    var accentColor: NSColor = AgentSlotPalette.entry(for: 0).rgb.nsColor
     static let font = NSFont.systemFont(ofSize: 12)
     static func textWidth(_ text: String) -> CGFloat { ceil((text as NSString).size(withAttributes: [.font: font]).width) }
     override func draw(_ dirtyRect: NSRect) {
@@ -23,15 +24,25 @@ final class BadgeView: NSView {
         fill.setFill(); capsule.fill()
         NSGraphicsContext.restoreGraphicsState()
         let hairline = NSBezierPath(roundedRect: rect.insetBy(dx: 0.25, dy: 0.25), xRadius: 10.75, yRadius: 10.75)
-        hairline.lineWidth = 0.5
-        NSColor.white.withAlphaComponent(0.18).setStroke(); hairline.stroke()
-        NSColor.white.setFill()
-        PresenceArtwork.vPath(origin: CGPoint(x: rect.minX + 8, y: rect.midY - 5.5), size: 11).fill()
+        hairline.lineWidth = 0.6
+        let borderStroke = stopped ? NSColor.white.withAlphaComponent(0.18) : accentColor.withAlphaComponent(0.42)
+        borderStroke.setStroke(); hairline.stroke()
+        let glyph = PresenceArtwork.vPath(origin: CGPoint(x: rect.minX + 8, y: rect.midY - 5.5), size: 11)
+        if stopped {
+            NSColor.white.setFill()
+            glyph.fill()
+        } else {
+            glyph.lineWidth = 1.2
+            NSColor.white.withAlphaComponent(0.75).setStroke()
+            glyph.stroke()
+            accentColor.setFill()
+            glyph.fill()
+        }
         if !glyphOnly {
             let paragraph = NSMutableParagraphStyle()
             paragraph.lineBreakMode = .byTruncatingTail
             let attributes: [NSAttributedString.Key: Any] = [.font: Self.font,
-                .foregroundColor: NSColor.white.withAlphaComponent(0.62), .paragraphStyle: paragraph]
+                .foregroundColor: NSColor.white.withAlphaComponent(0.74), .paragraphStyle: paragraph]
             let lineHeight = (text as NSString).size(withAttributes: attributes).height
             (text as NSString).draw(in: CGRect(x: rect.minX + 25, y: rect.midY - lineHeight/2,
                                                width: max(0, rect.width - 35), height: lineHeight), withAttributes: attributes)

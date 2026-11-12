@@ -20,8 +20,8 @@ enum WorkerLauncher {
             random.withUnsafeMutableBytes { arc4random_buf($0.baseAddress!, $0.count) }
             let token = random.map { String(format: "%02x", $0) }.joined()
             var environment = ["OPENCU_WORKER_TOKEN": token]
-            for key in ["HOME", "TMPDIR", "PATH", "LANG"] {
-                if let value = ProcessInfo.processInfo.environment[key] { environment[key] = value }
+            for key in ["HOME", "TMPDIR", "PATH", "LANG"] + AgentConfig.forwardedEnvironmentKeys {
+                if let value = ProcessInfo.processInfo.environment[key], !value.isEmpty { environment[key] = value }
             }
             job = try WorkerJob.start(executable: executable, arguments: ["worker", mode, listener.path],
                                       environment: environment, directory: listener.directory)
@@ -118,10 +118,7 @@ struct WorkerJob {
 
     /// A killed relay may linger as a zombie until its client reaps it.
     static func alive(_ pid: pid_t) -> Bool {
-        var info = proc_bsdinfo()
-        let size = Int32(MemoryLayout<proc_bsdinfo>.size)
-        guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else { return false }
-        return info.pbi_status != UInt32(SZOMB)
+        ProcessLiveness.alive(pid)
     }
 
     static func launchctl(_ arguments: [String]) -> (status: Int32, output: String) {

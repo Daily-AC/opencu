@@ -11,6 +11,7 @@ private final class CursorWindow: NSPanel {
 @MainActor
 final class PresenceController: NSObject, NSMenuDelegate, NSApplicationDelegate {
     private(set) var state = PresenceState()
+    let hub: AgentHub
     let setup = PermissionSetup()
     var desktopVisible = false {
         didSet {
@@ -40,10 +41,25 @@ final class PresenceController: NSObject, NSMenuDelegate, NSApplicationDelegate 
     private var trackingMenu = false
     private var now: TimeInterval { ProcessInfo.processInfo.systemUptime }
 
-    override init() {
+    init(hub: AgentHub = AgentHub()) {
+        self.hub = hub
         super.init()
         NSApp.delegate = self
         setup.willShow = { [weak self] in self?.onPersonInteraction?() }
+        syncAgentIdentity()
+    }
+    func syncAgentIdentity() {
+        let color = hub.identity.rgb.nsColor
+        cursor.agentColor = color
+        badgeView.accentColor = color
+    }
+    func setWaitingTurn(_ waiting: Bool) {
+        let time = now
+        state.setWaitingTurn(waiting, now: time)
+        badgeLifetime.setWaitingTurn(waiting, now: time)
+        if state.cursorVisible(at: time) || badgeLifetime.opacity(at: time) > 0 {
+            startTimer(); tick()
+        }
     }
     func beginCall(query: String) {
         if lastQuery != query { hideCursor(); hideBadge() }
@@ -70,6 +86,7 @@ final class PresenceController: NSObject, NSMenuDelegate, NSApplicationDelegate 
         else if targetBounds != snapshot.bounds { hideCursor() }
         targetWindow = snapshot.windowID; targetPID = snapshot.app.pid
         targetBounds = snapshot.bounds
+        hub.updateTarget(windowID: snapshot.windowID, targetPID: snapshot.app.pid)
     }
     static func menu(strings: PresenceStrings, name: String, stopped: Bool, target: AnyObject? = nil,
                      stop: Selector? = nil, permissions: Selector? = nil, showDesktop: Selector? = nil) -> NSMenu {
@@ -132,6 +149,7 @@ final class PresenceController: NSObject, NSMenuDelegate, NSApplicationDelegate 
     func pointer(_ point: CGPoint, snapshot: WindowSnapshot, click: Bool) {
         guard !state.stopped, state.connected, let id = snapshot.windowID else { return }
         observed(snapshot)
+        syncAgentIdentity()
         let time = now
         let previous = state.cursorVisible(at: time) ? motion?.point(at: time) : nil
         motion = CursorMotion(start: previous ?? point, end: point, began: time)
@@ -147,7 +165,9 @@ final class PresenceController: NSObject, NSMenuDelegate, NSApplicationDelegate 
         guard let selected = axSelectedWindow(AXUIElementCreateApplication(snapshot.app.pid)), CFEqual(selected, window) else {
             hideBadge(); return
         }
-        badgeView.text = BadgeAccessibility.action(method: method, args: args, snapshot: snapshot).localized(PresenceStrings().text)
+        syncAgentIdentity()
+        let actionText = BadgeAccessibility.action(method: method, args: args, snapshot: snapshot).localized(PresenceStrings().text)
+        badgeView.text = hub.shouldShowCursorTag(forceRefresh: true) ? "\(hub.identity.agentName) · \(actionText)" : actionText
         badgeView.stopped = false
         badgeTitleHeight = BadgeAccessibility.titleBarHeight(window: window, bounds: snapshot.bounds)
         badgeLifetime.call(target: "\(snapshot.app.pid):\(id)", now: now)
@@ -165,7 +185,10 @@ final class PresenceController: NSObject, NSMenuDelegate, NSApplicationDelegate 
             if badgePanel?.isVisible == true { badgePanel?.orderOut(nil) }
             return
         }
-        let layout = BadgeLayout(window: bounds, titleBarHeight: badgeTitleHeight, textWidth: BadgeView.textWidth(badgeView.text))
+        let placement = hub.peerPlacement(for: id)
+        let layout = BadgeLayout(window: bounds, titleBarHeight: badgeTitleHeight,
+                                 textWidth: BadgeView.textWidth(badgeView.text),
+                                 peerIndex: placement.peerIndex, peerCount: placement.peerCount)
         guard layout.frame.width >= 29 else { hideBadge(); return }
         if badgePanel == nil {
             let panel = CursorWindow(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -181,6 +204,7 @@ final class PresenceController: NSObject, NSMenuDelegate, NSApplicationDelegate 
         badgePanel?.setFrame(CursorMotion.appKitRect(frame, primaryHeight: NSScreen.screens.first?.frame.height ?? 0), display: false)
         badgePanel?.level = NSWindow.Level(rawValue: (record[kCGWindowLayer as String] as? Int) ?? 0)
         badgePanel?.alphaValue = opacity
+        badgeView.accentColor = hub.identity.rgb.nsColor
         badgeView.glyphOnly = layout.glyphOnly
         badgeView.needsDisplay = true
         if NSApp.isHidden { NSApp.unhideWithoutActivation() }
@@ -212,9 +236,10 @@ final class PresenceController: NSObject, NSMenuDelegate, NSApplicationDelegate 
            let raw = record[kCGWindowBounds as String] as? NSDictionary,
            let bounds = CGRect(dictionaryRepresentation: raw as CFDictionary), bounds == targetBounds {
             let point = motion.point(at: time)
+            let tag = hub.shouldShowCursorTag() ? hub.identity.agentName : nil
             // Clip at the target edge. A small window avoids making the entire
             // target look covered to window-occlusion heuristics in other apps.
-            let rect = CGRect(x: point.x - 20, y: point.y - 20, width: 60, height: 60).intersection(bounds)
+            let (rect, flipLeft) = PresenceArtwork.cursorCanvasRect(at: point, tag: tag, within: bounds)
             if !rect.isNull && !rect.isEmpty {
                 if overlay == nil {
                     let panel = CursorWindow(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -228,6 +253,10 @@ final class PresenceController: NSObject, NSMenuDelegate, NSApplicationDelegate 
                 }
                 cursor.hotspot = CGPoint(x: point.x - rect.minX, y: point.y - rect.minY)
                 cursor.press = CursorMotion.press(at: time, began: pressBegan)
+                cursor.ripple = CursorMotion.rippleProgress(at: time, began: pressBegan)
+                cursor.agentColor = hub.identity.rgb.nsColor
+                cursor.tagText = tag
+                cursor.flipTagLeft = flipLeft
                 let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
                 overlay?.setFrame(CursorMotion.appKitRect(rect, primaryHeight: primaryHeight), display: false)
                 // Preserve the target's level and immediate neighbour relationship;

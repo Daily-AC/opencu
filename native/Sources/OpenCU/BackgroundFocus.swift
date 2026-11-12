@@ -36,6 +36,10 @@ final class BackgroundFocus {
         }
     }
 
+    func markNeedsRefresh() {
+        needsRefresh = true
+    }
+
     func refresh() -> Bool {
         if NSWorkspace.shared.frontmostApplication?.processIdentifier == target.pid {
             synthetic = false
@@ -50,8 +54,12 @@ final class BackgroundFocus {
         return true
     }
 
-    func finish() {
+    func finish(preserveIfPeerActive: Bool = false) {
         if let observer { NSWorkspace.shared.notificationCenter.removeObserver(observer); self.observer = nil }
+        if preserveIfPeerActive {
+            synthetic = false
+            return
+        }
         // The user may have chosen this app while the operation was running.
         // Do not deactivate a genuinely frontmost app or reuse an exited PID.
         guard synthetic, !target.application.isTerminated,

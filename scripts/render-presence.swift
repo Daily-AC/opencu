@@ -62,6 +62,19 @@ struct PresenceRenderer {
                         view.press = press; view.appearance = NSAppearance(named: appearance)
                         try render(view, to: output.appendingPathComponent("cursor-\(theme)-\(name).png"))
                     }
+                    for entry in AgentSlotPalette.entries.prefix(3) {
+                        let view = AgentCursorView(frame: NSRect(x: 0, y: 0, width: 128, height: 64))
+                        view.hotspot = CGPoint(x: 22, y: 22)
+                        view.press = entry.slot == 1 ? 0.85 : 0
+                        view.ripple = entry.slot == 1 ? 0.45 : nil
+                        view.agentColor = entry.rgb.nsColor
+                        view.tagText = entry.defaultName
+                        view.appearance = NSAppearance(named: appearance)
+                        try render(view, to: output.appendingPathComponent("cursor-\(theme)-slot-\(entry.slot).png"))
+                    }
+                    let multiBadge = MultiAgentBadgeSample(strings: strings, dark: theme == "dark")
+                    multiBadge.appearance = NSAppearance(named: appearance)
+                    try render(multiBadge, to: output.appendingPathComponent("badge-\(language)-\(theme)-multi-agent.png"))
                 }
             }
         }
@@ -155,6 +168,50 @@ final class BadgeTitleBarSample: NSView {
         addSubview(badge)
         precondition(layout.frame.height == 22 && layout.frame.width <= width * 0.45)
         precondition(abs(sampleBounds.maxX - layout.frame.maxX - 10) < 0.01)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    override func draw(_ dirtyRect: NSRect) {
+        (dark ? NSColor(white: 0.10, alpha: 1) : NSColor(white: 0.90, alpha: 1)).setFill(); bounds.fill()
+        (dark ? NSColor(white: 0.18, alpha: 1) : NSColor.white).setFill()
+        NSBezierPath(roundedRect: sampleBounds, xRadius: 10, yRadius: 10).fill()
+        (dark ? NSColor(white: 0.22, alpha: 1) : NSColor(white: 0.97, alpha: 1)).setFill()
+        CGRect(x: sampleBounds.minX, y: sampleBounds.minY, width: sampleBounds.width, height: titleHeight).fill()
+        for (index, color) in [NSColor.systemRed, .systemYellow, .systemGreen].enumerated() {
+            color.setFill()
+            NSBezierPath(ovalIn: CGRect(x: sampleBounds.minX + 12 + CGFloat(index)*20,
+                                       y: sampleBounds.minY + titleHeight/2 - 5, width: 10, height: 10)).fill()
+        }
+        ("Fixture.txt" as NSString).draw(at: CGPoint(x: sampleBounds.minX + 90, y: sampleBounds.minY + titleHeight/2 - 8),
+            withAttributes: [.font: NSFont.systemFont(ofSize: 12), .foregroundColor: dark ? NSColor.white : NSColor.darkGray])
+    }
+}
+
+@MainActor
+final class MultiAgentBadgeSample: NSView {
+    override var isFlipped: Bool { true }
+    let dark: Bool
+    let sampleBounds = CGRect(x: 16, y: 20, width: 760, height: 96)
+    let titleHeight: CGFloat = 28
+    init(strings: PresenceStrings, dark: Bool) {
+        self.dark = dark
+        super.init(frame: CGRect(x: 0, y: 0, width: 792, height: 136))
+        let peers: [(Int, String, BadgeAction)] = [
+            (0, "Coder", BadgeAction(method: "click", label: "Save")),
+            (1, "Reviewer", BadgeAction(method: "get_app_state")),
+        ]
+        var placedFrames: [CGRect] = []
+        for (rank, (slot, name, action)) in peers.enumerated() {
+            let text = "\(name) · \(action.localized(strings.text))"
+            let layout = BadgeLayout(window: sampleBounds, titleBarHeight: titleHeight,
+                                     textWidth: BadgeView.textWidth(text), peerIndex: rank, peerCount: peers.count)
+            for other in placedFrames { precondition(!other.intersects(layout.frame), "Multi-agent badges must not overlap") }
+            placedFrames.append(layout.frame)
+            let badge = BadgeView(frame: layout.frame.insetBy(dx: -BadgeLayout.shadowInset, dy: -BadgeLayout.shadowInset))
+            badge.text = text
+            badge.accentColor = AgentSlotPalette.entry(for: slot).rgb.nsColor
+            badge.glyphOnly = layout.glyphOnly
+            addSubview(badge)
+        }
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     override func draw(_ dirtyRect: NSRect) {

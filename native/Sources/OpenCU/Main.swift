@@ -18,13 +18,31 @@ final class Engine {
     private var activeInterruption: OpenCUError?
     private var desktopCleanup: Task<Void, Never>?
 
-    private let presence = PresenceController()
+    private let hub = AgentHub()
+    private let broadcaster = CompanionBroadcaster()
+    private let presence: PresenceController
     private var activeTask: Task<Any, Error>?
     private var activeSensitive = false
+    private var lastDeliveredPoint: CGPoint?
 
     init() {
+        presence = PresenceController(hub: hub)
+        input.hub = hub
         input.pointerDelivered = { [weak self] point, snapshot, click in
+            self?.lastDeliveredPoint = point
             self?.presence.pointer(point, snapshot: snapshot, click: click)
+        }
+        input.dragStepDelivered = { [weak self] point, start, end, progress, snapshot in
+            guard let self else { return }
+            self.broadcaster.pointerMove(
+                identity: self.hub.identity,
+                snapshot: snapshot,
+                point: point,
+                from: start,
+                to: end,
+                progress: progress,
+                kind: .drag
+            )
         }
         input.requireInputAllowed = { [weak self] in
             guard let self else { throw CancellationError() }
@@ -50,6 +68,7 @@ final class Engine {
         presence.onPersonInteraction = { [weak self] in self?.focusGuard.cancel() }
         presence.onStop = { [weak self] in
             guard let self else { return }
+            self.broadcaster.stopped(identity: self.hub.identity)
             if self.activeSensitive { self.activeTask?.cancel() }
             self.input.releaseFocus()
             if self.desktopOwner != nil {
@@ -107,7 +126,14 @@ final class Engine {
         presence.desktopVisible = false
         return result
     }
+    func startSession() {
+        let identity = hub.register()
+        presence.syncAgentIdentity()
+        broadcaster.activate(identity: identity)
+    }
     func disconnected() {
+        broadcaster.disconnect(identity: hub.identity)
+        hub.unregister()
         presence.disconnect()
         if activeSensitive || ownsDesktop { activeTask?.cancel() }
         desktopOwner?.cancelConsent()
@@ -197,12 +223,49 @@ final class Engine {
         guard app.pid != getpid(), app.id != "dev.opencu.engine" else {
             throw OpenCUError("INVALID_TARGET", "OpenCU's own interface is reserved for the person and cannot be targeted.")
         }
+        let companionApp = CompanionApp(targetApp: app)
+        let priorWindow: CompanionWindow? = (snapshot?.app.pid == app.pid)
+            ? snapshot.flatMap { CompanionWindow(id: $0.windowID, bounds: $0.bounds) }
+            : nil
+        var wasContended = false
+        let pidLease = try await AdvisoryFileLock.acquire(
+            path: hub.pidLockPath(app.pid),
+            timeout: 10.0,
+            pollInterval: 0.025,
+            errorCode: "TARGET_BUSY",
+            errorMessage: "Another OpenCU agent is still operating \(app.name) after 10 seconds. No input was sent.",
+            checkAllowed: { [weak self] in
+                guard let self else { throw CancellationError() }
+                try self.requireAllowed(method, screenshot: args["includeScreenshot"] as? Bool ?? false)
+                if self.ownsDesktop { try self.desktop.requireContinuation() }
+            },
+            onContended: { [weak self] in
+                guard let self else { return }
+                wasContended = true
+                self.presence.setWaitingTurn(true)
+                self.broadcaster.waitingTurn(
+                    identity: self.hub.identity,
+                    app: companionApp,
+                    window: priorWindow,
+                    kind: CompanionActionKind(method: method)
+                )
+            }
+        )
+        defer {
+            presence.setWaitingTurn(false)
+            pidLease.release()
+        }
+        if wasContended {
+            presence.setWaitingTurn(false)
+        }
+        input.noteTurnAcquired(contended: wasContended)
         // Use a stable identity after resolution, so aliases do not carry a
         // cursor across applications. Every observed window is checked as well.
         presence.called(target: String(app.pid), name: app.name)
         input.releaseFocus(unlessTarget: app.pid)
         if method == "activate_app" {
             if let current = snapshot, current.app.pid == app.pid { presence.badge(method: method, args: args, snapshot: current) }
+            broadcaster.actionStart(identity: hub.identity, app: companionApp, window: priorWindow, action: CompanionAction(kind: .activateApp))
             input.releaseFocus()
             focusGuard.cancel()
             guard app.application.activate(options: []) else {
@@ -252,6 +315,15 @@ final class Engine {
             let state = try await observer.observe(app, includeScreenshot: admitted && (args["includeScreenshot"] as? Bool ?? false), reduced: ownsDesktop && !admitted, scope: scope)
             if let observedGeneration { try desktop.state.requireGeneration(observedGeneration) }
             presence.observed(state.snapshot)
+            broadcaster.observed(identity: hub.identity, snapshot: state.snapshot)
+            if method == "activate_app" {
+                broadcaster.actionDone(
+                    identity: hub.identity,
+                    app: CompanionApp(targetApp: state.snapshot.app),
+                    window: CompanionWindow(id: state.snapshot.windowID, bounds: state.snapshot.bounds),
+                    action: CompanionAction(kind: .activateApp)
+                )
+            }
             var result = state.json
             if ownsDesktop {
                 if admitted { try desktop.observed(state.snapshot, generation: observedGeneration!) }
@@ -274,8 +346,25 @@ final class Engine {
                                   elementTraits: current.elementTraits,
                                   screenshotWidth: nil, screenshotHeight: nil, windowIsOpaque: current.windowIsOpaque)
         presence.badge(method: method, args: args, snapshot: current)
+        let targetWin = CompanionWindow(id: current.windowID, bounds: current.bounds)
+        let startAction = input.previewCompanionAction(method: method, args: args, snapshot: current)
+        lastDeliveredPoint = nil
+        if let startAction {
+            broadcaster.actionStart(identity: hub.identity, app: companionApp, window: targetWin, action: startAction)
+        }
         focusGuard.protect(target: app.pid)
         let effect = try await input.perform(method: method, args: args, snapshot: current)
+        if let startAction {
+            let doneAction: CompanionAction
+            if startAction.kind == .drag {
+                doneAction = CompanionAction(kind: .drag, point: startAction.to ?? CompanionPoint(cgPoint: lastDeliveredPoint),
+                                             from: startAction.from, to: startAction.to, progress: 1.0)
+            } else {
+                doneAction = CompanionAction(kind: startAction.kind,
+                                             point: CompanionPoint(cgPoint: lastDeliveredPoint) ?? startAction.point)
+            }
+            broadcaster.actionDone(identity: hub.identity, app: companionApp, window: targetWin, action: doneAction)
+        }
         observer.record(effect, pid: app.pid)
         if effect.requiresObservation { snapshot = nil }
         var result = effect.actionResult
@@ -365,6 +454,7 @@ struct OpenCUMain {
         // Run cleanup on the main actor, never inside a POSIX signal handler.
         // Signals stop accepting queued work; an in-flight action unwinds first.
         signal(SIGPIPE, SIG_IGN)
+        engine.startSession()
         var stopping = false
         var finishInput: (() -> Void)?
         var signalSources: [DispatchSourceSignal] = []

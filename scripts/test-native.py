@@ -65,6 +65,8 @@ def main() -> int:
             "xcrun", "swiftc", "-parse-as-library", "-module-name", "OpenCULogicTests",
             "-target", f"{platform.machine()}-apple-macos14.0",
             str(sources / "Types.swift"),
+            str(sources / "AgentHub.swift"),
+            str(sources / "CompanionBroadcaster.swift"),
             str(sources / "PresenceModel.swift"),
             str(sources / "BadgeModel.swift"),
             str(sources / "Keyboard.swift"),

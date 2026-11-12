@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { access } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { createInterface } from 'node:readline';
 import path from 'node:path';
 import { setTimeout as pause } from 'node:timers/promises';
@@ -7,6 +8,68 @@ import { CoordinateState } from './coordinate-state.mjs';
 
 const personStops = new Set(['STOPPED_BY_PERSON', 'USER_STOPPED']);
 const inputs = new Set(['click', 'drag', 'paste', 'press_key', 'type_text', 'scroll', 'set_value', 'select_text', 'perform_secondary_action']);
+
+export const AGENT_ENV_KEYS = Object.freeze([
+  'OPENCU_AGENT_ID',
+  'OPENCU_AGENT_NAME',
+  'OPENCU_AGENT_COLOR',
+  'OPENCU_HUB_DIR',
+  'OPENCU_EVENT_SOCK',
+]);
+
+function expandHomePath(raw, home) {
+  if (typeof raw !== 'string') return undefined;
+  const trimmed = raw.trim();
+  if (!trimmed) return undefined;
+  if (trimmed === '~') return home;
+  if (trimmed.startsWith('~/') || trimmed.startsWith('~\\')) return path.join(home, trimmed.slice(2));
+  return trimmed;
+}
+
+function sanitizeAgentText(raw, maxLength) {
+  if (typeof raw !== 'string') return undefined;
+  const singleLine = raw
+    .replace(/[\u0000-\u001F\u007F-\u009F\r\n\u202A-\u202E\u2066-\u2069\u061C\u200E\u200F]/g, ' ')
+    .trim();
+  if (!singleLine) return undefined;
+  return Array.from(singleLine).slice(0, maxLength).join('').trim() || undefined;
+}
+
+export function normalizeAgentColor(raw) {
+  if (typeof raw !== 'string') return undefined;
+  const trimmed = raw.trim();
+  const six = /^#([0-9a-fA-F]{6})$/.exec(trimmed);
+  if (six) return `#${six[1].toUpperCase()}`;
+  const three = /^#([0-9a-fA-F]{3})$/.exec(trimmed);
+  if (three) {
+    const [r, g, b] = three[1].toUpperCase();
+    return `#${r}${r}${g}${g}${b}${b}`;
+  }
+  return undefined;
+}
+
+export function resolveAgentEnv(env = process.env, overrides = {}) {
+  const base = { ...env };
+  const home = overrides.home || base.HOME || base.USERPROFILE || homedir();
+  base.OPENCU_HUB_DIR = expandHomePath(overrides.hubDir ?? base.OPENCU_HUB_DIR, home)
+    ?? path.join(home, '.opencu', 'hub');
+  base.OPENCU_EVENT_SOCK = expandHomePath(overrides.eventSock ?? base.OPENCU_EVENT_SOCK, home)
+    ?? path.join(home, '.ibuki-pet', 'opencu.sock');
+
+  const agentId = sanitizeAgentText(overrides.agentId ?? base.OPENCU_AGENT_ID, 64);
+  if (agentId) base.OPENCU_AGENT_ID = agentId;
+  else delete base.OPENCU_AGENT_ID;
+
+  const agentName = sanitizeAgentText(overrides.agentName ?? base.OPENCU_AGENT_NAME, 24);
+  if (agentName) base.OPENCU_AGENT_NAME = agentName;
+  else delete base.OPENCU_AGENT_NAME;
+
+  const agentColor = normalizeAgentColor(overrides.agentColor ?? base.OPENCU_AGENT_COLOR);
+  if (agentColor) base.OPENCU_AGENT_COLOR = agentColor;
+  else delete base.OPENCU_AGENT_COLOR;
+
+  return base;
+}
 
 export function toolError(error) {
   const code = error.code ?? 'RUNTIME_ERROR';
@@ -46,9 +109,12 @@ export class OpenCURuntime {
   #agentDesktop;
   #desktopGeneration;
   #desktopLocked = false;
+  #env;
+  #agentOverrides;
 
   constructor({ root, enginePath, requestTimeoutMs = 90_000, platform = process.platform,
-    spawnEngine, allowRestart = true, onPersonStop, agentDesktop = false, onDesktopEvent } = {}) {
+    spawnEngine, allowRestart = true, onPersonStop, agentDesktop = false, onDesktopEvent,
+    env, agentId, agentName, agentColor, hubDir, eventSock } = {}) {
     this.#requestTimeoutMs = requestTimeoutMs;
     this.#platform = platform;
     this.enginePath = enginePath ?? defaultEnginePath(root);
@@ -57,6 +123,8 @@ export class OpenCURuntime {
     this.#onPersonStop = onPersonStop;
     this.#agentDesktop = agentDesktop;
     this.#onDesktopEvent = onDesktopEvent;
+    this.#env = env;
+    this.#agentOverrides = { agentId, agentName, agentColor, hubDir, eventSock };
   }
 
   async #start() {
@@ -64,8 +132,9 @@ export class OpenCURuntime {
     catch { throw new Error(`OpenCU engine is missing. Run npm run ${{ win32: 'build:win', linux: 'build:linux' }[process.platform] ?? 'build'}, or use the prepared OpenCU release.`); }
     this.#active();
     if (this.#personStop) throw this.#personStop;
+    const childEnv = resolveAgentEnv(this.#env ?? process.env, this.#agentOverrides);
     const child = this.#child = this.#spawnEngine ? await this.#spawnEngine()
-      : spawn(this.enginePath, ['serve'], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
+      : spawn(this.enginePath, ['serve'], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env: childEnv });
     child.stderr.on('data', () => {});
     const fail = error => { if (this.#child === child) this.#fail(error); };
     child.stdin.on('error', () => fail(new Error('OpenCU engine input closed; no operation was retried.')));

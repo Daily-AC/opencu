@@ -5,15 +5,79 @@ import Darwin
 @MainActor
 final class InputController {
     // Presence hooks stay independent of the input routing/focus implementation.
+    var hub: AgentHub?
     var pointerDelivered: ((CGPoint, WindowSnapshot, Bool) -> Void)?
+    var dragStepDelivered: ((CGPoint, CGPoint, CGPoint, Double, WindowSnapshot) -> Void)?
     var requirePointerAllowed: ((CGRect) throws -> Void)?
     var requireInputAllowed: (() throws -> Void)?
     private var backgroundFocus: BackgroundFocus?
 
     func releaseFocus(unlessTarget pid: pid_t? = nil) {
         if let pid, backgroundFocus?.pid == pid { return }
-        backgroundFocus?.finish()
+        if let existing = backgroundFocus {
+            let peerActive = hub.map { AdvisoryFileLock.isContended(path: $0.pidLockPath(existing.pid)) } ?? false
+            existing.finish(preserveIfPeerActive: peerActive)
+        }
         backgroundFocus = nil
+    }
+
+    func noteTurnAcquired(contended: Bool) {
+        if contended || (hub?.activeAgents().count ?? 0) > 1 {
+            backgroundFocus?.markNeedsRefresh()
+        }
+    }
+
+    /// Computes privacy-safe companion geometry for an upcoming action without reading any user text, key or value.
+    func previewCompanionAction(method: String, args: Arguments, snapshot: WindowSnapshot) -> CompanionAction? {
+        guard let kind = CompanionActionKind(method: method) else { return nil }
+        func previewScreenPoint(xKey: String, yKey: String) -> CGPoint? {
+            guard let width = snapshot.screenshotWidth, let height = snapshot.screenshotHeight, width > 0, height > 0,
+                  let px = try? finiteNumber(args, xKey), let py = try? finiteNumber(args, yKey),
+                  px >= 0, py >= 0, px < Double(width), py < Double(height) else {
+                return nil
+            }
+            return CursorMotion.screenPoint(pixel: CGPoint(x: px, y: py),
+                                            pixels: CGSize(width: width, height: height),
+                                            bounds: snapshot.bounds)
+        }
+        func previewElementPoint() -> CGPoint? {
+            guard let rawIndex = try? finiteNumber(args, "element_index"),
+                  rawIndex.rounded(.towardZero) == rawIndex, rawIndex >= 0, rawIndex < Double(Int.max),
+                  let element = snapshot.elements[Int(rawIndex)] else {
+                return nil
+            }
+            return try? elementPoint(element)
+        }
+        switch kind {
+        case .drag:
+            let start = previewScreenPoint(xKey: "from_x", yKey: "from_y")
+            let end = previewScreenPoint(xKey: "to_x", yKey: "to_y")
+            return CompanionAction(
+                kind: .drag,
+                point: CompanionPoint(cgPoint: start),
+                from: CompanionPoint(cgPoint: start),
+                to: CompanionPoint(cgPoint: end),
+                progress: 0.0
+            )
+        case .click, .scroll:
+            let pt = previewElementPoint() ?? previewScreenPoint(xKey: "x", yKey: "y")
+            return CompanionAction(kind: kind, point: CompanionPoint(cgPoint: pt))
+        case .setValue, .selectText, .performSecondaryAction:
+            return CompanionAction(kind: kind, point: CompanionPoint(cgPoint: previewElementPoint()))
+        case .typeText, .paste, .pressKey:
+            let focusedPoint: CGPoint? = {
+                let appElement = AXUIElementCreateApplication(snapshot.app.pid)
+                guard let focused = axElement(appElement, kAXFocusedUIElementAttribute),
+                      let pt = try? elementPoint(focused),
+                      snapshot.bounds.isEmpty || snapshot.bounds.insetBy(dx: -8, dy: -8).contains(pt) else {
+                    return nil
+                }
+                return pt
+            }()
+            return CompanionAction(kind: kind, point: CompanionPoint(cgPoint: focusedPoint))
+        case .activateApp:
+            return CompanionAction(kind: .activateApp)
+        }
     }
     private var mouseEventNumber = 0
     private typealias SetWindowLocation = @convention(c) (CGEvent, CGPoint) -> Void
@@ -493,6 +557,7 @@ final class InputController {
             up = try mouseEvent(.leftMouseUp, at: location, button: .left, source: source, window: window)
             move.postToPid(snapshot.app.pid)
             pointerDelivered?(location, snapshot, false)
+            dragStepDelivered?(location, start, end, fraction, snapshot)
             try await pause(0.015)
         }
     }
@@ -553,6 +618,7 @@ final class InputController {
         }
         let replacement = try Self.typedValue(value, current: current, role: axString(element, kAXRoleAttribute))
         try check(AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, replacement), operation: "set element value")
+        if let location = try? elementPoint(element) { pointerDelivered?(location, snapshot, false) }
     }
 
     static func typedValue(_ text: String, current: CFTypeRef, role: String?) throws -> CFTypeRef {
@@ -654,6 +720,16 @@ final class InputController {
             }
         }
         let pasteChord = try OpenCUKeyChord.parse("super+v")
+        let lockPath = hub?.clipboardLockPath ?? (AgentConfig.hubDirectory() + "/locks/clipboard.lock")
+        let clipboardLease = try await AdvisoryFileLock.acquire(
+            path: lockPath,
+            timeout: 5.0,
+            pollInterval: 0.025,
+            errorCode: "CLIPBOARD_BUSY",
+            errorMessage: "Another OpenCU agent is currently using the clipboard; paste was not sent. Wait briefly and retry.",
+            checkAllowed: requireInputAllowed
+        )
+        defer { clipboardLease.release() }
         let clipboard = NSPasteboard.general
         let initialChangeCount = clipboard.changeCount
         var saved: [[NSPasteboard.PasteboardType: Data]] = []

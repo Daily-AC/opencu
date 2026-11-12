@@ -81,18 +81,25 @@ struct BadgeLifetime {
     private(set) var lastCall: TimeInterval?
     private(set) var stopped = false
     private(set) var connected = true
+    private(set) var waitingTurn = false
     mutating func call(target: String, now: TimeInterval) {
         guard connected, !stopped else { return }
         self.target = target; lastCall = now
     }
-    mutating func stop(now: TimeInterval) {
-        stopped = true
+    mutating func setWaitingTurn(_ waiting: Bool, now: TimeInterval) {
+        guard connected, !stopped else { waitingTurn = false; return }
+        waitingTurn = waiting
         if target != nil { lastCall = now }
     }
-    mutating func hide() { target = nil; lastCall = nil }
+    mutating func stop(now: TimeInterval) {
+        stopped = true; waitingTurn = false
+        if target != nil { lastCall = now }
+    }
+    mutating func hide() { target = nil; lastCall = nil; waitingTurn = false }
     mutating func disconnect() { connected = false; hide() }
     func opacity(at now: TimeInterval) -> CGFloat {
         guard connected, target != nil, let lastCall else { return 0 }
+        if waitingTurn && !stopped { return 1 }
         let elapsed = max(0, now - lastCall)
         if stopped { return elapsed < 3 ? 1 : 0 }
         return min(1, max(0, 1 - (elapsed - 3) / 0.2))
@@ -102,14 +109,33 @@ struct BadgeLifetime {
 struct BadgeLayout {
     static let height: CGFloat = 22
     static let shadowInset: CGFloat = 10
+    static let peerGap: CGFloat = 6
     let frame: CGRect
     let glyphOnly: Bool
-    init(window: CGRect, titleBarHeight: CGFloat?, textWidth: CGFloat) {
-        glyphOnly = window.width < 260
-        let width = min(window.width * 0.45, glyphOnly ? 29 : 35 + max(0, textWidth))
+    init(window: CGRect, titleBarHeight: CGFloat?, textWidth: CGFloat,
+         peerIndex: Int = 0, peerCount: Int = 1) {
         let bar = titleBarHeight.flatMap { $0.isFinite && $0 >= 22 && $0 <= window.height ? $0 : nil } ?? 28
-        frame = CGRect(x: window.maxX - 10 - width, y: window.minY + (bar - Self.height) / 2,
-                       width: width, height: Self.height)
+        let baseY = window.minY + (bar - Self.height) / 2
+        let count = max(1, peerCount)
+        let rank = min(count - 1, max(0, peerIndex))
+        if count == 1 {
+            glyphOnly = window.width < 260
+            let width = min(window.width * 0.45, glyphOnly ? 29 : 35 + max(0, textWidth))
+            frame = CGRect(x: window.maxX - 10 - width, y: baseY, width: width, height: Self.height)
+            return
+        }
+        let budget = max(29, window.width * 0.62 - 10)
+        let maxCols = max(1, min(count, Int(floor((budget + Self.peerGap) / (29 + Self.peerGap)))))
+        let col = rank % maxCols
+        let row = rank / maxCols
+        let rawLane = floor((budget - CGFloat(maxCols - 1) * Self.peerGap) / CGFloat(maxCols))
+        let laneWidth = min(168, max(29, rawLane))
+        glyphOnly = window.width < 260 || laneWidth < 64
+        let desiredWidth = glyphOnly ? 29 : 35 + max(0, textWidth)
+        let width = min(laneWidth, max(29, desiredWidth))
+        let rightEdge = window.maxX - 10 - CGFloat(col) * (laneWidth + Self.peerGap)
+        let y = baseY + CGFloat(row) * (Self.height + 4)
+        frame = CGRect(x: rightEdge - width, y: y, width: width, height: Self.height)
     }
     /// AX toolbar extent or the title/traffic-light vertical centre establishes
     /// the title region; reject content controls outside the top of the window.

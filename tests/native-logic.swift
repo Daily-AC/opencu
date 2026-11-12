@@ -23,6 +23,7 @@ struct OpenCUInputLogicChecks {
                 try run()
                 try await checkDisplayRemoval()
                 try checkAppNames()
+                try await checkMultiAgentCollaboration()
                 exit(0)
             } catch {
                 FileHandle.standardError.write(Data("FAIL: \(error)\n".utf8))
@@ -760,5 +761,331 @@ struct OpenCUInputLogicChecks {
         expect(NSFontManager.shared.traits(of: italicFont).contains(.italicFontMask), "Markdown RTF italic survives decode")
         expect(String(data: markdown.html, encoding: .utf8)?.contains("https://example.com") == true, "Markdown HTML link")
         print("\(checked) presence, stop policy, agent-display geometry/cleanup, attachment identity, input parsing, UTF-16, AX type, and rich Markdown checks passed; no input, GUI actions or clipboard writes")
+    }
+
+    @MainActor static func checkMultiAgentCollaboration() async throws {
+        var checked = 0
+        func expect(_ condition: @autoclosure () -> Bool, _ message: String) throws {
+            guard condition() else { throw OpenCUError("TEST_FAILED", message) }
+            checked += 1
+        }
+
+        // 1. Palette & config path expansion / sanitization checks.
+        let expectedPalette: [(Int, String, String)] = [
+            (0, "#FF6B9D", "Agent 1"),
+            (1, "#38BDF8", "Agent 2"),
+            (2, "#F59E0B", "Agent 3"),
+            (3, "#34D399", "Agent 4"),
+            (4, "#A78BFA", "Agent 5"),
+            (5, "#FB7185", "Agent 6"),
+        ]
+        for (slot, hex, name) in expectedPalette {
+            let entry = AgentSlotPalette.entry(for: slot)
+            try expect(entry.slot == slot && entry.hex == hex && entry.defaultName == name, "Palette slot \(slot)")
+        }
+        let envDefaults = ["HOME": "/tmp/fake-home"]
+        try expect(AgentConfig.hubDirectory(environment: envDefaults) == "/tmp/fake-home/.opencu/hub", "Default hub dir")
+        try expect(AgentConfig.eventSocketPath(environment: envDefaults) == "/tmp/fake-home/.ibuki-pet/opencu.sock", "Default event sock")
+        try expect(AgentConfig.hubDirectory(environment: ["HOME": "/tmp/fake-home", "OPENCU_HUB_DIR": "~/custom/hub"]) == "/tmp/fake-home/custom/hub", "Tilde hub dir")
+        try expect(AgentConfig.eventSocketPath(environment: ["HOME": "/tmp/fake-home", "OPENCU_EVENT_SOCK": "~/custom/ev.sock"]) == "/tmp/fake-home/custom/ev.sock", "Tilde event sock")
+
+        // Short /tmp root so AF_UNIX sun_path (< 104 bytes) always fits comfortably.
+        let shortRoot = URL(fileURLWithPath: "/tmp/ocu-\(UUID().uuidString.prefix(8))", isDirectory: true)
+        try FileManager.default.createDirectory(at: shortRoot, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: shortRoot) }
+
+        let hubDir = shortRoot.appendingPathComponent("hub").path
+        var livePIDs: Set<pid_t> = [2001, 2002, 2003, 2004, 2005, 2006, 2007]
+
+        // Seed a stale dead PID record claiming slot 0; registration must clean it and reclaim slot 0.
+        let agentsDir = (hubDir as NSString).appendingPathComponent("agents")
+        try FileManager.default.createDirectory(atPath: agentsDir, withIntermediateDirectories: true)
+        let staleRecord = AgentRecord(pid: 999991, agentId: "stale-0", agentName: "Agent 1", agentColor: "#FF6B9D",
+                                      slot: 0, explicitName: false, windowID: 88, targetPID: 4321, updatedAtMs: 1)
+        try JSONEncoder().encode(staleRecord).write(to: URL(fileURLWithPath: (agentsDir as NSString).appendingPathComponent("999991.json")))
+
+        var hubs: [AgentHub] = []
+        for index in 0..<6 {
+            let pid = pid_t(2001 + index)
+            let hub = AgentHub(hubDirectory: hubDir, selfPID: pid, environment: ["HOME": shortRoot.path], isAlive: { livePIDs.contains($0) })
+            let id = hub.register()
+            try expect(id.slot == index, "Deterministic slot \(index) assigned to PID \(pid)")
+            try expect(id.agentColor == expectedPalette[index].1, "Slot \(index) color matches palette")
+            try expect(id.agentName == expectedPalette[index].2, "Slot \(index) name matches palette")
+            try expect(id.agentId == "opencu-\(pid)", "Default agentId uses worker PID")
+            if index == 0 {
+                try expect(!FileManager.default.fileExists(atPath: (agentsDir as NSString).appendingPathComponent("999991.json")),
+                           "Stale dead PID record cleaned on registration")
+                try expect(!hub.shouldShowCursorTag(forceRefresh: true), "Solo unnamed agent hides redundant cursor tag")
+            } else if index == 1 {
+                try expect(hubs[0].shouldShowCursorTag(forceRefresh: true), "First agent shows cursor tag once sibling joins")
+                try expect(hub.shouldShowCursorTag(forceRefresh: true), "Second agent shows cursor tag when multiple agents active")
+            }
+            hubs.append(hub)
+        }
+
+        // Simulate PID 2003 (slot 2) crashing without unregistering; PID 2007 must clean it and reclaim slot 2!
+        livePIDs.remove(2003)
+        let customEnv = [
+            "HOME": shortRoot.path,
+            "OPENCU_AGENT_ID": "reviewer-bot",
+            "OPENCU_AGENT_NAME": "Reviewer\nBot",
+            "OPENCU_AGENT_COLOR": "#38bdf8",
+        ]
+        let replacement = AgentHub(hubDirectory: hubDir, selfPID: 2007, environment: customEnv, isAlive: { livePIDs.contains($0) })
+        let repID = replacement.register()
+        try expect(repID.slot == 2, "Crashed agent's slot 2 deterministically reclaimed")
+        try expect(repID.agentId == "reviewer-bot", "Custom OPENCU_AGENT_ID preserved")
+        try expect(repID.agentName == "Reviewer Bot" && repID.explicitName, "Custom OPENCU_AGENT_NAME sanitized and marked explicit")
+        try expect(repID.agentColor == "#38BDF8", "Custom OPENCU_AGENT_COLOR normalized to uppercase #RRGGBB")
+
+        // 2. Shared-window peer placement & non-overlapping BadgeLayout checks.
+        hubs[0].updateTarget(windowID: 88, targetPID: 4321)
+        hubs[1].updateTarget(windowID: 88, targetPID: 4321)
+        replacement.updateTarget(windowID: 88, targetPID: 4321)
+        hubs[3].updateTarget(windowID: 99, targetPID: 5555)
+
+        let p0 = hubs[0].peerPlacement(for: 88, forceRefresh: true)
+        let p1 = hubs[1].peerPlacement(for: 88, forceRefresh: true)
+        let p2 = replacement.peerPlacement(for: 88, forceRefresh: true)
+        let pOther = hubs[3].peerPlacement(for: 99, forceRefresh: true)
+        try expect(p0.peerCount == 3 && p0.peerIndex == 0, "Slot 0 is peerIndex 0 on shared window 88")
+        try expect(p1.peerCount == 3 && p1.peerIndex == 1, "Slot 1 is peerIndex 1 on shared window 88")
+        try expect(p2.peerCount == 3 && p2.peerIndex == 2, "Slot 2 is peerIndex 2 on shared window 88")
+        try expect(pOther.peerCount == 1 && pOther.peerIndex == 0, "Agent on window 99 stays solo on its own window")
+
+        for width in [CGFloat(960), 720, 420, 240] {
+            let win = CGRect(x: 100, y: 80, width: width, height: 600)
+            for peerCount in 2...6 {
+                let widths: [CGFloat] = [24, 150, 60, 190, 40, 110]
+                var frames: [CGRect] = []
+                for rank in 0..<peerCount {
+                    let layout = BadgeLayout(window: win, titleBarHeight: 28, textWidth: widths[rank],
+                                             peerIndex: rank, peerCount: peerCount)
+                    try expect(layout.frame.width >= 29 && layout.frame.height == 22, "Badge dimensions valid")
+                    for previous in frames {
+                        try expect(!previous.intersects(layout.frame),
+                                   "Badges never overlap (window width \(width), peers \(peerCount), rank \(rank))")
+                    }
+                    frames.append(layout.frame)
+                }
+            }
+        }
+
+        // Waiting-turn pointer & badge persistence checks.
+        var pState = PresenceState()
+        pState.call(target: "4321", now: 10)
+        pState.pointer(now: 10)
+        try expect(!pState.cursorVisible(at: 14), "Normal cursor hides after 3 seconds")
+        pState.pointer(now: 20)
+        pState.setWaitingTurn(true, now: 20.5)
+        try expect(pState.cursorVisible(at: 29.0), "Waiting-turn cursor remains visible while waiting for peer turn")
+        pState.setWaitingTurn(false, now: 29.0)
+        try expect(pState.cursorVisible(at: 31.0) && !pState.cursorVisible(at: 32.5), "Cursor resumes normal 3s fade after turn acquired")
+
+        var bLife = BadgeLifetime()
+        bLife.call(target: "4321:88", now: 10)
+        bLife.setWaitingTurn(true, now: 10.5)
+        try expect(bLife.opacity(at: 19.0) == 1, "Badge stays visible during waitingTurn")
+        bLife.setWaitingTurn(false, now: 19.0)
+        try expect(bLife.opacity(at: 22.5) == 0, "Badge fades normally after waitingTurn clears")
+
+        for hub in hubs { hub.unregister() }
+        replacement.unregister()
+
+        // 3. Real AF_UNIX SOCK_DGRAM NDJSON companion broadcast & strict privacy checks.
+        let sockPath = shortRoot.appendingPathComponent("opencu.sock").path
+        let serverFD = Darwin.socket(AF_UNIX, SOCK_DGRAM, 0)
+        try expect(serverFD >= 0, "Create test SOCK_DGRAM listener")
+        defer { _ = Darwin.close(serverFD); _ = Darwin.unlink(sockPath) }
+        _ = Darwin.fcntl(serverFD, F_SETFL, Darwin.fcntl(serverFD, F_GETFL) | O_NONBLOCK)
+        var bindAddr = sockaddr_un()
+        bindAddr.sun_family = sa_family_t(AF_UNIX)
+        let sockBytes = Array(sockPath.utf8)
+        withUnsafeMutableBytes(of: &bindAddr.sun_path) { raw in
+            raw.initializeMemory(as: UInt8.self, repeating: 0)
+            for (idx, b) in sockBytes.enumerated() { raw[idx] = b }
+        }
+        let bindLen = socklen_t(MemoryLayout.offset(of: \sockaddr_un.sun_path)! + sockBytes.count + 1)
+        bindAddr.sun_len = UInt8(bindLen)
+        let bound = withUnsafePointer(to: &bindAddr) { ptr in
+            ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.bind(serverFD, $0, bindLen) }
+        }
+        try expect(bound == 0, "Bind test SOCK_DGRAM socket at \(sockPath)")
+
+        let broadcaster = CompanionBroadcaster(socketPath: sockPath)
+        let testIdentity = AgentIdentity(
+            pid: 4242,
+            agentId: "opencu-4242",
+            agentName: "Coder",
+            agentColor: "#FF6B9D",
+            rgb: AgentSlotPalette.entry(for: 0).rgb,
+            slot: 0,
+            explicitName: true
+        )
+        broadcaster.activate(identity: testIdentity)
+        let testApp = CompanionApp(pid: 4321, bundleId: "com.apple.Notes", name: "Notes")
+        let testWin = CompanionWindow(id: 88, bounds: CGRect(x: 120, y: 80, width: 900, height: 640))!
+        _ = broadcaster.send(CompanionEventPayload(identity: testIdentity, event: .observed, app: testApp, window: testWin))
+        broadcaster.waitingTurn(identity: testIdentity, app: testApp, window: testWin, kind: .click)
+        let dragFrom = CompanionPoint(x: 300, y: 320)!
+        let dragTo = CompanionPoint(x: 620, y: 320)!
+        broadcaster.actionStart(
+            identity: testIdentity,
+            app: testApp,
+            window: testWin,
+            action: CompanionAction(kind: .drag, point: dragFrom, from: dragFrom, to: dragTo, progress: 0.0)
+        )
+        for step in [1, 10, 20] {
+            let p = Double(step) / 20.0
+            let cur = CompanionPoint(x: 300 + 320 * p, y: 320)!
+            _ = broadcaster.send(CompanionEventPayload(
+                identity: testIdentity,
+                event: .pointerMove,
+                app: testApp,
+                window: testWin,
+                action: CompanionAction(kind: .drag, point: cur, from: dragFrom, to: dragTo, progress: p)
+            ))
+        }
+        broadcaster.actionDone(
+            identity: testIdentity,
+            app: testApp,
+            window: testWin,
+            action: CompanionAction(kind: .drag, point: dragTo, from: dragFrom, to: dragTo, progress: 1.0)
+        )
+        broadcaster.actionStart(identity: testIdentity, app: testApp, window: testWin, action: CompanionAction(kind: .paste))
+        broadcaster.actionDone(identity: testIdentity, app: testApp, window: testWin, action: CompanionAction(kind: .paste))
+        broadcaster.stopped(identity: testIdentity)
+        broadcaster.disconnect(identity: testIdentity)
+
+        var receivedLines: [String] = []
+        var recvBuf = [UInt8](repeating: 0, count: 4096)
+        while true {
+            let n = Darwin.recv(serverFD, &recvBuf, recvBuf.count, 0)
+            if n <= 0 { break }
+            try expect(n <= CompanionBroadcaster.maxDatagramBytes, "Datagram <= 2048 bytes")
+            try expect(recvBuf[n - 1] == 0x0A, "Datagram is newline-delimited NDJSON")
+            receivedLines.append(String(decoding: recvBuf.prefix(n), as: UTF8.self))
+        }
+        try expect(receivedLines.count == 12, "All 12 lifecycle datagrams received losslessly")
+
+        let allowedTopKeys: Set<String> = ["v", "ts", "coordSpace", "agentId", "agentName", "agentColor", "slot", "event", "app", "window", "action"]
+        let forbiddenKeys: Set<String> = ["text", "value", "key", "title", "url", "label", "screenshot", "clipboard", "password", "path"]
+        var seenEvents: [String] = []
+        var dragProgresses: [Double] = []
+        for rawLine in receivedLines {
+            let trimmed = rawLine.trimmingCharacters(in: .newlines)
+            let obj = try JSONSerialization.jsonObject(with: Data(trimmed.utf8)) as? [String: Any]
+            try expect(obj != nil, "Valid JSON object datagram")
+            let dict = obj!
+            try expect(Set(dict.keys).isSubset(of: allowedTopKeys), "No unknown top-level keys for serde(deny_unknown_fields)")
+            try expect(Set(dict.keys).isDisjoint(with: forbiddenKeys), "Zero forbidden secret keys at top level")
+            try expect(dict["v"] as? Int == 1, "Schema v == 1")
+            try expect(dict["coordSpace"] as? String == "cg_points_top_left", "coordSpace == cg_points_top_left")
+            try expect(dict["agentId"] as? String == "opencu-4242" && dict["agentName"] as? String == "Coder", "Agent identity fields")
+            try expect(dict["agentColor"] as? String == "#FF6B9D" && dict["slot"] as? Int == 0, "Agent color and slot")
+            seenEvents.append(dict["event"] as? String ?? "")
+            if let appDict = dict["app"] as? [String: Any] {
+                try expect(Set(appDict.keys).isSubset(of: ["pid", "bundleId", "name"]), "Strict app keys")
+                try expect(Set(appDict.keys).isDisjoint(with: forbiddenKeys), "No secret keys in app")
+            }
+            if let winDict = dict["window"] as? [String: Any] {
+                try expect(Set(winDict.keys) == ["id", "x", "y", "width", "height"], "Strict window keys")
+            }
+            if let actDict = dict["action"] as? [String: Any] {
+                try expect(Set(actDict.keys).isSubset(of: ["kind", "point", "from", "to", "progress"]), "Strict action keys")
+                try expect(Set(actDict.keys).isDisjoint(with: forbiddenKeys), "No text/value/key in action")
+                if dict["event"] as? String == "pointer_move", let prog = actDict["progress"] as? Double {
+                    dragProgresses.append(prog)
+                }
+            }
+        }
+        try expect(seenEvents.first == "connected" && seenEvents.last == "disconnected", "Connected first and disconnected last")
+        try expect(seenEvents.contains("observed") && seenEvents.contains("waiting_turn") && seenEvents.contains("stopped"), "All event kinds emitted")
+        try expect(dragProgresses == [0.05, 0.5, 1.0], "Drag pointer_move emits exact progress steps")
+
+        // Missing socket (ibuki not running) must never block or throw.
+        let missingBroadcaster = CompanionBroadcaster(socketPath: shortRoot.appendingPathComponent("nonexistent/opencu.sock").path)
+        let beforeMissing = AdvisoryFileLock.monotonicNow
+        missingBroadcaster.activate(identity: testIdentity)
+        try expect(AdvisoryFileLock.monotonicNow - beforeMissing < 0.05, "Missing socket returns immediately without blocking")
+
+        // 4. AdvisoryFileLock coordination: clipboard lock serialization, cross-app parallelism & same-app queuing.
+        let locksDir = (hubDir as NSString).appendingPathComponent("locks")
+        let clipLock = (locksDir as NSString).appendingPathComponent("clipboard.lock")
+        let pidLockA = (locksDir as NSString).appendingPathComponent("pid-4321.lock")
+        let pidLockB = (locksDir as NSString).appendingPathComponent("pid-8765.lock")
+
+        var eventsOrder: [String] = []
+        var clipContended = false
+        let clipLease1 = try await AdvisoryFileLock.acquire(
+            path: clipLock, timeout: 5.0, pollInterval: 0.015,
+            errorCode: "CLIPBOARD_BUSY", errorMessage: "busy"
+        )
+        try expect(AdvisoryFileLock.isContended(path: clipLock), "Held flock is detected as contended")
+        eventsOrder.append("clip1-acquired")
+        let waiterTask = Task { @MainActor in
+            let lease2 = try await AdvisoryFileLock.acquire(
+                path: clipLock, timeout: 5.0, pollInterval: 0.015,
+                errorCode: "CLIPBOARD_BUSY", errorMessage: "busy",
+                onContended: { clipContended = true }
+            )
+            eventsOrder.append("clip2-acquired")
+            lease2.release()
+        }
+        try await Task.sleep(nanoseconds: 60_000_000)
+        try expect(clipContended && eventsOrder == ["clip1-acquired"], "Second paste waits cleanly while first holds clipboard.lock")
+        eventsOrder.append("clip1-releasing")
+        clipLease1.release()
+        try await waiterTask.value
+        try expect(eventsOrder == ["clip1-acquired", "clip1-releasing", "clip2-acquired"], "Clipboard critical sections strictly serialized")
+        try expect(!AdvisoryFileLock.isContended(path: clipLock), "Released flock is no longer contended")
+
+        // Cross-app (pid-8765) runs immediately in parallel while same-app (pid-4321) waits its turn!
+        let appALease1 = try await AdvisoryFileLock.acquire(
+            path: pidLockA, timeout: 10.0, pollInterval: 0.015,
+            errorCode: "TARGET_BUSY", errorMessage: "busy"
+        )
+        var sameAppWaitingFired = false
+        let sameAppTask = Task { @MainActor in
+            let lease = try await AdvisoryFileLock.acquire(
+                path: pidLockA, timeout: 10.0, pollInterval: 0.015,
+                errorCode: "TARGET_BUSY", errorMessage: "busy",
+                onContended: { sameAppWaitingFired = true }
+            )
+            defer { lease.release() }
+            return "same-app-done"
+        }
+        let crossStart = AdvisoryFileLock.monotonicNow
+        let appBLease = try await AdvisoryFileLock.acquire(
+            path: pidLockB, timeout: 10.0, pollInterval: 0.015,
+            errorCode: "TARGET_BUSY", errorMessage: "busy"
+        )
+        let crossElapsed = AdvisoryFileLock.monotonicNow - crossStart
+        appBLease.release()
+        try expect(crossElapsed < 0.03, "Different target PID lock acquires immediately in parallel")
+        try await Task.sleep(nanoseconds: 50_000_000)
+        try expect(sameAppWaitingFired, "Contended same-PID turn emits waiting_turn hook")
+        appALease1.release()
+        let sameResult = try await sameAppTask.value
+        try expect(sameResult == "same-app-done", "Contended same-PID turn completes once holder releases")
+
+        // Timeout refusal check.
+        let heldForever = try await AdvisoryFileLock.acquire(
+            path: pidLockA, timeout: 1.0, pollInterval: 0.01,
+            errorCode: "TARGET_BUSY", errorMessage: "busy"
+        )
+        defer { heldForever.release() }
+        do {
+            _ = try await AdvisoryFileLock.acquire(
+                path: pidLockA, timeout: 0.06, pollInterval: 0.015,
+                errorCode: "TARGET_BUSY", errorMessage: "Target still busy"
+            )
+            throw OpenCUError("TEST_FAILED", "Expected TARGET_BUSY timeout")
+        } catch let error as OpenCUError {
+            try expect(error.code == "TARGET_BUSY", "Lock timeout surfaces exact OpenCUError code")
+        }
+
+        print("\(checked) multi-agent slot/color registry, non-overlapping badge, SOCK_DGRAM privacy-safe event stream, and flock concurrency checks passed")
     }
 }
