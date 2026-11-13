@@ -54,6 +54,25 @@ test('resolveAgentEnv applies hub/socket defaults, expands tilde, and sanitizes 
   assert.equal(Object.hasOwn(fallbackInvalid, 'OPENCU_AGENT_NAME'), false);
   assert.equal(Object.hasOwn(fallbackInvalid, 'OPENCU_AGENT_COLOR'), false);
   assert.equal(Object.hasOwn(fallbackInvalid, 'OPENCU_CAPTURE_OVERLAY'), false);
+
+  const fromIbukiHome = resolveAgentEnv({
+    HOME: '/tmp/opencu-home',
+    IBUKI_HOME: '~/custom-ibuki',
+  });
+  assert.equal(fromIbukiHome.OPENCU_EVENT_SOCK, path.join('/tmp/opencu-home', 'custom-ibuki', 'opencu.sock'));
+
+  const explicitOverridesIbukiHome = resolveAgentEnv({
+    HOME: '/tmp/opencu-home',
+    IBUKI_HOME: '/tmp/other-ibuki',
+    OPENCU_EVENT_SOCK: '/tmp/explicit/opencu.sock',
+  });
+  assert.equal(explicitOverridesIbukiHome.OPENCU_EVENT_SOCK, '/tmp/explicit/opencu.sock');
+
+  const blankIbukiHome = resolveAgentEnv({
+    HOME: '/tmp/opencu-home',
+    IBUKI_HOME: '   ',
+  });
+  assert.equal(blankIbukiHome.OPENCU_EVENT_SOCK, path.join('/tmp/opencu-home', '.ibuki-pet', 'opencu.sock'));
 });
 
 test('OpenCURuntime forwards multi-agent identity, capture overlay, and companion socket env to the spawned engine', async t => {
@@ -117,7 +136,10 @@ test('WorkerLauncher guards launchd bootstrap with inter-process lock and Compan
 
   const presence = await readFile(path.join(root, 'native/Sources/OpenCU/PresenceController.swift'), 'utf8');
   assert.match(presence, /NSWindow\.Level = \.statusBar/);
-  assert.match(presence, /AgentConfig\.captureOverlayEnabled\(\) \? \.readOnly : \.none/);
+  assert.match(presence, /OverlayDisplayPolicy\.resolve\(/);
+  assert.match(presence, /policy\.sharingReadOnly \? \.readOnly : \.none/);
+  assert.match(presence, /\.moveToActiveSpace/);
+  assert.match(presence, /OverlayDisplayPolicy\.liveOnscreenBounds\(/);
 
   const broadcaster = await readFile(path.join(root, 'native/Sources/OpenCU/CompanionBroadcaster.swift'), 'utf8');
   assert.match(broadcaster, /SOCK_DGRAM/);

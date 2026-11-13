@@ -788,6 +788,31 @@ struct OpenCUInputLogicChecks {
         try expect(AgentConfig.eventSocketPath(environment: envDefaults) == "/tmp/fake-home/.ibuki-pet/opencu.sock", "Default event sock")
         try expect(AgentConfig.hubDirectory(environment: ["HOME": "/tmp/fake-home", "OPENCU_HUB_DIR": "~/custom/hub"]) == "/tmp/fake-home/custom/hub", "Tilde hub dir")
         try expect(AgentConfig.eventSocketPath(environment: ["HOME": "/tmp/fake-home", "OPENCU_EVENT_SOCK": "~/custom/ev.sock"]) == "/tmp/fake-home/custom/ev.sock", "Tilde event sock")
+        try expect(AgentConfig.forwardedEnvironmentKeys.contains("IBUKI_HOME"), "IBUKI_HOME forwarded to launchd worker environment")
+        try expect(
+            AgentConfig.eventSocketPath(environment: ["HOME": "/tmp/fake-home", "IBUKI_HOME": "/tmp/custom-ibuki"]) == "/tmp/custom-ibuki/opencu.sock",
+            "IBUKI_HOME auto-discovers $IBUKI_HOME/opencu.sock when OPENCU_EVENT_SOCK is unset"
+        )
+        try expect(
+            AgentConfig.eventSocketPath(environment: ["HOME": "/tmp/fake-home", "IBUKI_HOME": "~/my-ibuki"]) == "/tmp/fake-home/my-ibuki/opencu.sock",
+            "IBUKI_HOME expands ~/ prefix cleanly"
+        )
+        try expect(
+            AgentConfig.eventSocketPath(environment: ["HOME": "/tmp/fake-home", "OPENCU_EVENT_SOCK": "   ", "IBUKI_HOME": "/tmp/custom-ibuki"]) == "/tmp/custom-ibuki/opencu.sock",
+            "Blank OPENCU_EVENT_SOCK falls back to $IBUKI_HOME/opencu.sock"
+        )
+        try expect(
+            AgentConfig.eventSocketPath(environment: ["HOME": "/tmp/fake-home", "IBUKI_HOME": "   "]) == "/tmp/fake-home/.ibuki-pet/opencu.sock",
+            "Blank IBUKI_HOME falls back to ~/.ibuki-pet/opencu.sock"
+        )
+        try expect(
+            AgentConfig.eventSocketPath(environment: [
+                "HOME": "/tmp/fake-home",
+                "IBUKI_HOME": "/tmp/custom-ibuki",
+                "OPENCU_EVENT_SOCK": "/tmp/explicit-override.sock",
+            ]) == "/tmp/explicit-override.sock",
+            "Explicit OPENCU_EVENT_SOCK takes precedence over IBUKI_HOME"
+        )
 
         // Short /tmp root so AF_UNIX sun_path (< 104 bytes) always fits comfortably.
         let shortRoot = URL(fileURLWithPath: "/tmp/ocu-\(UUID().uuidString.prefix(8))", isDirectory: true)
@@ -1221,6 +1246,112 @@ struct OpenCUInputLogicChecks {
         try expect(orbitAgent.opacity(at: 102.1) > 0 && orbitAgent.opacity(at: 102.3) == 0, "Dismiss mode fades cleanly")
         try expect(PresenceState.inputMethods.contains("swarm_dispatch") && PresenceState.inputMethods.contains("cluster_cursors"),
                    "swarm_dispatch and cluster_cursors gated by Stop policy")
+
+        // 5c. Virtual-Display (`AgentDisplay`) Overlay Sharing Escalation & Foreground Space-Switch Silence.
+        let mainDisplay = OverlayDisplayPolicy.DisplayRect(id: 1, frame: CGRect(x: 0, y: 0, width: 1728, height: 1117), isMain: true)
+        let agentVirtualDisplay = OverlayDisplayPolicy.DisplayRect(id: 77, frame: CGRect(x: 1728, y: 1117, width: 1728, height: 1085), isMain: false)
+        let displays = [mainDisplay, agentVirtualDisplay]
+
+        let mainWindowRect = CGRect(x: 120, y: 80, width: 900, height: 620)
+        let virtualWindowRect = CGRect(x: 1900, y: 1220, width: 900, height: 620)
+        let partialVirtualRect = CGRect(x: 1600, y: 1150, width: 800, height: 500)
+
+        let mainDefaultPolicy = OverlayDisplayPolicy.resolve(for: mainWindowRect, displays: displays, captureOverlayEnabled: false)
+        try expect(
+            mainDefaultPolicy.displayID == 1 && !mainDefaultPolicy.nonMainDisplay && !mainDefaultPolicy.sharingReadOnly,
+            "Main display keeps sharingType=.none by default so single-window screenshots stay clean"
+        )
+        let mainCapturePolicy = OverlayDisplayPolicy.resolve(for: mainWindowRect, displays: displays, captureOverlayEnabled: true)
+        try expect(
+            mainCapturePolicy.displayID == 1 && !mainCapturePolicy.nonMainDisplay && mainCapturePolicy.sharingReadOnly,
+            "OPENCU_CAPTURE_OVERLAY=1 enables sharingType=.readOnly on main display"
+        )
+        let virtualPolicy = OverlayDisplayPolicy.resolve(for: virtualWindowRect, displays: displays, captureOverlayEnabled: false)
+        try expect(
+            virtualPolicy.displayID == 77 && virtualPolicy.nonMainDisplay && virtualPolicy.sharingReadOnly,
+            "Non-main virtual display (AgentDisplay) automatically enables sharingType=.readOnly without OPENCU_CAPTURE_OVERLAY"
+        )
+        let intersectionPolicy = OverlayDisplayPolicy.resolve(for: partialVirtualRect, displays: displays, captureOverlayEnabled: false)
+        try expect(
+            intersectionPolicy.displayID == 77 && intersectionPolicy.nonMainDisplay && intersectionPolicy.sharingReadOnly,
+            "Partially overhanging window matches largest-intersection virtual display"
+        )
+
+        func makeWindowRecord(id: UInt32, pid: Int32, rect: CGRect, onscreen: Bool?, alpha: Double = 1.0) -> [String: Any] {
+            var dict: [String: Any] = [
+                kCGWindowNumber as String: NSNumber(value: id),
+                kCGWindowOwnerPID as String: NSNumber(value: pid),
+                kCGWindowAlpha as String: NSNumber(value: alpha),
+                kCGWindowBounds as String: rect.dictionaryRepresentation as NSDictionary,
+            ]
+            if let onscreen {
+                dict[kCGWindowIsOnscreen as String] = onscreen
+            }
+            return dict
+        }
+
+        let activeSpaceRecords = [makeWindowRecord(id: 501, pid: 4321, rect: mainWindowRect, onscreen: true)]
+        let resolvedActiveBounds = OverlayDisplayPolicy.liveOnscreenBounds(
+            from: activeSpaceRecords,
+            windowID: 501,
+            ownerPID: 4321,
+            expectedSize: mainWindowRect.size
+        )
+        try expect(resolvedActiveBounds == mainWindowRect, "Active-Space window resolves live Quartz bounds")
+        try expect(
+            OverlayDisplayPolicy.shouldShowOverlays(connected: true, stopped: false, liveBounds: resolvedActiveBounds),
+            "Overlays render when connected, unstopped, and target window is on active Space"
+        )
+
+        let inactiveSpaceFalseRecords = [makeWindowRecord(id: 501, pid: 4321, rect: mainWindowRect, onscreen: false)]
+        let inactiveSpaceOmittedRecords = [makeWindowRecord(id: 501, pid: 4321, rect: mainWindowRect, onscreen: nil)]
+        let resolvedInactiveFalse = OverlayDisplayPolicy.liveOnscreenBounds(
+            from: inactiveSpaceFalseRecords,
+            windowID: 501,
+            ownerPID: 4321,
+            expectedSize: mainWindowRect.size
+        )
+        let resolvedInactiveOmitted = OverlayDisplayPolicy.liveOnscreenBounds(
+            from: inactiveSpaceOmittedRecords,
+            windowID: 501,
+            ownerPID: 4321,
+            expectedSize: mainWindowRect.size
+        )
+        try expect(
+            resolvedInactiveFalse == nil && resolvedInactiveOmitted == nil,
+            "Inactive-Space window (kCGWindowIsOnscreen != true) resolves nil bounds immediately"
+        )
+        try expect(
+            !OverlayDisplayPolicy.shouldShowOverlays(connected: true, stopped: false, liveBounds: resolvedInactiveFalse),
+            "All overlays suppress immediately when person switches to another Desktop Space"
+        )
+
+        let hiddenAlphaRecords = [makeWindowRecord(id: 501, pid: 4321, rect: mainWindowRect, onscreen: true, alpha: 0.0)]
+        try expect(
+            OverlayDisplayPolicy.liveOnscreenBounds(
+                from: hiddenAlphaRecords,
+                windowID: 501,
+                ownerPID: 4321,
+                expectedSize: mainWindowRect.size
+            ) == nil,
+            "Zero-alpha hidden window suppresses overlays"
+        )
+
+        let virtualOnscreenRecords = [
+            makeWindowRecord(id: 501, pid: 4321, rect: mainWindowRect, onscreen: false),
+            makeWindowRecord(id: 777, pid: 8888, rect: virtualWindowRect, onscreen: true),
+        ]
+        let resolvedVirtualBounds = OverlayDisplayPolicy.liveOnscreenBounds(
+            from: virtualOnscreenRecords,
+            windowID: 777,
+            ownerPID: 8888,
+            expectedSize: virtualWindowRect.size
+        )
+        try expect(
+            resolvedVirtualBounds == virtualWindowRect
+                && OverlayDisplayPolicy.shouldShowOverlays(connected: true, stopped: false, liveBounds: resolvedVirtualBounds),
+            "Background AgentDisplay window stays visible on virtual screen even while main-display Space 1 is inactive"
+        )
 
         // 6. Real 4-concurrent-worker `launchd` startup test:
         //    Spawn 4 `opencu-engine serve` processes simultaneously and verify zero ENGINE_EXITED / launchd race!

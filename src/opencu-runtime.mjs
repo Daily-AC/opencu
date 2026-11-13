@@ -54,8 +54,9 @@ export function resolveAgentEnv(env = process.env, overrides = {}) {
   const home = overrides.home || base.HOME || base.USERPROFILE || homedir();
   base.OPENCU_HUB_DIR = expandHomePath(overrides.hubDir ?? base.OPENCU_HUB_DIR, home)
     ?? path.join(home, '.opencu', 'hub');
+  const ibukiHome = expandHomePath(base.IBUKI_HOME, home);
   base.OPENCU_EVENT_SOCK = expandHomePath(overrides.eventSock ?? base.OPENCU_EVENT_SOCK, home)
-    ?? path.join(home, '.ibuki-pet', 'opencu.sock');
+    ?? (ibukiHome ? path.join(ibukiHome, 'opencu.sock') : path.join(home, '.ibuki-pet', 'opencu.sock'));
 
   const agentId = sanitizeAgentText(overrides.agentId ?? base.OPENCU_AGENT_ID, 64);
   if (agentId) base.OPENCU_AGENT_ID = agentId;

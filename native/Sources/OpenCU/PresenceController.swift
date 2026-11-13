@@ -49,12 +49,10 @@ final class PresenceController: NSObject, NSMenuDelegate, NSApplicationDelegate 
     private var targetBounds: CGRect = .zero
     private var targetName = ""
     private var needsZOrderRaise = false
+    private var targetWasOffscreen = false
     private var prompted = false
     private var trackingMenu = false
     private var now: TimeInterval { ProcessInfo.processInfo.systemUptime }
-    private var panelSharingType: NSWindow.SharingType {
-        AgentConfig.captureOverlayEnabled() ? .readOnly : .none
-    }
 
     init(hub: AgentHub = AgentHub()) {
         self.hub = hub
@@ -117,6 +115,7 @@ final class PresenceController: NSObject, NSMenuDelegate, NSApplicationDelegate 
     func observed(_ snapshot: WindowSnapshot) {
         let switchingTarget = targetWindow != nil && (targetWindow != snapshot.windowID || targetPID != snapshot.app.pid)
         if switchingTarget {
+            targetWasOffscreen = false
             hideCursor(); hideSelection(); hideSwarm(); hideBadge()
         }
         let oldBounds = targetBounds
@@ -265,7 +264,7 @@ final class PresenceController: NSObject, NSMenuDelegate, NSApplicationDelegate 
         badgeView.text = BadgeAction(method: "stopped").localized(PresenceStrings().text)
         badgeView.stopped = true
         needsZOrderRaise = true
-        startTimer(); tickBadge(at: now)
+        startTimer(); refreshBadgeNow()
         onPersonInteraction?(); onStop?()
         // Update the existing menu after tracking ends, without reopening it.
         DispatchQueue.main.async { [weak self] in
@@ -382,6 +381,7 @@ final class PresenceController: NSObject, NSMenuDelegate, NSApplicationDelegate 
         }
         let switchingTarget = targetWindow != nil && (targetWindow != snapshot.windowID || targetPID != snapshot.app.pid)
         if switchingTarget {
+            targetWasOffscreen = false
             hideCursor(); hideSelection(); hideSwarm(); hideBadge()
         }
         targetWindow = snapshot.windowID
@@ -585,10 +585,52 @@ final class PresenceController: NSObject, NSMenuDelegate, NSApplicationDelegate 
         badgeTitleHeight = BadgeAccessibility.titleBarHeight(window: window, bounds: snapshot.bounds)
         badgeLifetime.call(target: "\(snapshot.app.pid):\(id)", now: now)
         needsZOrderRaise = true
-        startTimer(); tickBadge(at: now)
+        startTimer(); refreshBadgeNow()
     }
 
-    private func makeOverlayPanel(contentView: NSView) -> CursorWindow {
+    private func activeOverlayDisplays() -> [OverlayDisplayPolicy.DisplayRect] {
+        var ids = [CGDirectDisplayID](repeating: 0, count: 32)
+        var count: UInt32 = 0
+        guard CGGetOnlineDisplayList(UInt32(ids.count), &ids, &count) == .success, count > 0 else {
+            return []
+        }
+        let mainID = CGMainDisplayID()
+        return ids.prefix(Int(count)).map { id in
+            let isMainOrMirroredMain = (id == mainID)
+                || (CGDisplayIsInMirrorSet(id) != 0 && CGDisplayPrimaryDisplay(id) == mainID)
+            return OverlayDisplayPolicy.DisplayRect(
+                id: id,
+                frame: CGDisplayBounds(id),
+                isMain: isMainOrMirroredMain
+            )
+        }
+    }
+
+    private func resolveOverlayPolicy(for targetRect: CGRect) -> OverlayDisplayPolicy.Resolution {
+        OverlayDisplayPolicy.resolve(
+            for: targetRect,
+            displays: activeOverlayDisplays(),
+            captureOverlayEnabled: AgentConfig.captureOverlayEnabled()
+        )
+    }
+
+    private func applyOverlayPolicy(_ policy: OverlayDisplayPolicy.Resolution, to panel: CursorWindow) {
+        let desiredSharing: NSWindow.SharingType = policy.sharingReadOnly ? .readOnly : .none
+        if panel.sharingType != desiredSharing {
+            panel.sharingType = desiredSharing
+        }
+        let desiredBehavior: NSWindow.CollectionBehavior = policy.nonMainDisplay
+            ? [.canJoinAllSpaces, .transient, .ignoresCycle, .fullScreenAuxiliary]
+            : [.moveToActiveSpace, .transient, .ignoresCycle, .fullScreenAuxiliary]
+        if panel.collectionBehavior != desiredBehavior {
+            panel.collectionBehavior = desiredBehavior
+        }
+        if panel.level != Self.overlayWindowLevel {
+            panel.level = Self.overlayWindowLevel
+        }
+    }
+
+    private func makeOverlayPanel(contentView: NSView, policy: OverlayDisplayPolicy.Resolution? = nil) -> CursorWindow {
         let panel = CursorWindow(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.isOpaque = false
         panel.backgroundColor = .clear
@@ -596,25 +638,37 @@ final class PresenceController: NSObject, NSMenuDelegate, NSApplicationDelegate 
         panel.ignoresMouseEvents = true
         panel.hidesOnDeactivate = false
         panel.becomesKeyOnlyIfNeeded = true
-        panel.sharingType = panelSharingType
-        panel.level = Self.overlayWindowLevel
-        panel.collectionBehavior = [.canJoinAllSpaces, .transient, .ignoresCycle, .fullScreenAuxiliary]
+        let initialPolicy = policy ?? OverlayDisplayPolicy.Resolution(
+            displayID: nil,
+            nonMainDisplay: false,
+            sharingReadOnly: AgentConfig.captureOverlayEnabled()
+        )
+        applyOverlayPolicy(initialPolicy, to: panel)
         panel.contentView = contentView
         return panel
     }
 
     private func liveWindowBounds(id: CGWindowID, pid: pid_t) -> CGRect? {
-        guard let records = CGWindowListCopyWindowInfo(.optionIncludingWindow, id) as? [[String: Any]],
-              let record = records.first(where: { ($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value == id }),
-              (record[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == pid,
-              record[kCGWindowIsOnscreen as String] as? Bool == true,
-              let raw = record[kCGWindowBounds as String] as? NSDictionary,
-              let bounds = CGRect(dictionaryRepresentation: raw as CFDictionary),
-              abs(bounds.width - targetBounds.width) <= 2,
-              abs(bounds.height - targetBounds.height) <= 2 else {
+        guard let records = CGWindowListCopyWindowInfo(.optionIncludingWindow, id) as? [[String: Any]] else {
             return nil
         }
-        return bounds
+        return OverlayDisplayPolicy.liveOnscreenBounds(
+            from: records,
+            windowID: id,
+            ownerPID: pid,
+            expectedSize: targetBounds.size
+        )
+    }
+
+    private func currentLiveWindowBounds() -> CGRect? {
+        guard let id = targetWindow, let pid = targetPID else { return nil }
+        return liveWindowBounds(id: id, pid: pid)
+    }
+
+    private func refreshBadgeNow() {
+        let bounds = currentLiveWindowBounds()
+        let policy = bounds.map { resolveOverlayPolicy(for: $0) }
+        tickBadge(at: now, liveBounds: bounds, policy: policy, raise: true)
     }
 
     private func selectionActive(at time: TimeInterval) -> Bool {
@@ -622,8 +676,9 @@ final class PresenceController: NSObject, NSMenuDelegate, NSApplicationDelegate 
         return selection.opacity(at: time, waitingTurn: state.waitingTurn) > 0.01
     }
 
-    private func tickSelection(at time: TimeInterval, bounds: CGRect?, raise: Bool) {
-        guard !state.stopped, state.connected, let bounds, let currentSelection = selection else {
+    private func tickSelection(at time: TimeInterval, bounds: CGRect?, policy: OverlayDisplayPolicy.Resolution?, raise: Bool) {
+        guard OverlayDisplayPolicy.shouldShowOverlays(connected: state.connected, stopped: state.stopped, liveBounds: bounds),
+              let bounds, let currentSelection = selection else {
             if selectionPanel?.isVisible == true { selectionPanel?.orderOut(nil) }
             return
         }
@@ -642,8 +697,9 @@ final class PresenceController: NSObject, NSMenuDelegate, NSApplicationDelegate 
             if selectionPanel?.isVisible == true { selectionPanel?.orderOut(nil) }
             return
         }
+        let resolvedPolicy = policy ?? resolveOverlayPolicy(for: bounds)
         if selectionPanel == nil {
-            selectionPanel = makeOverlayPanel(contentView: selectionView)
+            selectionPanel = makeOverlayPanel(contentView: selectionView, policy: resolvedPolicy)
         }
         guard let panel = selectionPanel else { return }
         selectionView.selectionRect = CGRect(
@@ -657,8 +713,7 @@ final class PresenceController: NSObject, NSMenuDelegate, NSApplicationDelegate 
         selectionView.showGuides = currentSelection.guideLines
         selectionView.needsDisplay = true
         let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
-        panel.sharingType = panelSharingType
-        panel.level = Self.overlayWindowLevel
+        applyOverlayPolicy(resolvedPolicy, to: panel)
         panel.setFrame(CursorMotion.appKitRect(canvas, primaryHeight: primaryHeight), display: false)
         if NSApp.isHidden { NSApp.unhideWithoutActivation() }
         if !panel.isVisible || raise {
@@ -666,11 +721,26 @@ final class PresenceController: NSObject, NSMenuDelegate, NSApplicationDelegate 
         }
     }
 
-    private func tickSwarm(at time: TimeInterval, bounds: CGRect?, raise: Bool) {
-        guard !state.stopped, state.connected, let bounds, !bounds.isEmpty, !bounds.isNull else {
+    private func tickSwarm(at time: TimeInterval, bounds: CGRect?, policy: OverlayDisplayPolicy.Resolution?, raise: Bool) {
+        // Always advance & prune transient swarm effects on schedule, even while target window is off-Space.
+        if !OverlayDisplayPolicy.shouldShowOverlays(connected: state.connected, stopped: state.stopped, liveBounds: bounds) {
+            for key in Array(swarmAgents.keys) {
+                guard var agent = swarmAgents[key] else { continue }
+                agent.advanceEffects(at: time)
+                if agent.opacity(at: time) <= 0.005 {
+                    swarmAgents.removeValue(forKey: key)
+                } else {
+                    swarmAgents[key] = agent
+                }
+            }
             if swarmPanel?.isVisible == true { swarmPanel?.orderOut(nil) }
             return
         }
+        guard let bounds else {
+            if swarmPanel?.isVisible == true { swarmPanel?.orderOut(nil) }
+            return
+        }
+
         var expiredIDs: [String] = []
         var renderItems: [ClusterSwarmOverlayView.RenderItem] = []
         renderItems.reserveCapacity(swarmAgents.count)
@@ -755,8 +825,9 @@ final class PresenceController: NSObject, NSMenuDelegate, NSApplicationDelegate 
             return
         }
 
+        let resolvedPolicy = policy ?? resolveOverlayPolicy(for: bounds)
         if swarmPanel == nil {
-            swarmPanel = makeOverlayPanel(contentView: swarmView)
+            swarmPanel = makeOverlayPanel(contentView: swarmView, policy: resolvedPolicy)
         }
         guard let panel = swarmPanel else { return }
         swarmView.items = renderItems
@@ -766,8 +837,7 @@ final class PresenceController: NSObject, NSMenuDelegate, NSApplicationDelegate 
         swarmView.needsDisplay = true
 
         let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
-        panel.sharingType = panelSharingType
-        panel.level = Self.overlayWindowLevel
+        applyOverlayPolicy(resolvedPolicy, to: panel)
         panel.setFrame(CursorMotion.appKitRect(bounds, primaryHeight: primaryHeight), display: false)
         if NSApp.isHidden { NSApp.unhideWithoutActivation() }
         if !panel.isVisible || raise {
@@ -775,17 +845,15 @@ final class PresenceController: NSObject, NSMenuDelegate, NSApplicationDelegate 
         }
     }
 
-    private func tickBadge(at time: TimeInterval, liveBounds: CGRect? = nil, raise: Bool = false) {
+    private func tickBadge(
+        at time: TimeInterval,
+        liveBounds: CGRect?,
+        policy: OverlayDisplayPolicy.Resolution?,
+        raise: Bool = false
+    ) {
         let opacity = badgeLifetime.opacity(at: time)
-        let resolvedBounds: CGRect?
-        if let liveBounds {
-            resolvedBounds = liveBounds
-        } else if let id = targetWindow, let pid = targetPID {
-            resolvedBounds = liveWindowBounds(id: id, pid: pid)
-        } else {
-            resolvedBounds = nil
-        }
-        guard opacity > 0, let id = targetWindow, let bounds = resolvedBounds else {
+        guard state.connected, opacity > 0, let id = targetWindow,
+              let bounds = liveBounds, !bounds.isEmpty, !bounds.isNull else {
             if badgePanel?.isVisible == true { badgePanel?.orderOut(nil) }
             return
         }
@@ -794,13 +862,13 @@ final class PresenceController: NSObject, NSMenuDelegate, NSApplicationDelegate 
                                  textWidth: BadgeView.textWidth(badgeView.text),
                                  peerIndex: placement.peerIndex, peerCount: placement.peerCount)
         guard layout.frame.width >= 29 else { hideBadge(); return }
+        let resolvedPolicy = policy ?? resolveOverlayPolicy(for: bounds)
         if badgePanel == nil {
-            badgePanel = makeOverlayPanel(contentView: badgeView)
+            badgePanel = makeOverlayPanel(contentView: badgeView, policy: resolvedPolicy)
         }
         guard let panel = badgePanel else { return }
         let frame = layout.frame.insetBy(dx: -BadgeLayout.shadowInset, dy: -BadgeLayout.shadowInset)
-        panel.sharingType = panelSharingType
-        panel.level = Self.overlayWindowLevel
+        applyOverlayPolicy(resolvedPolicy, to: panel)
         panel.setFrame(CursorMotion.appKitRect(frame, primaryHeight: NSScreen.screens.first?.frame.height ?? 0), display: false)
         panel.alphaValue = opacity
         badgeView.accentColor = hub.identity.rgb.nsColor
@@ -836,7 +904,7 @@ final class PresenceController: NSObject, NSMenuDelegate, NSApplicationDelegate 
     private func tick() {
         dispatchPrecondition(condition: .onQueue(.main))
         let time = now
-        let raise = needsZOrderRaise
+        var raise = needsZOrderRaise
         needsZOrderRaise = false
 
         if !desktopVisible, !state.menuVisible(at: time), !trackingMenu, let item = statusItem {
@@ -886,12 +954,22 @@ final class PresenceController: NSObject, NSMenuDelegate, NSApplicationDelegate 
             bounds = nil
         }
 
-        // Order badge -> selection -> swarm canvas -> primary cursor so level-25 layers stack cleanly.
-        tickBadge(at: time, liveBounds: bounds, raise: raise)
-        tickSelection(at: time, bounds: bounds, raise: raise)
-        tickSwarm(at: time, bounds: bounds, raise: raise)
+        if bounds == nil {
+            targetWasOffscreen = true
+        } else if targetWasOffscreen {
+            targetWasOffscreen = false
+            raise = true
+        }
 
-        if state.cursorVisible(at: time), let motion, let bounds {
+        let policy = bounds.map { resolveOverlayPolicy(for: $0) }
+
+        // Order badge -> selection -> swarm canvas -> primary cursor so level-25 layers stack cleanly.
+        tickBadge(at: time, liveBounds: bounds, policy: policy, raise: raise)
+        tickSelection(at: time, bounds: bounds, policy: policy, raise: raise)
+        tickSwarm(at: time, bounds: bounds, policy: policy, raise: raise)
+
+        if OverlayDisplayPolicy.shouldShowOverlays(connected: state.connected, stopped: state.stopped, liveBounds: bounds),
+           state.cursorVisible(at: time), let motion, let bounds {
             let point = motion.point(at: time)
             let computedTrail = motion.cometTrail(at: time)
             let activeTrail = computedTrail.isEmpty ? dragStepTrail : computedTrail
@@ -907,8 +985,9 @@ final class PresenceController: NSObject, NSMenuDelegate, NSApplicationDelegate 
                 within: bounds
             )
             if !rect.isNull && !rect.isEmpty {
+                let resolvedPolicy = policy ?? resolveOverlayPolicy(for: bounds)
                 if overlay == nil {
-                    overlay = makeOverlayPanel(contentView: cursor)
+                    overlay = makeOverlayPanel(contentView: cursor, policy: resolvedPolicy)
                 }
                 if let panel = overlay {
                     cursor.hotspot = CGPoint(x: point.x - rect.minX, y: point.y - rect.minY)
@@ -928,8 +1007,7 @@ final class PresenceController: NSObject, NSMenuDelegate, NSApplicationDelegate 
                     cursor.waitingTurn = state.waitingTurn
                     cursor.pulsePhase = time
                     let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
-                    panel.sharingType = panelSharingType
-                    panel.level = Self.overlayWindowLevel
+                    applyOverlayPolicy(resolvedPolicy, to: panel)
                     panel.setFrame(CursorMotion.appKitRect(rect, primaryHeight: primaryHeight), display: false)
                     cursor.needsDisplay = true
                     if NSApp.isHidden { NSApp.unhideWithoutActivation() }
@@ -957,6 +1035,7 @@ final class PresenceController: NSObject, NSMenuDelegate, NSApplicationDelegate 
     }
 
     func disconnect() {
+        targetWasOffscreen = false
         state.disconnect(); badgeLifetime.disconnect(); hideBadge(); hideSelection(); hideSwarm(); hideCursor(); timer?.invalidate(); timer = nil
         if let item = statusItem { NSStatusBar.system.removeStatusItem(item); statusItem = nil }
         setup.close()

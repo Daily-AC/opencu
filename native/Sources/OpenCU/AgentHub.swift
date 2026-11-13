@@ -99,6 +99,7 @@ enum AgentConfig {
         "OPENCU_HUB_DIR",
         "OPENCU_EVENT_SOCK",
         "OPENCU_CAPTURE_OVERLAY",
+        "IBUKI_HOME",
     ]
 
     static var launchdLockPath: String {
@@ -140,7 +141,14 @@ enum AgentConfig {
     }
 
     static func eventSocketPath(environment: [String: String] = ProcessInfo.processInfo.environment) -> String {
-        expandPath(environment["OPENCU_EVENT_SOCK"], defaultRelative: ".ibuki-pet/opencu.sock", environment: environment)
+        if let explicit = environment["OPENCU_EVENT_SOCK"]?.trimmingCharacters(in: .whitespacesAndNewlines), !explicit.isEmpty {
+            return expandPath(explicit, defaultRelative: ".ibuki-pet/opencu.sock", environment: environment)
+        }
+        if let ibukiHome = environment["IBUKI_HOME"]?.trimmingCharacters(in: .whitespacesAndNewlines), !ibukiHome.isEmpty {
+            let expandedHome = expandPath(ibukiHome, defaultRelative: ".ibuki-pet", environment: environment)
+            return (expandedHome as NSString).appendingPathComponent("opencu.sock")
+        }
+        return expandPath(nil, defaultRelative: ".ibuki-pet/opencu.sock", environment: environment)
     }
 
     /// Strips control, newline, and bidi override scalars and clamps to `maxCount` characters.

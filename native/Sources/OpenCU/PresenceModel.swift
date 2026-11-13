@@ -293,3 +293,99 @@ struct SwarmAgentState {
         }
     }
 }
+
+/// Pure display-sharing and Desktop-Space visibility policy for OpenCU overlay panels
+/// (`overlay` cursor, `badgePanel`, `selectionPanel`, `swarmPanel`).
+enum OverlayDisplayPolicy {
+    struct DisplayRect: Equatable {
+        let id: UInt32
+        let frame: CGRect
+        let isMain: Bool
+    }
+
+    struct Resolution: Equatable {
+        let displayID: UInt32?
+        let nonMainDisplay: Bool
+        let sharingReadOnly: Bool
+    }
+
+    /// Resolves which display owns `targetRect` (in Quartz top-left points) and whether overlay
+    /// panels should expose `.readOnly` window sharing so `AgentDesktopCapture` on background
+    /// virtual displays (`AgentDisplay`, `id != CGMainDisplayID()`) captures cursors/badges/guides.
+    static func resolve(
+        for targetRect: CGRect,
+        displays: [DisplayRect],
+        captureOverlayEnabled: Bool
+    ) -> Resolution {
+        let validDisplays = displays
+            .filter { !$0.frame.isNull && !$0.frame.isEmpty }
+            .sorted { lhs, rhs in
+                if lhs.isMain != rhs.isMain { return lhs.isMain && !rhs.isMain }
+                return lhs.id < rhs.id
+            }
+
+        guard !targetRect.isNull, !targetRect.isEmpty, !validDisplays.isEmpty else {
+            return Resolution(displayID: nil, nonMainDisplay: false, sharingReadOnly: captureOverlayEnabled)
+        }
+
+        let center = CGPoint(x: targetRect.midX, y: targetRect.midY)
+        let matched: DisplayRect?
+        if let containing = validDisplays.first(where: { $0.frame.contains(center) }) {
+            matched = containing
+        } else {
+            var best: DisplayRect?
+            var bestArea: CGFloat = 0
+            for candidate in validDisplays {
+                let inter = targetRect.intersection(candidate.frame)
+                guard !inter.isNull, !inter.isEmpty else { continue }
+                let area = inter.width * inter.height
+                if area > bestArea {
+                    bestArea = area
+                    best = candidate
+                }
+            }
+            matched = best
+        }
+
+        let nonMain = matched.map { !$0.isMain } ?? false
+        return Resolution(
+            displayID: matched?.id,
+            nonMainDisplay: nonMain,
+            sharingReadOnly: captureOverlayEnabled || nonMain
+        )
+    }
+
+    /// Extracts live onscreen Quartz window bounds from `CGWindowListCopyWindowInfo` records.
+    /// Returns `nil` immediately when the target window is on an inactive Desktop Space
+    /// (`kCGWindowIsOnscreen != true`), hidden/transparent, or resized away from `expectedSize`.
+    static func liveOnscreenBounds(
+        from records: [[String: Any]],
+        windowID: UInt32,
+        ownerPID: Int32,
+        expectedSize: CGSize
+    ) -> CGRect? {
+        guard let record = records.first(where: { ($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value == windowID }),
+              (record[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == ownerPID,
+              (record[kCGWindowIsOnscreen as String] as? NSNumber)?.boolValue == true else {
+            return nil
+        }
+        let alpha = (record[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 1.0
+        guard alpha > 0.01,
+              let raw = record[kCGWindowBounds as String] as? NSDictionary,
+              let bounds = CGRect(dictionaryRepresentation: raw as CFDictionary),
+              !bounds.isNull,
+              !bounds.isEmpty,
+              abs(bounds.width - expectedSize.width) <= 2,
+              abs(bounds.height - expectedSize.height) <= 2 else {
+            return nil
+        }
+        return bounds
+    }
+
+    static func shouldShowOverlays(connected: Bool, stopped: Bool, liveBounds: CGRect?) -> Bool {
+        guard connected, !stopped, let liveBounds, !liveBounds.isNull, !liveBounds.isEmpty else {
+            return false
+        }
+        return true
+    }
+}
